@@ -295,6 +295,12 @@ mod server {
             if event.context.environment.is_none() {
                 event.context.environment = self.environment.clone();
             }
+            // RFC-123 §5.2 — with OTLP on, the current span's OpenTelemetry
+            // trace id fills the context slot the schema always had for it.
+            #[cfg(feature = "otlp")]
+            if event.context.trace_id.is_none() {
+                event.context.trace_id = current_otel_trace_id();
+            }
             event
         }
 
@@ -637,6 +643,11 @@ mod server {
         otlp: &OtlpConfig,
     ) -> Result<(), InitLoggingError> {
         let tracer = build_otlp_tracer(otlp)?;
+        // RFC-123 §5.3 — the request layer extracts/injects W3C
+        // `traceparent` through the global propagator.
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
         let otel_layer = tracing_opentelemetry::layer()
             .with_tracer(tracer)
             .with_level(true)
@@ -675,6 +686,21 @@ mod server {
                 .try_init(),
         }
         .map_err(|_| InitLoggingError::AlreadyInitialized)
+    }
+
+    /// The W3C trace id of the span currently entered on this thread, when
+    /// the OpenTelemetry layer is installed and the span is sampled.
+    #[cfg(feature = "otlp")]
+    fn current_otel_trace_id() -> Option<String> {
+        use opentelemetry::trace::TraceContextExt as _;
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+        let context = tracing::Span::current().context();
+        let span = context.span();
+        let span_context = span.span_context();
+        span_context
+            .is_valid()
+            .then(|| span_context.trace_id().to_string())
     }
 
     #[cfg(feature = "otlp")]

@@ -344,8 +344,14 @@ mod otel {
         let parent = opentelemetry::global::get_text_map_propagator(|propagator| {
             propagator.extract(&HeaderExtractor(headers))
         });
-        if parent.span().span_context().is_valid() {
-            span.set_parent(parent);
+        if parent.span().span_context().is_valid()
+            && let Err(err) = span.set_parent(parent)
+        {
+            tracing::debug!(
+                target: "pocopine.log",
+                error = %err,
+                "request span could not adopt the incoming trace context"
+            );
         }
     }
 
