@@ -114,6 +114,11 @@ mod server {
         /// Adopt an incoming `traceparent` as the request span's remote
         /// parent; only observed with `otlp` (RFC-123 §5.3). Default `true`.
         pub accept_trace_context: bool,
+        /// Install the browser trace relay route (`POST /_pocopine/trace`,
+        /// RFC-123 §5.5): validated client spans are re-emitted as
+        /// `client_span_closed` events and, with `otlp`, as OpenTelemetry
+        /// spans under the client's own ids. Default `false`.
+        pub client_trace_relay: bool,
     }
 
     impl ServerObservabilityConfig {
@@ -170,6 +175,11 @@ mod server {
             self.accept_trace_context = enabled;
             self
         }
+
+        pub fn with_client_trace_relay(mut self, enabled: bool) -> Self {
+            self.client_trace_relay = enabled;
+            self
+        }
     }
 
     impl Default for ServerObservabilityConfig {
@@ -184,6 +194,7 @@ mod server {
                 request_id_header: true,
                 trace_context_header: true,
                 accept_trace_context: true,
+                client_trace_relay: false,
             }
         }
     }
@@ -225,6 +236,7 @@ mod server {
                 request_id_header,
                 trace_context_header,
                 accept_trace_context,
+                client_trace_relay,
             } = self.config;
 
             let mut server = server.provide_plugin(ServerObservability {
@@ -266,7 +278,248 @@ mod server {
                     .hook_plugin::<ServerObservability, ServerFunctionFailed>();
             }
 
+            if client_trace_relay {
+                server = server.route(
+                    pocopine_observe::client_relay::PATH,
+                    pocopine_server::axum::routing::post(client_relay::handle),
+                );
+            }
+
             server
+        }
+    }
+
+    /// RFC-123 §5.5 — the browser trace relay. An unauthenticated beacon
+    /// endpoint by nature, so every record is validated hard
+    /// ([`pocopine_observe::client_relay::validate`]) and nothing in it is
+    /// ever echoed into a log message: ids are data.
+    pub mod client_relay {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+        use pocopine_observe::client_relay::{
+            ClientSpanRecord, MAX_BATCH, MAX_BODY_BYTES, MAX_POSTS_PER_MINUTE, validate,
+        };
+        use pocopine_observe::{FieldPrivacy, ObservedEvent, emit_tracing, fields};
+        use pocopine_server::axum::body::{Body, to_bytes};
+        use pocopine_server::axum::extract::Request;
+        use pocopine_server::axum::http::StatusCode;
+        use pocopine_server::axum::response::{IntoResponse, Response};
+
+        fn now_unix_ms() -> f64 {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1_000.0)
+                .unwrap_or(0.0)
+        }
+
+        /// Per-session post budget: a fixed one-minute window. Bounded —
+        /// the map is cleared when it grows past 10k sessions.
+        fn over_budget(session: &str) -> bool {
+            static BUDGET: OnceLock<Mutex<HashMap<String, (Instant, u32)>>> = OnceLock::new();
+            let budget = BUDGET.get_or_init(|| Mutex::new(HashMap::new()));
+            let Ok(mut map) = budget.lock() else {
+                return false;
+            };
+            if map.len() > 10_000 {
+                map.clear();
+            }
+            let now = Instant::now();
+            let entry = map.entry(session.to_owned()).or_insert((now, 0));
+            if now.duration_since(entry.0).as_secs() >= 60 {
+                *entry = (now, 0);
+            }
+            entry.1 += 1;
+            entry.1 > MAX_POSTS_PER_MINUTE
+        }
+
+        /// The route handler.
+        pub async fn handle(request: Request<Body>) -> Response {
+            let bytes = match to_bytes(request.into_body(), MAX_BODY_BYTES).await {
+                Ok(bytes) => bytes,
+                Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+            };
+            let records: Vec<ClientSpanRecord> = match serde_json::from_slice(&bytes) {
+                Ok(records) => records,
+                Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+            };
+            match accept(records) {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(status) => status.into_response(),
+            }
+        }
+
+        /// Validate a whole batch (all or nothing), budget it per session,
+        /// then re-emit each record.
+        pub fn accept(records: Vec<ClientSpanRecord>) -> Result<(), StatusCode> {
+            if records.is_empty() || records.len() > MAX_BATCH {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            let now = now_unix_ms();
+            for record in &records {
+                if let Err(reason) = validate(record, now) {
+                    tracing::debug!(
+                        target: "pocopine.log",
+                        reason = reason.as_str(),
+                        span = %record.name,
+                        "client trace record refused"
+                    );
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+            }
+            let session = records
+                .iter()
+                .find_map(ClientSpanRecord::session_id)
+                .unwrap_or("anonymous")
+                .to_owned();
+            if over_budget(&session) {
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
+            for record in &records {
+                emit_observed(record);
+                #[cfg(feature = "otlp")]
+                otel::re_emit(record);
+            }
+            Ok(())
+        }
+
+        /// The local-log form: one `client_span_closed` trace event carrying
+        /// the record's ids and fields, so the client half sits beside the
+        /// server half in the same log. An observed event has eight field
+        /// slots (RFC-069): the ids and duration take four, the four most
+        /// useful record fields the rest; the trace id rides the context.
+        fn emit_observed(record: &ClientSpanRecord) {
+            const PASSTHROUGH: &[&str] = &[
+                fields::HTTP_ROUTE,
+                fields::HTTP_RESPONSE_STATUS_CODE,
+                fields::ERROR_TYPE,
+                fields::OTEL_STATUS_CODE,
+                fields::URL_PATH,
+                fields::COMPONENT,
+                fields::REQUEST_ID,
+                fields::HTTP_REQUEST_METHOD,
+            ];
+            let mut event = ObservedEvent::trace("client_span_closed")
+                .field("span", record.name.clone(), FieldPrivacy::Public)
+                .field("span_id", record.span_id.clone(), FieldPrivacy::Public)
+                .field(
+                    "parent_span_id",
+                    record.parent_span_id.clone().unwrap_or_default(),
+                    FieldPrivacy::Public,
+                )
+                .field("duration_ms", record.duration_ms(), FieldPrivacy::Public);
+            let mut budget = 4;
+            for key in PASSTHROUGH {
+                if budget == 0 {
+                    break;
+                }
+                if let Some(value) = record.fields.get(*key) {
+                    event = event.field((*key).to_owned(), value.clone(), FieldPrivacy::Public);
+                    budget -= 1;
+                }
+            }
+            event.context.trace_id = Some(record.trace_id.clone());
+            event.context.session_id = record.session_id().map(str::to_owned);
+            emit_tracing(&event);
+        }
+
+        #[cfg(feature = "otlp")]
+        pub(crate) mod otel {
+            use std::time::{Duration, UNIX_EPOCH};
+
+            use opentelemetry::trace::{
+                Span as _, SpanContext, SpanId, SpanKind, Status, TraceContextExt as _, TraceFlags,
+                TraceId, TraceState, Tracer as _,
+            };
+            use opentelemetry::{Context, KeyValue};
+            use pocopine_observe::client_relay::ClientSpanRecord;
+            use pocopine_observe::{fields, spans};
+
+            fn unix_ms(ms: f64) -> std::time::SystemTime {
+                UNIX_EPOCH + Duration::from_secs_f64((ms / 1_000.0).max(0.0))
+            }
+
+            /// Re-emit a client span through the global tracer provider —
+            /// the same provider, sampler, and exporter the server's own
+            /// spans use — under the client's trace id, span id, parent,
+            /// and timestamps, so the browser span is the genuine root.
+            pub(crate) fn re_emit(record: &ClientSpanRecord) {
+                let (Ok(trace_id), Ok(span_id)) = (
+                    TraceId::from_hex(&record.trace_id),
+                    SpanId::from_hex(&record.span_id),
+                ) else {
+                    return;
+                };
+                let parent = record
+                    .parent_span_id
+                    .as_deref()
+                    .and_then(|hex| SpanId::from_hex(hex).ok())
+                    .map(|parent_id| {
+                        Context::new().with_remote_span_context(SpanContext::new(
+                            trace_id,
+                            parent_id,
+                            TraceFlags::SAMPLED,
+                            true,
+                            TraceState::default(),
+                        ))
+                    })
+                    .unwrap_or_default();
+                let kind = if record.name == spans::CLIENT_SERVER_FUNCTION {
+                    SpanKind::Client
+                } else {
+                    SpanKind::Internal
+                };
+                let mut attributes = Vec::with_capacity(record.fields.len());
+                for (key, value) in &record.fields {
+                    if key == fields::TRACE_ID
+                        || key == fields::SPAN_ID
+                        || key == fields::PARENT_SPAN_ID
+                        || key == fields::OTEL_KIND
+                        || key == fields::OTEL_STATUS_CODE
+                    {
+                        continue;
+                    }
+                    let key = key.clone();
+                    match value.parse::<i64>() {
+                        Ok(number)
+                            if key == fields::HTTP_RESPONSE_STATUS_CODE
+                                || key == fields::REQUEST_ID =>
+                        {
+                            attributes.push(KeyValue::new(key, number));
+                        }
+                        _ => attributes.push(KeyValue::new(key, value.clone())),
+                    }
+                }
+                let status = match record
+                    .fields
+                    .get(fields::OTEL_STATUS_CODE)
+                    .map(String::as_str)
+                {
+                    Some("OK") => Status::Ok,
+                    Some("ERROR") => Status::error(
+                        record
+                            .fields
+                            .get(fields::ERROR_TYPE)
+                            .cloned()
+                            .unwrap_or_default(),
+                    ),
+                    _ => Status::Unset,
+                };
+                let tracer = opentelemetry::global::tracer("pocopine.client");
+                let end = unix_ms(record.end_unix_ms);
+                let builder = tracer
+                    .span_builder(record.name.clone())
+                    .with_trace_id(trace_id)
+                    .with_span_id(span_id)
+                    .with_kind(kind)
+                    .with_start_time(unix_ms(record.start_unix_ms))
+                    .with_end_time(end)
+                    .with_attributes(attributes)
+                    .with_status(status);
+                let mut span = tracer.build_with_context(builder, &parent);
+                span.end_with_timestamp(end);
+            }
         }
     }
 
@@ -759,6 +1012,9 @@ mod server {
             .with_batch_exporter(exporter)
             .with_resource(resource)
             .build();
+        // RFC-123 §5.5: the relay re-emits browser spans through the global
+        // provider, so it must be this one — same sampler, same exporter.
+        opentelemetry::global::set_tracer_provider(provider.clone());
         Ok(provider.tracer(otlp.service_name.clone()))
     }
 
@@ -833,8 +1089,8 @@ mod server {
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
     InitLoggingError, LogFormat, ServerLoggingConfig, ServerObservability,
-    ServerObservabilityConfig, ServerObservabilityPlugin, init_default, init_server_logging,
-    server_observability, server_observability_with_config,
+    ServerObservabilityConfig, ServerObservabilityPlugin, client_relay, init_default,
+    init_server_logging, server_observability, server_observability_with_config,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "otlp"))]
@@ -851,6 +1107,9 @@ mod web {
         RouteNavigationFailed, RouteNavigationStarted, ServerFunctionClientCompleted,
         ServerFunctionClientFailed, ServerFunctionClientStarted,
     };
+    use std::sync::{Arc, Mutex};
+
+    use pocopine_observe::client_relay::ClientSpanRecord;
     use pocopine_observe::{
         EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, emit_tracing,
     };
@@ -861,6 +1120,7 @@ mod web {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::registry::LookupSpan;
     use tracing_subscriber::util::SubscriberInitExt;
+    use wasm_bindgen::JsCast as _;
     use wasm_bindgen::JsValue;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -938,10 +1198,280 @@ mod web {
     impl std::error::Error for InitLoggingError {}
 
     pub fn init_console_logging(config: ConsoleLoggingConfig) -> Result<(), InitLoggingError> {
+        init_frontend_subscriber(Some(config), None)
+    }
+
+    /// Install the browser subscriber: console output, the trace relay, or
+    /// both. At least one must be given.
+    pub fn init_frontend_subscriber(
+        console: Option<ConsoleLoggingConfig>,
+        relay: Option<TraceRelayConfig>,
+    ) -> Result<(), InitLoggingError> {
+        let relay = relay.map(RelayLayer::new);
         tracing_subscriber::registry()
-            .with(ConsoleLayer { config })
+            .with(console.map(|config| ConsoleLayer { config }))
+            .with(relay)
             .try_init()
             .map_err(|_| InitLoggingError::AlreadyInitialized)
+    }
+
+    /// RFC-123 §5.5 — where and how closed browser spans are shipped.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct TraceRelayConfig {
+        /// The relay route; the server observability plugin installs
+        /// [`pocopine_observe::client_relay::PATH`].
+        pub url: String,
+        /// Post as soon as this many spans are queued.
+        pub flush_after: usize,
+        /// Otherwise post this long after the first queued span.
+        pub flush_delay_ms: u32,
+    }
+
+    impl Default for TraceRelayConfig {
+        fn default() -> Self {
+            Self {
+                url: pocopine_observe::client_relay::PATH.to_owned(),
+                flush_after: 16,
+                flush_delay_ms: 2_000,
+            }
+        }
+    }
+
+    impl TraceRelayConfig {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn with_url(mut self, url: impl Into<String>) -> Self {
+            self.url = url.into();
+            self
+        }
+    }
+
+    /// The bounded queue of closed spans waiting to be posted. Full queue
+    /// drops the oldest; the drop count is a field on the next post's
+    /// first record, never a log line (a layer must not log from inside
+    /// its own callbacks).
+    struct RelayState {
+        queue: std::collections::VecDeque<ClientSpanRecord>,
+        dropped: u64,
+        timer_armed: bool,
+    }
+
+    const RELAY_QUEUE_CAP: usize = 256;
+
+    /// A `tracing` layer that turns every closed `pocopine.client.*` span
+    /// into a [`ClientSpanRecord`] and ships batches to the relay route.
+    struct RelayLayer {
+        config: TraceRelayConfig,
+        state: Arc<Mutex<RelayState>>,
+    }
+
+    /// What the layer keeps on an open client span.
+    struct RelaySpan {
+        name: &'static str,
+        start_ms: f64,
+        fields: std::collections::BTreeMap<String, String>,
+    }
+
+    impl RelayLayer {
+        fn new(config: TraceRelayConfig) -> Self {
+            let state = Arc::new(Mutex::new(RelayState {
+                queue: std::collections::VecDeque::new(),
+                dropped: 0,
+                timer_armed: false,
+            }));
+            install_pagehide_flush(config.url.clone(), state.clone());
+            Self { config, state }
+        }
+
+        fn enqueue(&self, record: ClientSpanRecord) {
+            let flush_now = {
+                let Ok(mut state) = self.state.lock() else {
+                    return;
+                };
+                if state.queue.len() >= RELAY_QUEUE_CAP {
+                    state.queue.pop_front();
+                    state.dropped += 1;
+                }
+                state.queue.push_back(record);
+                state.queue.len() >= self.config.flush_after
+            };
+            if flush_now {
+                flush(&self.config.url, &self.state, Transport::Fetch);
+            } else {
+                arm_timer(&self.config, &self.state);
+            }
+        }
+    }
+
+    /// Drain the queue into one post. `Beacon` is for page hide, when a
+    /// fetch may not survive the unload.
+    #[derive(Clone, Copy)]
+    enum Transport {
+        Fetch,
+        Beacon,
+    }
+
+    fn flush(url: &str, state: &Arc<Mutex<RelayState>>, transport: Transport) {
+        let batch: Vec<ClientSpanRecord> = {
+            let Ok(mut state) = state.lock() else {
+                return;
+            };
+            state.timer_armed = false;
+            if state.queue.is_empty() {
+                return;
+            }
+            let take = state
+                .queue
+                .len()
+                .min(pocopine_observe::client_relay::MAX_BATCH);
+            let mut batch: Vec<ClientSpanRecord> = state.queue.drain(..take).collect();
+            if state.dropped > 0
+                && let Some(first) = batch.first_mut()
+            {
+                first.fields.insert(
+                    "pocopine.relay.dropped".to_owned(),
+                    state.dropped.to_string(),
+                );
+                state.dropped = 0;
+            }
+            batch
+        };
+        let Ok(body) = serde_json::to_string(&batch) else {
+            return;
+        };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        match transport {
+            Transport::Beacon => {
+                let _ = window
+                    .navigator()
+                    .send_beacon_with_opt_str(url, Some(&body));
+            }
+            Transport::Fetch => {
+                let init = web_sys::RequestInit::new();
+                init.set_method("POST");
+                init.set_body(&JsValue::from_str(&body));
+                // `keepalive` lets the post outlive a navigation; web-sys has
+                // no setter for it, so set the property directly.
+                let _ = Reflect::set(&init, &JsValue::from_str("keepalive"), &JsValue::TRUE);
+                if let Ok(headers) = web_sys::Headers::new() {
+                    let _ = headers.set("content-type", "application/json");
+                    init.set_headers(&headers);
+                }
+                let request = window.fetch_with_str_and_init(url, &init);
+                wasm_bindgen_futures::spawn_local(async move {
+                    // Fire and forget: a failed post is a dropped batch, by
+                    // design — telemetry never blocks or retries into the app.
+                    let _ = wasm_bindgen_futures::JsFuture::from(request).await;
+                });
+            }
+        }
+    }
+
+    fn arm_timer(config: &TraceRelayConfig, state: &Arc<Mutex<RelayState>>) {
+        {
+            let Ok(mut guard) = state.lock() else {
+                return;
+            };
+            if guard.timer_armed {
+                return;
+            }
+            guard.timer_armed = true;
+        }
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let url = config.url.clone();
+        let state = state.clone();
+        let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+            flush(&url, &state, Transport::Fetch);
+        });
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            callback.unchecked_ref(),
+            config.flush_delay_ms as i32,
+        );
+    }
+
+    /// On page hide, ship whatever is queued with `sendBeacon`, which the
+    /// browser lets outlive the page.
+    fn install_pagehide_flush(url: String, state: Arc<Mutex<RelayState>>) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let callback = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            flush(&url, &state, Transport::Beacon);
+        });
+        let _ =
+            window.add_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref());
+        // Lives for the page.
+        callback.forget();
+    }
+
+    impl<S> Layer<S> for RelayLayer
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+            let name = attrs.metadata().name();
+            if !pocopine_observe::client_relay::NAMES.contains(&name) {
+                return;
+            }
+            let mut fields = std::collections::BTreeMap::new();
+            attrs.record(&mut SpanFieldVisitor(&mut fields));
+            if let Some(span) = ctx.span(id) {
+                span.extensions_mut().insert(RelaySpan {
+                    name,
+                    start_ms: js_sys::Date::now(),
+                    fields,
+                });
+            }
+        }
+
+        fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+            if let Some(span) = ctx.span(id) {
+                let mut extensions = span.extensions_mut();
+                if let Some(open) = extensions.get_mut::<RelaySpan>() {
+                    values.record(&mut SpanFieldVisitor(&mut open.fields));
+                }
+            }
+        }
+
+        fn on_close(&self, id: Id, ctx: Context<'_, S>) {
+            let Some(span) = ctx.span(&id) else {
+                return;
+            };
+            let Some(open) = span.extensions_mut().remove::<RelaySpan>() else {
+                return;
+            };
+            if let Some(record) = record_from_span(open, js_sys::Date::now()) {
+                self.enqueue(record);
+            }
+        }
+    }
+
+    /// Turn a closed client span into the relay's record: the ids come out
+    /// of the span's own fields, everything else stays as fields.
+    fn record_from_span(open: RelaySpan, end_ms: f64) -> Option<ClientSpanRecord> {
+        let RelaySpan {
+            name,
+            start_ms,
+            mut fields,
+        } = open;
+        let trace_id = fields.remove(pocopine_observe::fields::TRACE_ID)?;
+        let span_id = fields.remove(pocopine_observe::fields::SPAN_ID)?;
+        let parent_span_id = fields.remove(pocopine_observe::fields::PARENT_SPAN_ID);
+        Some(ClientSpanRecord {
+            name: name.to_owned(),
+            trace_id,
+            span_id,
+            parent_span_id,
+            start_unix_ms: start_ms,
+            end_unix_ms: end_ms.max(start_ms),
+            fields,
+        })
     }
 
     struct ConsoleLayer {
@@ -1201,6 +1731,11 @@ mod web {
         pub environment: Option<String>,
         pub component_setup: bool,
         pub component_ready: bool,
+        /// RFC-123 §5.5 — ship closed browser spans to the server's relay
+        /// route and send `traceparent` on every server-function call. Off
+        /// by default: it needs the matching
+        /// `ServerObservabilityConfig::with_client_trace_relay(true)`.
+        pub trace_relay: Option<TraceRelayConfig>,
     }
 
     impl FrontendObservabilityConfig {
@@ -1237,6 +1772,17 @@ mod web {
             self.component_ready = enabled;
             self
         }
+
+        /// Turn the trace relay on with its defaults.
+        pub fn with_trace_relay(mut self, enabled: bool) -> Self {
+            self.trace_relay = enabled.then(TraceRelayConfig::default);
+            self
+        }
+
+        pub fn with_trace_relay_config(mut self, config: TraceRelayConfig) -> Self {
+            self.trace_relay = Some(config);
+            self
+        }
     }
 
     impl Default for FrontendObservabilityConfig {
@@ -1247,6 +1793,7 @@ mod web {
                 environment: None,
                 component_setup: false,
                 component_ready: false,
+                trace_relay: None,
             }
         }
     }
@@ -1284,13 +1831,17 @@ mod web {
                 environment,
                 component_setup,
                 component_ready,
+                trace_relay,
             } = self.config;
 
-            if let Some(console_config) = console_logging
-                && let Err(err) = init_console_logging(console_config)
+            // The fetch layer sends `traceparent` only when the relay will
+            // make the client span real on the other side (RFC-123 §5.5).
+            pocopine_core::client_trace::set_trace_relay_enabled(trace_relay.is_some());
+            if (console_logging.is_some() || trace_relay.is_some())
+                && let Err(err) = init_frontend_subscriber(console_logging, trace_relay)
             {
                 web_sys::console::warn_1(&JsValue::from_str(&format!(
-                    "pocopine: frontend observability could not initialize console logging: {err}"
+                    "pocopine: frontend observability could not initialize its subscriber: {err}"
                 )));
             }
 
@@ -1607,6 +2158,6 @@ mod web {
 #[cfg(target_arch = "wasm32")]
 pub use web::{
     ConsoleLogFormat, ConsoleLoggingConfig, FrontendObservability, FrontendObservabilityConfig,
-    FrontendObservabilityPlugin, InitLoggingError, frontend_observability,
-    frontend_observability_with_config, init_console_logging,
+    FrontendObservabilityPlugin, InitLoggingError, TraceRelayConfig, frontend_observability,
+    frontend_observability_with_config, init_console_logging, init_frontend_subscriber,
 };

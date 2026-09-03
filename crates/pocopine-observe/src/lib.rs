@@ -176,6 +176,232 @@ pub mod fields {
     pub const COMPONENT: &str = "pocopine.component";
 }
 
+/// RFC-123 §5.5 — the relay contract between the browser and the server:
+/// one closed client span as the browser ships it, and the validation the
+/// server applies before it does anything with it. Shared so both sides
+/// and their tests agree on one definition.
+pub mod client_relay {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Serialize};
+
+    use super::{fields, spans};
+
+    /// The route the server observability plugin installs on opt-in.
+    pub const PATH: &str = "/_pocopine/trace";
+    /// Most records one post may carry.
+    pub const MAX_BATCH: usize = 64;
+    /// Largest accepted post body, in bytes.
+    pub const MAX_BODY_BYTES: usize = 32 * 1024;
+    /// Longest accepted field value.
+    pub const MAX_VALUE_LEN: usize = 256;
+    /// How far a record's timestamps may sit from the server clock, in ms.
+    pub const MAX_CLOCK_SKEW_MS: f64 = 5.0 * 60.0 * 1000.0;
+    /// Posts per minute per `session.id` before the server answers 429.
+    pub const MAX_POSTS_PER_MINUTE: u32 = 10;
+
+    /// One closed browser span. Every value is a string: the client's
+    /// field visitor renders them and the server converts the few it
+    /// knows are numeric.
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    pub struct ClientSpanRecord {
+        pub name: String,
+        pub trace_id: String,
+        pub span_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub parent_span_id: Option<String>,
+        pub start_unix_ms: f64,
+        pub end_unix_ms: f64,
+        #[serde(default)]
+        pub fields: BTreeMap<String, String>,
+    }
+
+    impl ClientSpanRecord {
+        /// The `session.id` the record carries, if any.
+        pub fn session_id(&self) -> Option<&str> {
+            self.fields.get(fields::SESSION_ID).map(String::as_str)
+        }
+
+        pub fn duration_ms(&self) -> f64 {
+            (self.end_unix_ms - self.start_unix_ms).max(0.0)
+        }
+    }
+
+    /// Why a record was refused. Stable names, never the offending value.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum RelayError {
+        UnknownSpanName,
+        MalformedTraceId,
+        MalformedSpanId,
+        MalformedParentSpanId,
+        TimestampOutOfRange,
+        FieldNotAllowed,
+        ValueTooLong,
+        QueryInPath,
+    }
+
+    impl RelayError {
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Self::UnknownSpanName => "unknown_span_name",
+                Self::MalformedTraceId => "malformed_trace_id",
+                Self::MalformedSpanId => "malformed_span_id",
+                Self::MalformedParentSpanId => "malformed_parent_span_id",
+                Self::TimestampOutOfRange => "timestamp_out_of_range",
+                Self::FieldNotAllowed => "field_not_allowed",
+                Self::ValueTooLong => "value_too_long",
+                Self::QueryInPath => "query_in_path",
+            }
+        }
+    }
+
+    /// The `pocopine.client.*` names the relay accepts.
+    pub const NAMES: &[&str] = &[
+        spans::CLIENT_BOOT,
+        spans::CLIENT_NAVIGATION,
+        spans::CLIENT_SERVER_FUNCTION,
+    ];
+
+    const COMMON_FIELDS: &[&str] = &[
+        fields::OTEL_KIND,
+        fields::OTEL_STATUS_CODE,
+        fields::ERROR_TYPE,
+        fields::SESSION_ID,
+        fields::TRACE_ID,
+        fields::SPAN_ID,
+        fields::PARENT_SPAN_ID,
+    ];
+
+    /// The fields each span may carry (RFC-123 §2.3), beyond the common
+    /// ones. Anything else is refused: a relayed record must never carry
+    /// free text.
+    pub fn allowed_fields(name: &str) -> Option<&'static [&'static str]> {
+        match name {
+            spans::CLIENT_BOOT => Some(&[]),
+            spans::CLIENT_NAVIGATION => {
+                Some(&[fields::URL_PATH, fields::HTTP_ROUTE, fields::COMPONENT])
+            }
+            spans::CLIENT_SERVER_FUNCTION => Some(&[
+                fields::HTTP_REQUEST_METHOD,
+                fields::HTTP_ROUTE,
+                fields::HTTP_RESPONSE_STATUS_CODE,
+                fields::REQUEST_ID,
+            ]),
+            _ => None,
+        }
+    }
+
+    fn hex_id(value: &str, len: usize) -> bool {
+        value.len() == len
+            && value.bytes().all(|b| b.is_ascii_hexdigit())
+            && !value.bytes().all(|b| b == b'0')
+    }
+
+    /// Validate one record against the server clock (`now_unix_ms`).
+    pub fn validate(record: &ClientSpanRecord, now_unix_ms: f64) -> Result<(), RelayError> {
+        let allowed = allowed_fields(&record.name).ok_or(RelayError::UnknownSpanName)?;
+        if !hex_id(&record.trace_id, 32) {
+            return Err(RelayError::MalformedTraceId);
+        }
+        if !hex_id(&record.span_id, 16) {
+            return Err(RelayError::MalformedSpanId);
+        }
+        if let Some(parent) = &record.parent_span_id
+            && !hex_id(parent, 16)
+        {
+            return Err(RelayError::MalformedParentSpanId);
+        }
+        let in_window = |t: f64| t.is_finite() && (t - now_unix_ms).abs() <= MAX_CLOCK_SKEW_MS;
+        if !in_window(record.start_unix_ms)
+            || !in_window(record.end_unix_ms)
+            || record.end_unix_ms < record.start_unix_ms
+        {
+            return Err(RelayError::TimestampOutOfRange);
+        }
+        for (key, value) in &record.fields {
+            if !COMMON_FIELDS.contains(&key.as_str()) && !allowed.contains(&key.as_str()) {
+                return Err(RelayError::FieldNotAllowed);
+            }
+            if value.len() > MAX_VALUE_LEN {
+                return Err(RelayError::ValueTooLong);
+            }
+            if key == fields::URL_PATH && (value.contains('?') || value.contains('#')) {
+                return Err(RelayError::QueryInPath);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn record(name: &str) -> ClientSpanRecord {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "session.id".to_owned(),
+                "7f3a9c1e5b2d4f60a8c1e2d3f4a5b6c7".to_owned(),
+            );
+            fields.insert("otel.status_code".to_owned(), "OK".to_owned());
+            ClientSpanRecord {
+                name: name.to_owned(),
+                trace_id: "4bf92f3577b34da6a3ce929d0e0e4736".to_owned(),
+                span_id: "c1f2e3d4a5b6c7d8".to_owned(),
+                parent_span_id: Some("a1b2c3d4e5f60718".to_owned()),
+                start_unix_ms: 1_000.0,
+                end_unix_ms: 1_800.0,
+                fields,
+            }
+        }
+
+        #[test]
+        fn a_well_formed_call_record_is_accepted() {
+            let mut r = record("pocopine.client.server_function");
+            r.fields.insert("http.route".into(), "/api/x".into());
+            r.fields
+                .insert("http.response.status_code".into(), "200".into());
+            assert_eq!(validate(&r, 1_500.0), Ok(()));
+            assert_eq!(r.duration_ms(), 800.0);
+        }
+
+        #[test]
+        fn refusals_are_named_and_never_echo_values() {
+            let bad_name = record("pocopine.http.request");
+            assert_eq!(
+                validate(&bad_name, 1_500.0),
+                Err(RelayError::UnknownSpanName)
+            );
+            let mut bad_id = record("pocopine.client.boot");
+            bad_id.trace_id = "00000000000000000000000000000000".into();
+            assert_eq!(
+                validate(&bad_id, 1_500.0),
+                Err(RelayError::MalformedTraceId)
+            );
+            let mut free_text = record("pocopine.client.boot");
+            free_text
+                .fields
+                .insert("message".into(), "drop table".into());
+            assert_eq!(
+                validate(&free_text, 1_500.0),
+                Err(RelayError::FieldNotAllowed)
+            );
+            let mut query = record("pocopine.client.navigation");
+            query.fields.insert("url.path".into(), "/a?token=x".into());
+            assert_eq!(validate(&query, 1_500.0), Err(RelayError::QueryInPath));
+            let mut stale = record("pocopine.client.boot");
+            stale.start_unix_ms = 1_000.0 - MAX_CLOCK_SKEW_MS - 1.0;
+            assert_eq!(
+                validate(&stale, 1_500.0),
+                Err(RelayError::TimestampOutOfRange)
+            );
+            let mut long = record("pocopine.client.boot");
+            long.fields
+                .insert("error.type".into(), "x".repeat(MAX_VALUE_LEN + 1));
+            assert_eq!(validate(&long, 1_500.0), Err(RelayError::ValueTooLong));
+        }
+    }
+}
+
 /// A span-aware capture layer for tests in other crates: every span with
 /// its fields (recorded at open and later), its parent, whether it closed,
 /// and every event with the names of its enclosing spans, root first.
