@@ -104,6 +104,28 @@ pub struct FetchRequest {
     /// may retry these after token refresh; it must fail closed for
     /// the default `false` case.
     pub(crate) replay_safe: bool,
+    /// The last real response the transport produced for this request,
+    /// so a middleware that turns a response into an error (a 401 into
+    /// `Unauthorized`) does not lose the server's ids for the call span
+    /// and hooks (RFC-123 §5.5).
+    pub(crate) observed: ObservedResponse,
+}
+
+/// Shared between the request the middleware chain holds and the caller
+/// that opened the span.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ObservedResponse(std::sync::Arc<std::sync::Mutex<Option<(u16, ResponseIds)>>>);
+
+impl ObservedResponse {
+    fn set(&self, status: u16, ids: ResponseIds) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some((status, ids));
+        }
+    }
+
+    fn take(&self) -> Option<(u16, ResponseIds)> {
+        self.0.lock().ok().and_then(|mut slot| slot.take())
+    }
 }
 
 impl FetchRequest {
@@ -471,10 +493,10 @@ where
     freeze_middleware_chain();
     let options = options.with_active_context();
 
-    let observe = FetchObservation::new(url);
     // RFC-123 §5.5: `pocopine.client.server_function`, under the current
-    // page view; the hook events below fire inside it.
+    // page view; every hook event of the call fires inside it.
     let call = crate::client_trace::CallSpan::open(&public_url_path(url));
+    let observe = call.span.in_scope(|| FetchObservation::new(url));
     let body = match serde_json::to_string(args) {
         Ok(body) => body,
         Err(err) => {
@@ -502,7 +524,9 @@ where
         headers,
         abort_signal: options.abort_signal,
         replay_safe: options.replay_safe,
+        observed: ObservedResponse::default(),
     };
+    let observed = request.observed.clone();
 
     let middlewares = snapshot_chain();
     let next = FetchNext {
@@ -513,9 +537,17 @@ where
         Ok(response) => response,
         Err(err) => {
             let kind = server_error_kind(&err);
+            // A middleware may have turned a real response into this error
+            // (a 401 into `Unauthorized`); keep the server's ids if so.
+            let ids = match observed.take() {
+                Some((status, ids)) => {
+                    call.response(status, ids.request_id);
+                    ids
+                }
+                None => ResponseIds::default(),
+            };
             call.failed(kind);
-            call.span
-                .in_scope(|| observe.failed(kind, ResponseIds::default()));
+            call.span.in_scope(|| observe.failed(kind, ids));
             return Err(err);
         }
     };
@@ -637,16 +669,25 @@ where
         call.failed("http_status");
         return Err(ServerError::Network(format!("HTTP {status}")));
     }
-    // The handshake is the call; the stream's frames are consumed later.
-    call.completed();
 
-    let body_stream = resp
-        .body()
-        .ok_or_else(|| ServerError::Network("response had no body".into()))?;
-    let reader = body_stream
+    let Some(body_stream) = resp.body() else {
+        call.failed("stream_setup");
+        return Err(ServerError::Network("response had no body".into()));
+    };
+    let reader = match body_stream
         .get_reader()
         .dyn_into::<web_sys::ReadableStreamDefaultReader>()
-        .map_err(|_| ServerError::Network("could not read the response stream".into()))?;
+    {
+        Ok(reader) => reader,
+        Err(_) => {
+            call.failed("stream_setup");
+            return Err(ServerError::Network(
+                "could not read the response stream".into(),
+            ));
+        }
+    };
+    // The handshake is the call; the stream's frames are consumed later.
+    call.completed();
 
     Ok(Box::pin(SseStream::<R>::new(reader)))
 }
@@ -804,12 +845,14 @@ async fn perform_fetch(request: FetchRequest) -> Result<FetchResponse, ServerErr
     let request_id = response_header(&resp, "x-request-id").and_then(|v| v.trim().parse().ok());
     let trace_parent = response_header(&resp, "traceparent");
 
-    Ok(FetchResponse {
+    let response = FetchResponse {
         status,
         body,
         request_id,
         trace_parent,
-    })
+    };
+    request.observed.set(status, ResponseIds::of(&response));
+    Ok(response)
 }
 
 fn response_header(resp: &Response, name: &str) -> Option<String> {
@@ -981,6 +1024,7 @@ mod tests {
             headers: vec![("Content-Type".into(), "text/plain".into())],
             abort_signal: None,
             replay_safe: false,
+            observed: Default::default(),
         };
         req.set_header("content-type", "application/json");
         assert_eq!(req.headers.len(), 1);
@@ -998,6 +1042,7 @@ mod tests {
             headers: vec![],
             abort_signal: None,
             replay_safe: false,
+            observed: Default::default(),
         };
         req.set_header("authorization", "Bearer t");
         assert_eq!(
