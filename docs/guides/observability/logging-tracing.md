@@ -348,8 +348,6 @@ target, `pocopine.trace`:
 | `pocopine.realtime.message` | one inbound frame handled / one outbound data frame delivered | `realtime.session` |
 | `pocopine.live.event` | one SSE event delivered (replayed or live) | the `http.request` carrying the stream |
 | `pocopine.collab.apply` / `pocopine.collab.checkpoint` | one fan-out update folded / one detached checkpoint | root |
-| `pocopine.client.boot` / `pocopine.client.navigation` | the browser app boot / one page view (wasm) | root |
-| `pocopine.client.server_function` | one server-function call from the browser | `client.navigation` |
 
 Span fields use OpenTelemetry semantic-convention names where one exists
 (`http.request.method`, `http.route`, `http.response.status_code`,
@@ -397,38 +395,6 @@ connection's. The long-lived spans are the one deliberate exception to
 "spans are short": a backend sees them when they close, and their message
 children arrive first. Filter one out with
 `pocopine.trace[pocopine.realtime.session]=off` if that is unwanted.
-
-**The browser end.** Three spans open in the browser at the seams that
-already emit hooks: `pocopine.client.boot` around `App::run`,
-`pocopine.client.navigation` per page view (a root with a fresh trace id;
-every server-function call of that view is its child), and
-`pocopine.client.server_function` around each call, which records the
-server's `x-request-id` and status from the response. The console layer
-prints the same `name{k=v}` prefix server logs show, and the
-`server_function_client_completed` event carries the server's request id
-and trace id, so a console line names the exact server span.
-
-To make it **one trace** across the boundary, turn the relay on at both
-ends:
-
-```rust
-// browser
-FrontendObservabilityConfig::new().with_trace_relay(true)
-// server
-ServerObservabilityConfig::new().with_client_trace_relay(true)
-```
-
-With the relay on, each call sends a `traceparent` minted from the page
-view's trace id, and the browser ships its closed spans to
-`POST /_pocopine/trace` (batched, keepalive fetch, `sendBeacon` on page
-hide). The server validates every record hard — allowlisted span names and
-fields, W3C id shapes, a five-minute clock window, capped values, no query
-strings, capped batches, ten posts per minute per session — then re-emits
-them as `client_span_closed` events and, with OTLP, as real spans under the
-client's own ids. The backend then renders navigation → call → request →
-server function → model calls as one tree. Without the relay the browser
-sends no `traceparent`: a client span nobody receives would make every
-server trace the child of a missing parent.
 
 **Jobs link back to their enqueuer.** With `logging-otlp` on, an enqueued
 job carries the enqueuer's `traceparent`; `pocopine.job.run` records it as
