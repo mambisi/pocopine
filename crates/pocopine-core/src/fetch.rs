@@ -45,25 +45,26 @@ pub fn client_session_id() -> &'static str {
 /// `pocopine-crypto` only so the shape is uniform and unguessable enough
 /// not to collide across tabs.
 fn mint_session_id() -> String {
-    let mut seed = String::new();
+    // Raw entropy bytes in, hex out of `pocopine-crypto` — no hand-rolled
+    // encoding on the consumer side.
+    let mut seed: Vec<u8> = Vec::with_capacity(48);
     #[cfg(target_arch = "wasm32")]
     {
-        use std::fmt::Write as _;
         for _ in 0..4 {
-            let _ = write!(seed, "{:x}", js_sys::Math::random().to_bits());
+            seed.extend_from_slice(&js_sys::Math::random().to_bits().to_le_bytes());
         }
-        let _ = write!(seed, "{:x}", js_sys::Date::now().to_bits());
+        seed.extend_from_slice(&js_sys::Date::now().to_bits().to_le_bytes());
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use std::fmt::Write as _;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or_default();
-        let _ = write!(seed, "{now:x}{:x}", std::process::id());
+        seed.extend_from_slice(&now.to_le_bytes());
+        seed.extend_from_slice(&std::process::id().to_le_bytes());
     }
-    let mut hex = pocopine_crypto::blake3_hex(seed.as_bytes());
+    let mut hex = pocopine_crypto::blake3_hex(&seed);
     hex.truncate(32);
     hex
 }

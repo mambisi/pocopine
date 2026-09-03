@@ -37,6 +37,7 @@ async fn memory_backend_job(input: JobPayload) -> JobResult<()> {
 #[pocopine::job(queue = "trace", retries = 0)]
 async fn traced_memory_job(input: JobPayload) -> JobResult<()> {
     assert_eq!(input.value, "trace-payload");
+    tracing::info!(target: "app::job", "inside the handler");
     Ok(())
 }
 
@@ -346,6 +347,13 @@ fn memory_backend_emits_job_lifecycle_trace_without_payload() {
             .any(|value| value.contains("trace-payload")),
         "the span carries structural fields only"
     );
+    // The handler runs on a spawned task; the span is carried across it.
+    let inside = capture
+        .events()
+        .into_iter()
+        .find(|event| event.target == "app::job")
+        .expect("handler event captured");
+    assert_eq!(inside.ancestry(), ["pocopine.job.run"]);
 }
 
 #[test]

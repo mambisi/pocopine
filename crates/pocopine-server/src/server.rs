@@ -27,6 +27,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use pocopine_auth::AuthProvider;
+
+use crate::observability::{RequestEventOptions, request_event_layer_with};
 use pocopine_observe::{TRACE_TARGET, fields, spans};
 use tower::Layer;
 use tower::Service;
@@ -91,6 +93,8 @@ pub struct Server {
     installing_plugin: Option<&'static str>,
     auth_providers: Vec<SharedAuthProvider>,
     server_function_conflicts: Vec<ServerFunctionRouteConflict>,
+    /// RFC-123 §3.1 — applied last by `try_finalize`, outside auth.
+    request_events: Option<RequestEventOptions>,
 }
 
 impl Server {
@@ -138,6 +142,7 @@ impl Server {
         Self {
             router,
             plugins: PluginRegistry::default(),
+            request_events: None,
             installing_plugin: None,
             auth_providers: Vec::new(),
             server_function_conflicts,
@@ -222,6 +227,17 @@ impl Server {
     /// `router_mut` calls. [`Self::with_auth`] is the exception:
     /// the builder records auth providers and applies them during
     /// finalization so plugin routes added later are still wrapped.
+    /// Open the `pocopine.http.request` span — and emit the HTTP hook
+    /// events — around every request, **outside** authentication and
+    /// every plugin layer. Applied last by [`Self::try_finalize`], so it
+    /// also wraps routes plugins add later. Prefer this over
+    /// `layer(request_event_layer())`, which wraps only the routes that
+    /// exist at the call site and sits inside [`Self::with_auth`].
+    pub fn request_events(mut self, options: RequestEventOptions) -> Self {
+        self.request_events = Some(options);
+        self
+    }
+
     pub fn layer<L>(mut self, layer: L) -> Self
     where
         L: Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
@@ -309,6 +325,7 @@ impl Server {
             plugins,
             auth_providers,
             server_function_conflicts,
+            request_events,
             ..
         } = self;
 
@@ -333,6 +350,12 @@ impl Server {
                 auth_middleware,
             ));
         }
+        // Outermost: the request span wraps auth, every plugin layer, and
+        // every route — including ones plugins added after their own
+        // `layer()` calls (RFC-123 §3.1).
+        if let Some(options) = request_events {
+            router = router.layer(request_event_layer_with(options));
+        }
         Ok(router)
     }
 
@@ -353,6 +376,7 @@ impl Server {
         // bind; serving itself is not booting and stays outside it.
         let span = tracing::info_span!(
             target: TRACE_TARGET,
+            parent: None,
             spans::SERVER_BOOT,
             otel.kind = "internal",
             server.address = addr,

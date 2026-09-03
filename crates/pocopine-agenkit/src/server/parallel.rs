@@ -131,6 +131,10 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
             let mut set: JoinSet<(usize, AgenkitResult<T>)> = JoinSet::new();
             let mut branch_steps: Vec<StepId> = Vec::with_capacity(self.branches.len());
             let mut branch_names: Vec<String> = Vec::with_capacity(self.branches.len());
+            // Kept beside the futures: a branch's terminal event and status are
+            // recorded here at join time — a panicked or aborted task never
+            // reaches its own tail (RFC-123 §4).
+            let mut branch_spans: Vec<tracing::Span> = Vec::with_capacity(self.branches.len());
             let mut task_branch: HashMap<tokio::task::Id, usize> =
                 HashMap::with_capacity(self.branches.len());
 
@@ -156,6 +160,7 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                     super::spans::step_span_in_group("branch", &branch_step, &name, &group_id);
                 branch_steps.push(branch_step);
                 branch_names.push(name);
+                branch_spans.push(branch_span.clone());
 
                 let semaphore = semaphore.clone();
                 let handle = set.spawn(
@@ -173,7 +178,6 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                             },
                             None => future.await,
                         };
-                        super::spans::close(&tracing::Span::current(), &result);
                         (index, result)
                     }
                     .instrument(branch_span),
@@ -212,6 +216,7 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                     &group_id,
                     &branch_steps[index],
                     &branch_names[index],
+                    &branch_spans[index],
                     &result,
                 );
                 settled[index] = true;
@@ -233,8 +238,11 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                                 &task_branch,
                                 &run,
                                 &group_id,
-                                &branch_steps,
-                                &branch_names,
+                                BranchRefs {
+                                    steps: &branch_steps,
+                                    names: &branch_names,
+                                    spans: &branch_spans,
+                                },
                                 &mut settled,
                             );
                             set.abort_all();
@@ -251,8 +259,11 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                                 &task_branch,
                                 &run,
                                 &group_id,
-                                &branch_steps,
-                                &branch_names,
+                                BranchRefs {
+                                    steps: &branch_steps,
+                                    names: &branch_names,
+                                    spans: &branch_spans,
+                                },
                                 &mut settled,
                             );
                             set.abort_all();
@@ -271,16 +282,21 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
                     continue;
                 }
                 let step_id = branch_steps[index].clone();
-                run.emit(
-                    run.event(
-                        events::AI_STEP_CANCELLED,
-                        StepKind::Agent,
-                        StepStatus::Cancelled,
+                let span = &branch_spans[index];
+                span.record("otel.status_code", "ERROR");
+                span.record("error.type", "cancelled");
+                span.in_scope(|| {
+                    run.emit(
+                        run.event(
+                            events::AI_STEP_CANCELLED,
+                            StepKind::Agent,
+                            StepStatus::Cancelled,
+                        )
+                        .with_step(step_id.clone())
+                        .with_parallel_group(group_id.clone())
+                        .with_field("branch", branch_names[index].clone()),
                     )
-                    .with_step(step_id.clone())
-                    .with_parallel_group(group_id.clone())
-                    .with_field("branch", branch_names[index].clone()),
-                );
+                });
                 run.stream(FlowStreamEvent::BranchCancelled {
                     group_id: group_id.clone(),
                     step_id,
@@ -376,8 +392,11 @@ fn emit_branch_terminal<T>(
     group_id: &ParallelGroupId,
     step_id: &StepId,
     name: &str,
+    span: &tracing::Span,
     result: &AgenkitResult<T>,
 ) {
+    super::spans::close(span, result);
+    let _inside = span.enter();
     match result {
         Ok(_) => {
             run.emit(
@@ -417,25 +436,33 @@ fn emit_branch_terminal<T>(
 /// being mislabeled `cancelled` by the post-loop closeout. Does not change the
 /// success tally — the join target is already met, so drained successes are not
 /// added to the result set (preserving `FirstSuccess`/`Quorum` semantics).
+/// The per-branch tables `run` keeps in lockstep: step id, name, and the
+/// `pocopine.ai.step` span the branch future was instrumented with.
+struct BranchRefs<'a> {
+    steps: &'a [StepId],
+    names: &'a [String],
+    spans: &'a [tracing::Span],
+}
+
 fn drain_ready<T: 'static>(
     set: &mut JoinSet<(usize, AgenkitResult<T>)>,
     task_branch: &HashMap<tokio::task::Id, usize>,
     run: &RunState,
     group_id: &ParallelGroupId,
-    branch_steps: &[StepId],
-    branch_names: &[String],
+    branches: BranchRefs<'_>,
     settled: &mut [bool],
 ) {
     while let Some(joined) = set.try_join_next() {
-        let Some((index, result)) = branch_outcome(joined, task_branch, branch_names) else {
+        let Some((index, result)) = branch_outcome(joined, task_branch, branches.names) else {
             continue;
         };
         if !settled[index] {
             emit_branch_terminal(
                 run,
                 group_id,
-                &branch_steps[index],
-                &branch_names[index],
+                &branches.steps[index],
+                &branches.names[index],
+                &branches.spans[index],
                 &result,
             );
             settled[index] = true;
