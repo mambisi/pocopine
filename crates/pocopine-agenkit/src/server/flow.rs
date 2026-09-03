@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use tracing::Instrument as _;
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, ContextGapDiagnostic, ContextManifest, FlowDescriptor,
@@ -314,6 +315,7 @@ impl AiFlowContext {
         Fut: Future<Output = AgenkitResult<T>>,
     {
         let step_id = self.run.next_step_id();
+        let span = super::spans::step_span("custom", &step_id, name);
         let mut started = self
             .run
             .event(
@@ -326,10 +328,11 @@ impl AiFlowContext {
         if let Some(parent) = &self.parent_step {
             started = started.with_parent(parent.clone());
         }
-        self.run.emit(started);
+        span.in_scope(|| self.run.emit(started));
 
-        let result = work.await;
-        match &result {
+        let result = work.instrument(span.clone()).await;
+        super::spans::close(&span, &result);
+        span.in_scope(|| match &result {
             Ok(_) => self.run.emit(
                 self.run
                     .event(
@@ -347,7 +350,7 @@ impl AiFlowContext {
                     .with_field("name", name)
                     .with_error(error.clone()),
             ),
-        }
+        });
         result
     }
 
@@ -409,22 +412,27 @@ where
         }
 
         let step_id = self.ctx.run.next_step_id();
-        self.ctx.run.emit(
-            self.ctx
-                .run
-                .event(
-                    events::AI_RETRIEVAL_STARTED,
-                    StepKind::Retrieval,
-                    StepStatus::Started,
-                )
-                .with_step(step_id.clone())
-                .with_field("retriever_id", R::ID),
-        );
+        let span = super::spans::step_span("retrieval", &step_id, R::ID);
+        span.in_scope(|| {
+            self.ctx.run.emit(
+                self.ctx
+                    .run
+                    .event(
+                        events::AI_RETRIEVAL_STARTED,
+                        StepKind::Retrieval,
+                        StepStatus::Started,
+                    )
+                    .with_step(step_id.clone())
+                    .with_field("retriever_id", R::ID),
+            )
+        });
 
         let result = retriever
             .retrieve_json(value, self.ctx.exec_context())
+            .instrument(span.clone())
             .await;
-        match &result {
+        super::spans::close(&span, &result);
+        span.in_scope(|| match &result {
             Ok(set) => self.ctx.run.emit(
                 self.ctx
                     .run
@@ -449,7 +457,7 @@ where
                     .with_field("retriever_id", R::ID)
                     .with_error(error.clone()),
             ),
-        }
+        });
         result
     }
 }
