@@ -6,6 +6,13 @@ license.workspace = true
 repository.workspace = true
 description = "Background jobs for pocopine apps."
 
+[features]
+default = []
+# RFC-123 Phase 4 — enqueue → run links: capture the enqueuer's W3C
+# traceparent into the envelope and add it as a span link on
+# pocopine.job.run. Dependency-only; enabled by `pocopine/logging-otlp`.
+otel = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = "1"
@@ -18,3 +25,5 @@ redis = { version = "0.27", features = ["tokio-comp"] }
 tokio = { version = "1", features = ["time"] }
 tracing = { workspace = true }
 pocopine-observe = { workspace = true }
+opentelemetry = { version = "0.31", optional = true, features = ["trace"] }
+tracing-opentelemetry = { version = "0.32", optional = true }

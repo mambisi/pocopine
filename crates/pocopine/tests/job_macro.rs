@@ -336,6 +336,11 @@ fn memory_backend_emits_job_lifecycle_trace_without_payload() {
     assert_eq!(span.field("pocopine.job.max_attempts"), Some("1"));
     assert_eq!(span.field("otel.status_code"), Some("OK"));
     assert_eq!(span.field("error.type"), None);
+    assert_eq!(
+        span.field("pocopine.job.enqueue_traceparent"),
+        None,
+        "no OpenTelemetry layer, no enqueuer context to link"
+    );
     assert!(
         span.field("pocopine.job.name")
             .is_some_and(|value| value.ends_with("::traced_memory_job"))
