@@ -185,7 +185,21 @@ span.record("http.response.status_code", response.status().as_u16());
 
 The hook emits are unchanged and now fire inside the span. With the `otel`
 feature (§5.3) the span's parent is set from the incoming `traceparent` before
-the future is instrumented.
+the future is instrumented. The span is opened with `parent: None`: a request
+is a root even when some outer tower layer has a span entered.
+
+**Where the layer sits.** `Server::request_events(options)` records the
+options and `try_finalize` applies the layer *last* — outside `with_auth`
+and every plugin layer, around routes plugins add later — so authentication
+runs inside the span. The observability plugin uses this path; the manual
+`Server::layer(request_event_layer())` form wraps only what exists at the
+call site and sits inside auth.
+
+Three spawn points would otherwise drop the span, since a spawned task does
+not inherit it: the job worker's panic-isolating `tokio::spawn` around the
+handler, the streaming flow route's task, and the conversational session's
+turn task. Each is `.instrument(Span::current())`ed so the subtree stays
+under the caller.
 
 ### 3.2 `pocopine.server_function`
 
@@ -266,7 +280,8 @@ does, and pocopine apps sit behind the same edges those do.
 Every `http.request` response gets `x-request-id: <pocopine.request_id>` when
 the span is enabled. With `otlp`, also `traceparent` echoing the server's span,
 so a browser devtools user can paste it into the backend. Two headers, both
-opt-out via `ServerObservabilityConfig`.
+opt-out via `ServerObservabilityConfig` (`with_request_id_header(false)`,
+`with_trace_context_header(false)`) or `RequestEventOptions`.
 
 ## 6. Cost
 

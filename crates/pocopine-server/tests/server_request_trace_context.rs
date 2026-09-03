@@ -130,3 +130,24 @@ fn without_incoming_context_the_request_is_a_fresh_root() {
     assert_eq!(trace_id.len(), 32);
     assert_ne!(trace_id, "00000000000000000000000000000000");
 }
+
+#[test]
+fn echoed_traceparent_can_be_disabled() {
+    let _lock = registry_lock();
+    pocopine_server::__reset_for_test();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let echoed = with_otel(|| {
+        rt.block_on(traceparent_of(
+            router(RequestEventOptions::new().with_trace_context_header(false)),
+            Some(INCOMING),
+        ))
+    });
+    assert_eq!(
+        echoed, None,
+        "no traceparent on the response when opted out"
+    );
+}
