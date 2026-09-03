@@ -174,6 +174,9 @@ pub mod fields {
     pub const PARENT_SPAN_ID: &str = "pocopine.parent_span_id";
     /// The route component a browser navigation mounted.
     pub const COMPONENT: &str = "pocopine.component";
+    /// How many browser spans the relay queue dropped before the record
+    /// carrying this field was posted.
+    pub const RELAY_DROPPED: &str = "pocopine.relay.dropped";
 }
 
 /// RFC-123 §5.5 — the relay contract between the browser and the server:
@@ -195,8 +198,12 @@ pub mod client_relay {
     pub const MAX_BODY_BYTES: usize = 32 * 1024;
     /// Longest accepted field value.
     pub const MAX_VALUE_LEN: usize = 256;
-    /// How far a record's timestamps may sit from the server clock, in ms.
+    /// How far a record's *end* time may sit from the server clock, in ms.
+    /// The start is bounded by [`MAX_SPAN_DURATION_MS`] instead: a page view
+    /// stays open for as long as the user stays on it.
     pub const MAX_CLOCK_SKEW_MS: f64 = 5.0 * 60.0 * 1000.0;
+    /// Longest span the relay accepts, in ms (a day).
+    pub const MAX_SPAN_DURATION_MS: f64 = 24.0 * 60.0 * 60.0 * 1000.0;
     /// Posts per minute per `session.id` before the server answers 429.
     pub const MAX_POSTS_PER_MINUTE: u32 = 10;
 
@@ -270,6 +277,7 @@ pub mod client_relay {
         fields::TRACE_ID,
         fields::SPAN_ID,
         fields::PARENT_SPAN_ID,
+        fields::RELAY_DROPPED,
     ];
 
     /// The fields each span may carry (RFC-123 §2.3), beyond the common
@@ -311,10 +319,15 @@ pub mod client_relay {
         {
             return Err(RelayError::MalformedParentSpanId);
         }
-        let in_window = |t: f64| t.is_finite() && (t - now_unix_ms).abs() <= MAX_CLOCK_SKEW_MS;
-        if !in_window(record.start_unix_ms)
-            || !in_window(record.end_unix_ms)
-            || record.end_unix_ms < record.start_unix_ms
+        // The end must be recent; the start may be much older (a page view
+        // is open for as long as the user stays), bounded by a day.
+        let end = record.end_unix_ms;
+        let start = record.start_unix_ms;
+        if !end.is_finite()
+            || !start.is_finite()
+            || (end - now_unix_ms).abs() > MAX_CLOCK_SKEW_MS
+            || end < start
+            || end - start > MAX_SPAN_DURATION_MS
         {
             return Err(RelayError::TimestampOutOfRange);
         }
@@ -388,12 +401,36 @@ pub mod client_relay {
             let mut query = record("pocopine.client.navigation");
             query.fields.insert("url.path".into(), "/a?token=x".into());
             assert_eq!(validate(&query, 1_500.0), Err(RelayError::QueryInPath));
-            let mut stale = record("pocopine.client.boot");
-            stale.start_unix_ms = 1_000.0 - MAX_CLOCK_SKEW_MS - 1.0;
+            // A page view older than the skew window is fine as long as it
+            // ended recently and is shorter than a day…
+            let mut long_view = record("pocopine.client.navigation");
+            long_view.start_unix_ms = 1_800.0 - MAX_CLOCK_SKEW_MS * 4.0;
+            assert_eq!(validate(&long_view, 1_500.0), Ok(()));
+            // …but a stale end, an inverted span, or a day-long one is not.
+            let mut stale_end = record("pocopine.client.boot");
+            stale_end.end_unix_ms = 1_500.0 - MAX_CLOCK_SKEW_MS - 1.0;
+            stale_end.start_unix_ms = stale_end.end_unix_ms - 10.0;
             assert_eq!(
-                validate(&stale, 1_500.0),
+                validate(&stale_end, 1_500.0),
                 Err(RelayError::TimestampOutOfRange)
             );
+            let mut inverted = record("pocopine.client.boot");
+            inverted.start_unix_ms = inverted.end_unix_ms + 1.0;
+            assert_eq!(
+                validate(&inverted, 1_500.0),
+                Err(RelayError::TimestampOutOfRange)
+            );
+            let mut too_long = record("pocopine.client.navigation");
+            too_long.start_unix_ms = 1_800.0 - MAX_SPAN_DURATION_MS - 1.0;
+            assert_eq!(
+                validate(&too_long, 1_500.0),
+                Err(RelayError::TimestampOutOfRange)
+            );
+            let mut dropped = record("pocopine.client.boot");
+            dropped
+                .fields
+                .insert("pocopine.relay.dropped".into(), "3".into());
+            assert_eq!(validate(&dropped, 1_500.0), Ok(()));
             let mut long = record("pocopine.client.boot");
             long.fields
                 .insert("error.type".into(), "x".repeat(MAX_VALUE_LEN + 1));

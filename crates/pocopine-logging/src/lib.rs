@@ -359,10 +359,11 @@ mod server {
             let now = now_unix_ms();
             for record in &records {
                 if let Err(reason) = validate(record, now) {
+                    // Only the stable reason: the record is unvalidated data
+                    // from an unauthenticated endpoint.
                     tracing::debug!(
                         target: "pocopine.log",
                         reason = reason.as_str(),
-                        span = %record.name,
                         "client trace record refused"
                     );
                     return Err(StatusCode::BAD_REQUEST);
@@ -1207,12 +1208,32 @@ mod web {
         console: Option<ConsoleLoggingConfig>,
         relay: Option<TraceRelayConfig>,
     ) -> Result<(), InitLoggingError> {
+        let relay_on = relay.is_some();
+        // The console's level/target filter is *per layer*: applied globally
+        // it would disable the callsites the relay layer must see.
+        let console = console.map(|config| {
+            let max_level = config.max_level;
+            let prefix = config.target_prefix.clone();
+            ConsoleLayer { config }.with_filter(tracing_subscriber::filter::filter_fn(
+                move |metadata| {
+                    level_allowed(*metadata.level(), max_level)
+                        && prefix
+                            .as_deref()
+                            .is_none_or(|prefix| metadata.target().starts_with(prefix))
+                },
+            ))
+        });
         let relay = relay.map(RelayLayer::new);
-        tracing_subscriber::registry()
-            .with(console.map(|config| ConsoleLayer { config }))
+        let installed = tracing_subscriber::registry()
+            .with(console)
             .with(relay)
             .try_init()
-            .map_err(|_| InitLoggingError::AlreadyInitialized)
+            .map_err(|_| InitLoggingError::AlreadyInitialized);
+        // `traceparent` goes out only once a relay is actually installed
+        // (RFC-123 §5.5): propagation without a relay orphans every server
+        // trace.
+        pocopine_core::client_trace::set_trace_relay_enabled(installed.is_ok() && relay_on);
+        installed
     }
 
     /// RFC-123 §5.5 — where and how closed browser spans are shipped.
@@ -1402,6 +1423,9 @@ mod web {
             return;
         };
         let callback = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            // The open page view would otherwise never reach the relay: its
+            // calls would arrive with a parent nobody received.
+            pocopine_core::client_trace::close_view();
             flush(&url, &state, Transport::Beacon);
         });
         let _ =
@@ -1525,16 +1549,6 @@ mod web {
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
-        fn enabled(&self, metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
-            if !level_allowed(*metadata.level(), self.config.max_level) {
-                return false;
-            }
-            match &self.config.target_prefix {
-                Some(prefix) => metadata.target().starts_with(prefix),
-                None => true,
-            }
-        }
-
         fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
             let mut map = std::collections::BTreeMap::new();
             attrs.record(&mut SpanFieldVisitor(&mut map));
@@ -1834,9 +1848,8 @@ mod web {
                 trace_relay,
             } = self.config;
 
-            // The fetch layer sends `traceparent` only when the relay will
-            // make the client span real on the other side (RFC-123 §5.5).
-            pocopine_core::client_trace::set_trace_relay_enabled(trace_relay.is_some());
+            // `init_frontend_subscriber` turns `traceparent` propagation on
+            // only once the relay layer is actually installed (RFC-123 §5.5).
             if (console_logging.is_some() || trace_relay.is_some())
                 && let Err(err) = init_frontend_subscriber(console_logging, trace_relay)
             {
