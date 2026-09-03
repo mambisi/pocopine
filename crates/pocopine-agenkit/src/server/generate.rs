@@ -8,6 +8,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
+use tracing::Instrument as _;
 
 use futures::StreamExt;
 use pocopine_agenkit_core::{
@@ -193,14 +194,27 @@ impl Ai {
         let model = request.model.clone();
         let model_meta = super::catalog::lookup(&model);
 
+        // RFC-123 §4 — `pocopine.ai.model`, traced run or not; the step id
+        // is recorded once a tracer has minted it.
+        let span = super::spans::model_span(&model, provider.id(), None);
+
         let Some(run) = &self.tracer else {
-            return provider
+            let result = provider
                 .generate(request, &cx)
+                .instrument(span.clone())
                 .await
                 .map_err(reclassify_overflow);
+            super::spans::close(&span, &result);
+            if let Ok(response) = &result
+                && let Some(usage) = response.usage
+            {
+                super::spans::record_usage(&span, &usage);
+            }
+            return result;
         };
 
         let step_id = run.next_step_id();
+        span.record("pocopine.ai.step_id", step_id.as_str());
         let mut started = run
             .event(
                 events::AI_MODEL_REQUEST,
@@ -215,13 +229,15 @@ impl Ai {
         if let Some(meta) = model_meta {
             started = annotate_headroom(started, meta, &request.messages, request.max_tokens);
         }
-        run.emit(started);
+        span.in_scope(|| run.emit(started));
 
         let result = provider
             .generate(request, &cx)
+            .instrument(span.clone())
             .await
             .map_err(reclassify_overflow);
-        match &result {
+        super::spans::close(&span, &result);
+        span.in_scope(|| match &result {
             Ok(response) => {
                 let mut completed = run
                     .event(
@@ -232,6 +248,7 @@ impl Ai {
                     .with_step(step_id)
                     .with_model(model);
                 if let Some(usage) = response.usage {
+                    super::spans::record_usage(&span, &usage);
                     completed = completed.with_usage(usage);
                     if let Some(meta) = model_meta {
                         completed = completed.with_cost(meta.estimate_cost(&usage));
@@ -249,7 +266,7 @@ impl Ai {
                 .with_model(model)
                 .with_error(error.clone()),
             ),
-        }
+        });
         result
     }
 
@@ -290,9 +307,11 @@ impl Ai {
         let cx = self.provider_context(provider.id()).await?;
         let model = request.model.clone();
         let model_meta = super::catalog::lookup(&model);
+        let span = super::spans::model_span(&model, provider.id(), None);
 
         let model_step = self.tracer.as_ref().map(|run| {
             let step_id = run.next_step_id();
+            span.record("pocopine.ai.step_id", step_id.as_str());
             let mut started = run
                 .event(
                     events::AI_MODEL_REQUEST,
@@ -308,132 +327,142 @@ impl Ai {
             if let Some(meta) = model_meta {
                 started = annotate_headroom(started, meta, &request.messages, request.max_tokens);
             }
-            run.emit(started);
+            span.in_scope(|| run.emit(started));
             step_id
         });
 
         // Honor the provider's declared streaming capability: stream natively
         // when supported, else fall back to a one-shot generation adapted to the
         // streaming contract (§D13).
-        let mut stream = if provider.capabilities().streaming {
-            provider.generate_stream(request, &cx)
-        } else {
-            super::provider::fallback_stream(provider.as_ref(), request, &cx)
-        };
-        let mut text = String::new();
-        let mut thinking_parts: Vec<ContentPart> = Vec::new();
-        let mut media_parts: Vec<ContentPart> = Vec::new();
-        let mut tool_calls = Vec::new();
-        let mut usage = None;
-        let mut failure = None;
-        let mut last_partial: Option<serde_json::Value> = None;
-        while let Some(chunk) = stream.next().await {
-            match chunk {
-                // Reasoning rides the assembled response server-side (replay +
-                // observability). The client event carries the text too, but the
-                // wire boundary (`redact_reasoning`) strips it unless the flow
-                // opted in — so the redacted default is a count-only signal, and
-                // an opted-in flow gets the full reasoning text (§D10).
-                Ok(StreamChunk::Thinking { text, signature }) => {
-                    if let Some(run) = &self.tracer {
-                        run.stream(FlowStreamEvent::ThinkingDelta {
-                            chars: text.chars().count() as u32,
-                            text: Some(text.clone()),
-                        });
-                    }
-                    thinking_parts.push(ContentPart::thinking(text, signature));
-                }
-                Ok(StreamChunk::Text(delta)) => {
-                    text.push_str(&delta);
-                    if let Some(run) = &self.tracer {
-                        run.mark_output_streamed();
-                        if structured {
-                            // Re-parse only when the delta carries a structural
-                            // or string-boundary char — i.e. when a field can
-                            // start, advance, or complete. Re-parsing the whole
-                            // buffer on every token would be O(n^2) over a large
-                            // structured response; pure mid-value token growth is
-                            // folded into the next structural delta.
-                            let advances = delta.bytes().any(|b| {
-                                matches!(b, b'{' | b'}' | b'[' | b']' | b':' | b',' | b'"')
+        let result = async {
+            let mut stream = if provider.capabilities().streaming {
+                provider.generate_stream(request, &cx)
+            } else {
+                super::provider::fallback_stream(provider.as_ref(), request, &cx)
+            };
+            let mut text = String::new();
+            let mut thinking_parts: Vec<ContentPart> = Vec::new();
+            let mut media_parts: Vec<ContentPart> = Vec::new();
+            let mut tool_calls = Vec::new();
+            let mut usage = None;
+            let mut failure = None;
+            let mut last_partial: Option<serde_json::Value> = None;
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    // Reasoning rides the assembled response server-side (replay +
+                    // observability). The client event carries the text too, but the
+                    // wire boundary (`redact_reasoning`) strips it unless the flow
+                    // opted in — so the redacted default is a count-only signal, and
+                    // an opted-in flow gets the full reasoning text (§D10).
+                    Ok(StreamChunk::Thinking { text, signature }) => {
+                        if let Some(run) = &self.tracer {
+                            run.stream(FlowStreamEvent::ThinkingDelta {
+                                chars: text.chars().count() as u32,
+                                text: Some(text.clone()),
                             });
-                            if advances {
-                                // Emit a Genkit-style partial object whenever the
-                                // best-effort parse of the JSON-so-far advances.
-                                if let Some(partial) =
-                                    super::partial_json::parse_partial_json(&text)
-                                    && last_partial.as_ref() != Some(&partial)
-                                {
-                                    run.stream(FlowStreamEvent::ObjectDelta {
-                                        partial: partial.clone(),
-                                    });
-                                    last_partial = Some(partial);
+                        }
+                        thinking_parts.push(ContentPart::thinking(text, signature));
+                    }
+                    Ok(StreamChunk::Text(delta)) => {
+                        text.push_str(&delta);
+                        if let Some(run) = &self.tracer {
+                            run.mark_output_streamed();
+                            if structured {
+                                // Re-parse only when the delta carries a structural
+                                // or string-boundary char — i.e. when a field can
+                                // start, advance, or complete. Re-parsing the whole
+                                // buffer on every token would be O(n^2) over a large
+                                // structured response; pure mid-value token growth is
+                                // folded into the next structural delta.
+                                let advances = delta.bytes().any(|b| {
+                                    matches!(b, b'{' | b'}' | b'[' | b']' | b':' | b',' | b'"')
+                                });
+                                if advances {
+                                    // Emit a Genkit-style partial object whenever the
+                                    // best-effort parse of the JSON-so-far advances.
+                                    if let Some(partial) =
+                                        super::partial_json::parse_partial_json(&text)
+                                        && last_partial.as_ref() != Some(&partial)
+                                    {
+                                        run.stream(FlowStreamEvent::ObjectDelta {
+                                            partial: partial.clone(),
+                                        });
+                                        last_partial = Some(partial);
+                                    }
                                 }
+                            } else {
+                                run.stream(FlowStreamEvent::OutputDelta {
+                                    text: delta.clone(),
+                                });
                             }
-                        } else {
-                            run.stream(FlowStreamEvent::OutputDelta {
-                                text: delta.clone(),
+                        }
+                    }
+                    Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
+                    // Media rides the assembled response to the flow author
+                    // verbatim (RFC-122: never silently dropped). The flow wire
+                    // has no artifact events — capture is the loop paths' job.
+                    Ok(StreamChunk::Media(media)) => {
+                        media_parts.push(ContentPart::Media(media));
+                    }
+                    Ok(StreamChunk::Usage(reported)) => {
+                        usage = Some(reported);
+                        if let Some(run) = &self.tracer {
+                            run.stream(FlowStreamEvent::UsageUpdate {
+                                input_tokens: reported.input_tokens,
+                                output_tokens: reported.output_tokens,
+                                cache_read_tokens: reported.cache_read_tokens,
+                                cache_creation_tokens: reported.cache_creation_tokens,
                             });
                         }
                     }
-                }
-                Ok(StreamChunk::ToolCall(call)) => tool_calls.push(call),
-                // Media rides the assembled response to the flow author
-                // verbatim (RFC-122: never silently dropped). The flow wire
-                // has no artifact events — capture is the loop paths' job.
-                Ok(StreamChunk::Media(media)) => {
-                    media_parts.push(ContentPart::Media(media));
-                }
-                Ok(StreamChunk::Usage(reported)) => {
-                    usage = Some(reported);
-                    if let Some(run) = &self.tracer {
-                        run.stream(FlowStreamEvent::UsageUpdate {
-                            input_tokens: reported.input_tokens,
-                            output_tokens: reported.output_tokens,
-                            cache_read_tokens: reported.cache_read_tokens,
-                            cache_creation_tokens: reported.cache_creation_tokens,
-                        });
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
                     }
                 }
-                Err(error) => {
-                    failure = Some(error);
-                    break;
+            }
+            drop(stream);
+
+            match failure {
+                Some(error) => Err(reclassify_overflow(error)),
+                None => {
+                    let finish_reason = if tool_calls.is_empty() {
+                        FinishReason::Stop
+                    } else {
+                        FinishReason::ToolCalls
+                    };
+                    // Reasoning parts (if any) precede the answer text, media
+                    // follows it — they ride the content server-side for replay;
+                    // `as_text()` skips them so the user-visible output stays
+                    // text-only.
+                    let content = if thinking_parts.is_empty() && media_parts.is_empty() {
+                        Content::text(text)
+                    } else {
+                        let mut parts = thinking_parts;
+                        parts.push(ContentPart::text(text));
+                        parts.extend(media_parts);
+                        Content::from_parts(parts)
+                    };
+                    Ok(GenerateResponse {
+                        content,
+                        tool_calls,
+                        usage,
+                        finish_reason,
+                    })
                 }
             }
         }
-        drop(stream);
-
-        let result = match failure {
-            Some(error) => Err(reclassify_overflow(error)),
-            None => {
-                let finish_reason = if tool_calls.is_empty() {
-                    FinishReason::Stop
-                } else {
-                    FinishReason::ToolCalls
-                };
-                // Reasoning parts (if any) precede the answer text, media
-                // follows it — they ride the content server-side for replay;
-                // `as_text()` skips them so the user-visible output stays
-                // text-only.
-                let content = if thinking_parts.is_empty() && media_parts.is_empty() {
-                    Content::text(text)
-                } else {
-                    let mut parts = thinking_parts;
-                    parts.push(ContentPart::text(text));
-                    parts.extend(media_parts);
-                    Content::from_parts(parts)
-                };
-                Ok(GenerateResponse {
-                    content,
-                    tool_calls,
-                    usage,
-                    finish_reason,
-                })
-            }
-        };
+        .instrument(span.clone())
+        .await;
+        super::spans::close(&span, &result);
+        if let Ok(response) = &result
+            && let Some(usage) = response.usage
+        {
+            super::spans::record_usage(&span, &usage);
+        }
 
         if let (Some(run), Some(step_id)) = (&self.tracer, model_step) {
-            match &result {
+            span.in_scope(|| match &result {
                 Ok(response) => {
                     let mut completed = run
                         .event(
@@ -461,7 +490,7 @@ impl Ai {
                     .with_model(model)
                     .with_error(error.clone()),
                 ),
-            }
+            });
         }
         result
     }

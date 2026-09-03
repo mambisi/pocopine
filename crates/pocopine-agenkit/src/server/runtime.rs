@@ -24,6 +24,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::Instrument as _;
 
 use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
@@ -727,16 +728,21 @@ impl AgentLoop {
             self.principal.clone(),
             None,
         );
+        // RFC-123 §4 — `pocopine.ai.turn`: the turn's model/tool spans hang
+        // from it and its token total lands on it at close.
+        let turn_span = super::spans::turn_span(&run.run_id, &run.trace_id, &model);
         let agent_step = run.next_step_id();
-        run.emit(
-            run.event(
-                events::AI_STEP_STARTED,
-                StepKind::Agent,
-                StepStatus::Started,
+        turn_span.in_scope(|| {
+            run.emit(
+                run.event(
+                    events::AI_STEP_STARTED,
+                    StepKind::Agent,
+                    StepStatus::Started,
+                )
+                .with_step(agent_step.clone())
+                .with_model(model.clone()),
             )
-            .with_step(agent_step.clone())
-            .with_model(model.clone()),
-        );
+        });
         // The runtime's observer: the `AgentEvent` firehose *and* (via the wrapped
         // `TraceObserver`) the trace spans, accumulating the turn's token usage.
         let turn_usage = std::sync::Mutex::new(Usage::default());
@@ -840,9 +846,11 @@ impl AgentLoop {
             }
             Ok(StopReason::MaxSteps)
         }
+        .instrument(turn_span.clone())
         .await;
+        super::spans::close(&turn_span, &outcome);
 
-        match &outcome {
+        turn_span.in_scope(|| match &outcome {
             Ok(_) => run.emit(
                 run.event(
                     events::AI_STEP_COMPLETED,
@@ -856,9 +864,10 @@ impl AgentLoop {
                     .with_step(agent_step.clone())
                     .with_error(error.clone()),
             ),
-        }
+        });
 
         let usage = turn_usage.lock().map(|g| *g).unwrap_or_default();
+        super::spans::record_usage(&turn_span, &usage);
         outcome.map(|reason| (reason, cx, usage))
     }
 }
