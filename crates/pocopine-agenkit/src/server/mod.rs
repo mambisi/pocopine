@@ -38,6 +38,7 @@ mod schema;
 /// Durable, branchable conversation sessions (roadmap W7) — a single-writer
 /// append-only event log with parent-pointer forks and compaction checkpoints.
 pub mod session;
+mod spans;
 pub mod thread;
 pub mod tool;
 

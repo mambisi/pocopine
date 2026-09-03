@@ -11,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::Instrument as _;
 
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, FlowStreamEvent, ParallelGroupId, ParallelJoin, StepId, StepKind,
@@ -98,229 +99,249 @@ impl<'a, T: Send + 'static> ParallelBuilder<'a, T> {
         let group_step = run.next_step_id();
         let branch_count = self.branches.len() as u32;
 
-        run.emit(
-            run.event(
-                events::AI_PARALLEL_STARTED,
-                StepKind::Parallel,
-                StepStatus::Started,
-            )
-            .with_step(group_step.clone())
-            .with_parallel_group(group_id.clone())
-            .with_field("group", self.group.clone())
-            .with_field("branch_count", branch_count as u64),
-        );
-        run.stream(FlowStreamEvent::ParallelStarted {
-            group_id: group_id.clone(),
-            branch_count,
-            join: self.join,
-        });
-
-        let permits = self
-            .max_concurrency
-            .unwrap_or_else(|| self.branches.len().max(1));
-        let semaphore = Arc::new(Semaphore::new(permits));
-        let timeout = self.timeout;
-
-        let mut set: JoinSet<(usize, AgenkitResult<T>)> = JoinSet::new();
-        let mut branch_steps: Vec<StepId> = Vec::with_capacity(self.branches.len());
-        let mut branch_names: Vec<String> = Vec::with_capacity(self.branches.len());
-        let mut task_branch: HashMap<tokio::task::Id, usize> =
-            HashMap::with_capacity(self.branches.len());
-
-        for (index, (name, future)) in self.branches.into_iter().enumerate() {
-            let branch_step = run.next_step_id();
+        // RFC-123 §4 — the group is one `pocopine.ai.step`; each branch
+        // future carries its own, parented here, so overlapping branches
+        // show as overlapping spans with no parent bookkeeping.
+        let group_span =
+            super::spans::step_span_in_group("parallel", &group_step, &self.group, &group_id);
+        let result = async move {
             run.emit(
                 run.event(
-                    events::AI_STEP_STARTED,
-                    StepKind::Agent,
+                    events::AI_PARALLEL_STARTED,
+                    StepKind::Parallel,
                     StepStatus::Started,
                 )
-                .with_step(branch_step.clone())
-                .with_parent(group_step.clone())
+                .with_step(group_step.clone())
                 .with_parallel_group(group_id.clone())
-                .with_field("branch", name.clone()),
+                .with_field("group", self.group.clone())
+                .with_field("branch_count", branch_count as u64),
             );
-            run.stream(FlowStreamEvent::BranchStarted {
+            run.stream(FlowStreamEvent::ParallelStarted {
                 group_id: group_id.clone(),
-                step_id: branch_step.clone(),
-                name: name.clone(),
+                branch_count,
+                join: self.join,
             });
-            branch_steps.push(branch_step);
-            branch_names.push(name);
 
-            let semaphore = semaphore.clone();
-            let handle = set.spawn(async move {
-                let _permit = semaphore
-                    .acquire_owned()
-                    .await
-                    .expect("semaphore is never closed");
-                let result = match timeout {
-                    Some(duration) => match tokio::time::timeout(duration, future).await {
-                        Ok(result) => result,
-                        Err(_) => Err(AgenkitError::budget_exhausted("branch exceeded timeout")),
-                    },
-                    None => future.await,
-                };
-                (index, result)
-            });
-            task_branch.insert(handle.id(), index);
-        }
+            let permits = self
+                .max_concurrency
+                .unwrap_or_else(|| self.branches.len().max(1));
+            let semaphore = Arc::new(Semaphore::new(permits));
+            let timeout = self.timeout;
 
-        let target = match self.join {
-            ParallelJoin::FirstSuccess => 1,
-            ParallelJoin::Quorum(n) => n.max(1),
-            ParallelJoin::All | ParallelJoin::AllSettled => branch_count.max(1),
-        };
-        // An early-exit join must still satisfy `.min_success(m)`: keep racing
-        // until the floor is met instead of aborting the losers and then
-        // failing the min-success gate with certainty.
-        let target = target.max(self.min_success.unwrap_or(0));
+            let mut set: JoinSet<(usize, AgenkitResult<T>)> = JoinSet::new();
+            let mut branch_steps: Vec<StepId> = Vec::with_capacity(self.branches.len());
+            let mut branch_names: Vec<String> = Vec::with_capacity(self.branches.len());
+            let mut task_branch: HashMap<tokio::task::Id, usize> =
+                HashMap::with_capacity(self.branches.len());
 
-        let mut successes: Vec<T> = Vec::new();
-        let mut success_count: u32 = 0;
-        let mut first_error: Option<AgenkitError> = None;
-        // Track which branches reached a terminal (completed/failed) event so
-        // any started-but-undrained branch left behind by `abort_all` can be
-        // closed with a cancelled event — otherwise a client reconstructing the
-        // tree sees forever-open branches under a completed group (§D7/§D8).
-        let mut settled = vec![false; branch_steps.len()];
+            for (index, (name, future)) in self.branches.into_iter().enumerate() {
+                let branch_step = run.next_step_id();
+                run.emit(
+                    run.event(
+                        events::AI_STEP_STARTED,
+                        StepKind::Agent,
+                        StepStatus::Started,
+                    )
+                    .with_step(branch_step.clone())
+                    .with_parent(group_step.clone())
+                    .with_parallel_group(group_id.clone())
+                    .with_field("branch", name.clone()),
+                );
+                run.stream(FlowStreamEvent::BranchStarted {
+                    group_id: group_id.clone(),
+                    step_id: branch_step.clone(),
+                    name: name.clone(),
+                });
+                let branch_span =
+                    super::spans::step_span_in_group("branch", &branch_step, &name, &group_id);
+                branch_steps.push(branch_step);
+                branch_names.push(name);
 
-        while let Some(joined) = set.join_next().await {
-            let Some((index, result)) = branch_outcome(joined, &task_branch, &branch_names) else {
-                // An aborted loser (cancelled by `abort_all`) carries no branch
-                // outcome — skip it.
-                continue;
+                let semaphore = semaphore.clone();
+                let handle = set.spawn(
+                    async move {
+                        let _permit = semaphore
+                            .acquire_owned()
+                            .await
+                            .expect("semaphore is never closed");
+                        let result = match timeout {
+                            Some(duration) => match tokio::time::timeout(duration, future).await {
+                                Ok(result) => result,
+                                Err(_) => {
+                                    Err(AgenkitError::budget_exhausted("branch exceeded timeout"))
+                                }
+                            },
+                            None => future.await,
+                        };
+                        super::spans::close(&tracing::Span::current(), &result);
+                        (index, result)
+                    }
+                    .instrument(branch_span),
+                );
+                task_branch.insert(handle.id(), index);
+            }
+
+            let target = match self.join {
+                ParallelJoin::FirstSuccess => 1,
+                ParallelJoin::Quorum(n) => n.max(1),
+                ParallelJoin::All | ParallelJoin::AllSettled => branch_count.max(1),
             };
-            emit_branch_terminal(
-                &run,
-                &group_id,
-                &branch_steps[index],
-                &branch_names[index],
-                &result,
-            );
-            settled[index] = true;
-            match result {
-                Ok(value) => {
-                    successes.push(value);
-                    success_count += 1;
-                    if success_count >= target
-                        && matches!(
-                            self.join,
-                            ParallelJoin::FirstSuccess | ParallelJoin::Quorum(_)
-                        )
-                    {
-                        // Branches that already finished keep their real terminal
-                        // (drained here); cancel only the still-running losers in
-                        // flight (§D15 DC-7).
-                        drain_ready(
-                            &mut set,
-                            &task_branch,
-                            &run,
-                            &group_id,
-                            &branch_steps,
-                            &branch_names,
-                            &mut settled,
-                        );
-                        set.abort_all();
-                        break;
-                    }
-                }
-                Err(error) => {
-                    if first_error.is_none() {
-                        first_error = Some(error);
-                    }
-                    if matches!(self.join, ParallelJoin::All) {
-                        drain_ready(
-                            &mut set,
-                            &task_branch,
-                            &run,
-                            &group_id,
-                            &branch_steps,
-                            &branch_names,
-                            &mut settled,
-                        );
-                        set.abort_all();
-                        break;
-                    }
-                }
-            }
-        }
+            // An early-exit join must still satisfy `.min_success(m)`: keep racing
+            // until the floor is met instead of aborting the losers and then
+            // failing the min-success gate with certainty.
+            let target = target.max(self.min_success.unwrap_or(0));
 
-        // Close any branch that started but was aborted in flight (an
-        // early-exit join broke out of the drain loop with losers still
-        // running). Each gets a terminal cancelled event so the trace tree has
-        // no dangling open branches under the completed group.
-        for (index, done) in settled.iter().enumerate() {
-            if *done {
-                continue;
+            let mut successes: Vec<T> = Vec::new();
+            let mut success_count: u32 = 0;
+            let mut first_error: Option<AgenkitError> = None;
+            // Track which branches reached a terminal (completed/failed) event so
+            // any started-but-undrained branch left behind by `abort_all` can be
+            // closed with a cancelled event — otherwise a client reconstructing the
+            // tree sees forever-open branches under a completed group (§D7/§D8).
+            let mut settled = vec![false; branch_steps.len()];
+
+            while let Some(joined) = set.join_next().await {
+                let Some((index, result)) = branch_outcome(joined, &task_branch, &branch_names)
+                else {
+                    // An aborted loser (cancelled by `abort_all`) carries no branch
+                    // outcome — skip it.
+                    continue;
+                };
+                emit_branch_terminal(
+                    &run,
+                    &group_id,
+                    &branch_steps[index],
+                    &branch_names[index],
+                    &result,
+                );
+                settled[index] = true;
+                match result {
+                    Ok(value) => {
+                        successes.push(value);
+                        success_count += 1;
+                        if success_count >= target
+                            && matches!(
+                                self.join,
+                                ParallelJoin::FirstSuccess | ParallelJoin::Quorum(_)
+                            )
+                        {
+                            // Branches that already finished keep their real terminal
+                            // (drained here); cancel only the still-running losers in
+                            // flight (§D15 DC-7).
+                            drain_ready(
+                                &mut set,
+                                &task_branch,
+                                &run,
+                                &group_id,
+                                &branch_steps,
+                                &branch_names,
+                                &mut settled,
+                            );
+                            set.abort_all();
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                        if matches!(self.join, ParallelJoin::All) {
+                            drain_ready(
+                                &mut set,
+                                &task_branch,
+                                &run,
+                                &group_id,
+                                &branch_steps,
+                                &branch_names,
+                                &mut settled,
+                            );
+                            set.abort_all();
+                            break;
+                        }
+                    }
+                }
             }
-            let step_id = branch_steps[index].clone();
+
+            // Close any branch that started but was aborted in flight (an
+            // early-exit join broke out of the drain loop with losers still
+            // running). Each gets a terminal cancelled event so the trace tree has
+            // no dangling open branches under the completed group.
+            for (index, done) in settled.iter().enumerate() {
+                if *done {
+                    continue;
+                }
+                let step_id = branch_steps[index].clone();
+                run.emit(
+                    run.event(
+                        events::AI_STEP_CANCELLED,
+                        StepKind::Agent,
+                        StepStatus::Cancelled,
+                    )
+                    .with_step(step_id.clone())
+                    .with_parallel_group(group_id.clone())
+                    .with_field("branch", branch_names[index].clone()),
+                );
+                run.stream(FlowStreamEvent::BranchCancelled {
+                    group_id: group_id.clone(),
+                    step_id,
+                });
+            }
+
             run.emit(
                 run.event(
-                    events::AI_STEP_CANCELLED,
-                    StepKind::Agent,
-                    StepStatus::Cancelled,
+                    events::AI_PARALLEL_COMPLETED,
+                    StepKind::Parallel,
+                    StepStatus::Completed,
                 )
-                .with_step(step_id.clone())
+                .with_step(group_step)
                 .with_parallel_group(group_id.clone())
-                .with_field("branch", branch_names[index].clone()),
+                .with_field("group", self.group.clone())
+                .with_field("success_count", success_count as u64),
             );
-            run.stream(FlowStreamEvent::BranchCancelled {
-                group_id: group_id.clone(),
-                step_id,
+            run.stream(FlowStreamEvent::ParallelCompleted {
+                group_id,
+                success_count,
             });
-        }
 
-        run.emit(
-            run.event(
-                events::AI_PARALLEL_COMPLETED,
-                StepKind::Parallel,
-                StepStatus::Completed,
-            )
-            .with_step(group_step)
-            .with_parallel_group(group_id.clone())
-            .with_field("group", self.group.clone())
-            .with_field("success_count", success_count as u64),
-        );
-        run.stream(FlowStreamEvent::ParallelCompleted {
-            group_id,
-            success_count,
-        });
-
-        // Policy gates.
-        if matches!(self.join, ParallelJoin::All)
-            && let Some(error) = first_error
-        {
-            return Err(error);
-        }
-        // A quorum that can never be reached (e.g. n > branch_count) must fail,
-        // not silently return fewer than `n` successes.
-        if let ParallelJoin::Quorum(n) = self.join
-            && success_count < n
-        {
-            return Err(AgenkitError::reducer_disagreement(format!(
-                "parallel group `{}` reached {success_count} of the required quorum {n}",
-                self.group
-            )));
-        }
-        if let Some(min) = self.min_success
-            && success_count < min
-        {
-            return Err(AgenkitError::reducer_disagreement(format!(
-                "parallel group `{}` had {success_count} successes, need {min}",
-                self.group
-            )));
-        }
-        if success_count == 0 {
-            return Err(first_error.unwrap_or_else(|| {
-                AgenkitError::reducer_disagreement(format!(
-                    "parallel group `{}` produced no successful branch",
+            // Policy gates.
+            if matches!(self.join, ParallelJoin::All)
+                && let Some(error) = first_error
+            {
+                return Err(error);
+            }
+            // A quorum that can never be reached (e.g. n > branch_count) must fail,
+            // not silently return fewer than `n` successes.
+            if let ParallelJoin::Quorum(n) = self.join
+                && success_count < n
+            {
+                return Err(AgenkitError::reducer_disagreement(format!(
+                    "parallel group `{}` reached {success_count} of the required quorum {n}",
                     self.group
-                ))
-            }));
-        }
+                )));
+            }
+            if let Some(min) = self.min_success
+                && success_count < min
+            {
+                return Err(AgenkitError::reducer_disagreement(format!(
+                    "parallel group `{}` had {success_count} successes, need {min}",
+                    self.group
+                )));
+            }
+            if success_count == 0 {
+                return Err(first_error.unwrap_or_else(|| {
+                    AgenkitError::reducer_disagreement(format!(
+                        "parallel group `{}` produced no successful branch",
+                        self.group
+                    ))
+                }));
+            }
 
-        Ok(successes)
+            Ok(successes)
+        }
+        .instrument(group_span.clone())
+        .await;
+        super::spans::close(&group_span, &result);
+        result
     }
 }
 
