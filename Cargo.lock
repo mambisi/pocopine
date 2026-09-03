@@ -7822,6 +7822,7 @@ version = "0.1.1"
 dependencies = [
  "axum 0.7.9",
  "futures",
+ "http-body 1.0.1",
  "inventory",
  "opentelemetry",
  "opentelemetry_sdk",
