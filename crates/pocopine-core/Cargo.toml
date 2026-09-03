@@ -30,6 +30,9 @@ pocopine-codec = { workspace = true }
 # RFC-095 W2 — Fnv64 backs the per-field dirty-tracking
 # fingerprints (`fingerprint` module).
 pocopine-crypto = { workspace = true }
+# RFC-123 §5.5 — the browser end of the trunk (client spans).
+pocopine-observe = { workspace = true }
+tracing = { workspace = true }
 pocopine-expr = { workspace = true }
 # NOTE: wasm-bindgen's `enable-interning` feature was tried (RFC-095
 # W5) and reverted: its per-crossing cache check taxes every DYNAMIC
