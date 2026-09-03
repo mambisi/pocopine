@@ -6460,6 +6460,8 @@ dependencies = [
  "percent-encoding",
  "rand 0.9.4",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -7741,10 +7743,14 @@ dependencies = [
  "pocopine-core",
  "pocopine-observe",
  "pocopine-server",
+ "serde_json",
+ "tokio",
+ "tower 0.5.3",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
