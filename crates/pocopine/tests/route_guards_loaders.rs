@@ -527,10 +527,10 @@ async fn server_idempotent_marks_fetch_request_replay_safe() {
             let seen_replay_safe = seen_replay_safe_for_middleware.clone();
             async move {
                 *seen_replay_safe.borrow_mut() = Some(req.is_replay_safe());
-                Ok(pocopine::fetch::FetchResponse {
-                    status: 200,
-                    body: serde_json::to_string(&Ok::<u32, pocopine::ServerError>(42)).unwrap(),
-                })
+                Ok(pocopine::fetch::FetchResponse::new(
+                    200,
+                    serde_json::to_string(&Ok::<u32, pocopine::ServerError>(42)).unwrap(),
+                ))
             }
         },
     );
