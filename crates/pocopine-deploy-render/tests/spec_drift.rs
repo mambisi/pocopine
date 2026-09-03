@@ -37,7 +37,7 @@ const RENDER_OPENAPI_URL: &str =
 /// + `DeployImage` {ref,sha}, and `RenderLog` {timestamp,message} —
 /// the last reached through the `/logs` → `/logs/subscribe` 101 `$ref`,
 /// where both are still upstream-`required`. No client change.)
-const EXPECTED_SHA256: &str = "63554873b71d37d2e0a9e4ff4582ef57300c15d2773180d76dde0212199c06c6";
+const EXPECTED_SHA256: &str = "8c9abf496ba4f4bcd64935a185e4fa83fd991e5795884be0d5302c85b8d8b5c4";
 
 /// Operations `crate::client` calls.
 const REQUIRED_OPERATIONS: &[(&str, &[&str])] = &[
