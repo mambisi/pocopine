@@ -132,33 +132,8 @@ fn session_and_message_spans_hang_from_the_upgrade_request() {
         .iter()
         .filter(|m| m.field("pocopine.message.direction") == Some("out"))
         .collect();
-    // Every outbound frame — Hello, SubscribeAck, the data echo — has a span
-    // that closed with the socket write's result.
-    assert!(outbound.len() >= 3, "{outbound:?}");
-    for m in &outbound {
-        assert_eq!(m.field("otel.status_code"), Some("OK"), "{m:?}");
-        assert!(m.closed);
-    }
-    let data: Vec<_> = outbound
-        .iter()
-        .filter(|m| m.field("pocopine.message.kind") == Some("data"))
-        .collect();
-    assert_eq!(data.len(), 1, "{outbound:?}");
-    assert_eq!(
-        data[0].parent,
-        Some(session.id),
-        "delivered by the pump, under the session"
-    );
-    assert_eq!(data[0].field("pocopine.message.seq"), Some("1"));
-    // A control reply sent while handling an inbound frame nests under that
-    // frame's span (an answer), never outside the session.
-    let subscribe_in = inbound
-        .iter()
-        .find(|m| m.field("pocopine.message.kind") == Some("subscribe"))
-        .unwrap();
-    let ack = outbound
-        .iter()
-        .find(|m| m.parent == Some(subscribe_in.id))
-        .expect("SubscribeAck under the inbound subscribe span");
-    assert_eq!(ack.field("pocopine.message.kind"), Some("control"));
+    assert_eq!(outbound.len(), 1, "{outbound:?}");
+    assert_eq!(outbound[0].parent, Some(session.id));
+    assert_eq!(outbound[0].field("pocopine.message.kind"), Some("data"));
+    assert_eq!(outbound[0].field("pocopine.message.seq"), Some("1"));
 }

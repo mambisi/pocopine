@@ -167,32 +167,27 @@ async fn upgrade_handler(State(gateway): State<WsGateway>, request: Request<Body
         parts.headers.clone(),
         parts.extensions.clone(),
     );
+    // RFC-123 Phase 4: the session span is a child of the request span
+    // (current here, in the handler) and lives for the socket. axum runs
+    // the upgrade callback on a spawned task, which inherits nothing, so
+    // the span is minted here and moved in.
+    let session_span = tracing::info_span!(
+        target: pocopine_observe::TRACE_TARGET,
+        pocopine_observe::spans::REALTIME_SESSION,
+        otel.kind = "server",
+        pocopine.realtime.session_id = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+        error.type = tracing::field::Empty,
+    );
     match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         // Cap message/frame size at the transport layer so an oversized message
         // is rejected before the whole payload is buffered (the in-handler
         // `max_frame_bytes` check is then a cheap second guard).
-        Ok(upgrade) => {
-            // RFC-123 Phase 4: the session span is a child of the request
-            // span (current here, in the handler) and lives for the socket.
-            // axum runs the upgrade callback on a spawned task, which
-            // inherits nothing, so the span is minted here — only once the
-            // upgrade is valid — and moved in.
-            let session_span = tracing::info_span!(
-                target: pocopine_observe::TRACE_TARGET,
-                pocopine_observe::spans::REALTIME_SESSION,
-                otel.kind = "server",
-                pocopine.realtime.session_id = tracing::field::Empty,
-                otel.status_code = tracing::field::Empty,
-                error.type = tracing::field::Empty,
-            );
-            upgrade
-                .protocols([WS_PROTOCOL_V1])
-                .max_message_size(config.max_frame_bytes)
-                .max_frame_size(config.max_frame_bytes)
-                .on_upgrade(move |socket| {
-                    run_session(socket, gateway, ctx).instrument(session_span)
-                })
-        }
+        Ok(upgrade) => upgrade
+            .protocols([WS_PROTOCOL_V1])
+            .max_message_size(config.max_frame_bytes)
+            .max_frame_size(config.max_frame_bytes)
+            .on_upgrade(move |socket| run_session(socket, gateway, ctx).instrument(session_span)),
         Err(rejection) => rejection.into_response(),
     }
 }
@@ -217,7 +212,7 @@ struct Session {
     span: tracing::Span,
     gateway: WsGateway,
     ctx: RequestContext,
-    out: mpsc::Sender<Outbound>,
+    out: mpsc::Sender<Message>,
     config: GatewayConfig,
     topics: HashMap<u64, TopicEntry>,
     topic_by_name: HashMap<String, u64>,
@@ -233,25 +228,13 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
     let config = gateway.config();
     let hb_ms = config.heartbeat_interval_ms.max(1);
     let (mut sink, mut stream) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::channel::<Outbound>(config.outbound_queue.max(1));
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(config.outbound_queue.max(1));
 
-    // Writer task: drains the bounded outbound queue to the socket. Each
-    // frame's `pocopine.realtime.message` span covers the actual socket
-    // write — queue wait included — and closes with its result.
+    // Writer task: drains the bounded outbound queue to the socket.
     let writer = tokio::spawn(
         async move {
-            while let Some(Outbound { message, span }) = out_rx.recv().await {
-                let sent = sink.send(message).instrument(span.clone()).await;
-                match &sent {
-                    Ok(()) => {
-                        span.record(pocopine_observe::fields::OTEL_STATUS_CODE, "OK");
-                    }
-                    Err(_) => {
-                        span.record(pocopine_observe::fields::OTEL_STATUS_CODE, "ERROR");
-                        span.record(pocopine_observe::fields::ERROR_TYPE, "transport");
-                    }
-                }
-                if sent.is_err() {
+            while let Some(msg) = out_rx.recv().await {
+                if sink.send(msg).await.is_err() {
                     break;
                 }
             }
@@ -273,9 +256,6 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
         protocol: WS_PROTOCOL_V1.to_string(),
     };
     if !send_control(&out_tx, &hello).await {
-        let span = tracing::Span::current();
-        span.record(pocopine_observe::fields::OTEL_STATUS_CODE, "ERROR");
-        span.record(pocopine_observe::fields::ERROR_TYPE, "hello_failed");
         writer.abort();
         return;
     }
@@ -298,9 +278,6 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
     watchdog.set_missed_tick_behavior(MissedTickBehavior::Delay);
     watchdog.tick().await; // discard the immediate first tick
 
-    // Why the loop ended: `Ok` for a peer close, otherwise the stable
-    // classification recorded as the session span's `error.type`.
-    let mut exit: Result<(), &'static str> = Ok(());
     loop {
         tokio::select! {
             inbound = stream.next() => match inbound {
@@ -343,10 +320,7 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
                     session.send(&Control::error("bad_frame", "binary frames only"));
                 }
                 Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                Some(Err(_)) => {
-                    exit = Err("transport");
-                    break;
-                }
+                Some(Err(_)) => break,
             },
             _ = watchdog.tick() => {
                 if session.is_zombie() {
@@ -355,7 +329,6 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
                         session = %session.session_id,
                         "ws connection zombied (missed heartbeats)"
                     );
-                    exit = Err("heartbeat_timeout");
                     break;
                 }
             }
@@ -367,66 +340,14 @@ async fn run_session(socket: WebSocket, gateway: WsGateway, ctx: RequestContext)
                 session = %session.session_id,
                 "ws outbound queue full; closing slow consumer"
             );
-            exit = Err("outbound_queue_full");
             break;
         }
     }
 
     session.shutdown();
     writer.abort();
-    {
-        let span = tracing::Span::current();
-        match exit {
-            Ok(()) => {
-                span.record(pocopine_observe::fields::OTEL_STATUS_CODE, "OK");
-            }
-            Err(reason) => {
-                span.record(pocopine_observe::fields::OTEL_STATUS_CODE, "ERROR");
-                span.record(pocopine_observe::fields::ERROR_TYPE, reason);
-            }
-        }
-    }
+    tracing::Span::current().record(pocopine_observe::fields::OTEL_STATUS_CODE, "OK");
     tracing::info!(target: LOG_TARGET, session = %session.session_id, "ws session closed");
-}
-
-/// One frame queued for the writer task, with the `pocopine.realtime.message`
-/// span that covers its delivery (RFC-123 Phase 4).
-struct Outbound {
-    message: Message,
-    span: tracing::Span,
-}
-
-impl Outbound {
-    /// Wrap an encoded frame; the span's parent is whatever is current at
-    /// enqueue time — the session, or the inbound message being answered.
-    fn frame(
-        kind: &'static str,
-        encoded: Vec<u8>,
-        seq: Option<u64>,
-        topic_ref: Option<u64>,
-    ) -> Self {
-        let span = tracing::info_span!(
-            target: pocopine_observe::TRACE_TARGET,
-            pocopine_observe::spans::REALTIME_MESSAGE,
-            pocopine.message.direction = "out",
-            pocopine.message.kind = kind,
-            pocopine.message.bytes = encoded.len() as u64,
-            pocopine.message.seq = tracing::field::Empty,
-            pocopine.realtime.topic_ref = tracing::field::Empty,
-            otel.status_code = tracing::field::Empty,
-            error.type = tracing::field::Empty,
-        );
-        if let Some(seq) = seq {
-            span.record(pocopine_observe::fields::MESSAGE_SEQ, seq);
-        }
-        if let Some(topic_ref) = topic_ref {
-            span.record(pocopine_observe::fields::REALTIME_TOPIC_REF, topic_ref);
-        }
-        Self {
-            message: Message::Binary(encoded),
-            span,
-        }
-    }
 }
 
 impl Session {
@@ -443,18 +364,13 @@ impl Session {
     /// session loop, so the heartbeat watchdog stays live.
     fn send(&mut self, control: &Control) -> bool {
         match control.into_frame() {
-            Ok(frame) => {
-                match self
-                    .out
-                    .try_send(Outbound::frame("control", frame.encode(), None, None))
-                {
-                    Ok(()) => true,
-                    Err(_) => {
-                        self.should_close = true;
-                        false
-                    }
+            Ok(frame) => match self.out.try_send(Message::Binary(frame.encode())) {
+                Ok(()) => true,
+                Err(_) => {
+                    self.should_close = true;
+                    false
                 }
-            }
+            },
             Err(_) => false,
         }
     }
@@ -574,16 +490,7 @@ impl Session {
                 // per-subscription seq is reserved for fanned-out Data frames).
                 // Non-blocking enqueue keeps the heartbeat watchdog live.
                 let reply = Frame::data(subprotocol_id, frame.topic_ref, 0, payload);
-                if self
-                    .out
-                    .try_send(Outbound::frame(
-                        reply.kind.as_str(),
-                        reply.encode(),
-                        Some(reply.seq),
-                        Some(reply.topic_ref),
-                    ))
-                    .is_err()
-                {
+                if self.out.try_send(Message::Binary(reply.encode())).is_err() {
                     self.should_close = true;
                     replies_queued = false;
                     break;
@@ -763,7 +670,7 @@ fn validate_data_subprotocol(frame_id: u64, subscribed_id: u64) -> Result<(), Ws
 /// carrying its per-subscription `seq`.
 async fn pump_topic(
     mut stream: TopicStream,
-    out: mpsc::Sender<Outbound>,
+    out: mpsc::Sender<Message>,
     subprotocol_id: u64,
     topic_ref: u64,
     topic_name: String,
@@ -778,8 +685,22 @@ async fn pump_topic(
                 // than leaking it or draining replay while paused.
                 outbound_gate.wait_until_open().await;
                 let frame = Frame::data(subprotocol_id, topic_ref, seq, payload);
-                let outbound = Outbound::frame("data", frame.encode(), Some(seq), Some(topic_ref));
-                if out.send(outbound).await.is_err() {
+                let encoded = frame.encode();
+                let message_span = tracing::info_span!(
+                    target: pocopine_observe::TRACE_TARGET,
+                    pocopine_observe::spans::REALTIME_MESSAGE,
+                    pocopine.message.direction = "out",
+                    pocopine.message.kind = "data",
+                    pocopine.message.bytes = encoded.len() as u64,
+                    pocopine.message.seq = seq,
+                    pocopine.realtime.topic_ref = topic_ref,
+                );
+                if out
+                    .send(Message::Binary(encoded))
+                    .instrument(message_span)
+                    .await
+                    .is_err()
+                {
                     break; // connection closed
                 }
             }
@@ -802,12 +723,9 @@ async fn pump_topic(
 /// Encode and enqueue a control frame (awaiting backpressure); returns whether
 /// it was queued. Used by the per-topic pump tasks and the pre-loop Hello, where
 /// blocking on the queue is safe; the session loop uses [`Session::send`].
-async fn send_control(out: &mpsc::Sender<Outbound>, control: &Control) -> bool {
+async fn send_control(out: &mpsc::Sender<Message>, control: &Control) -> bool {
     match control.into_frame() {
-        Ok(frame) => out
-            .send(Outbound::frame("control", frame.encode(), None, None))
-            .await
-            .is_ok(),
+        Ok(frame) => out.send(Message::Binary(frame.encode())).await.is_ok(),
         Err(_) => false,
     }
 }

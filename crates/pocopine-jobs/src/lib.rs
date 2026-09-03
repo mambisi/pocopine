@@ -137,9 +137,7 @@ return redis.call(
   'created_at_ms',
   ARGV[8],
   'scheduled_for_ms',
-  ARGV[9],
-  'trace_parent',
-  ARGV[10]
+  ARGV[9]
 )
 "#;
     const SCHEDULE_RETRY_AND_ACK_SCRIPT_SRC: &str = r#"
@@ -1642,7 +1640,6 @@ return redis.call(
             .arg(envelope.max_attempts)
             .arg(envelope.created_at_ms)
             .arg(0_u64)
-            .arg(envelope.trace_parent.as_deref().unwrap_or(""))
             .invoke_async(conn)
             .await?;
         Ok(!matches!(value, Value::Nil | Value::Int(0)))
