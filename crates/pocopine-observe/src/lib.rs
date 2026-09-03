@@ -60,14 +60,6 @@ pub mod spans {
     pub const COLLAB_APPLY: &str = "pocopine.collab.apply";
     /// One collab checkpoint + fan-out trim. Root.
     pub const COLLAB_CHECKPOINT: &str = "pocopine.collab.checkpoint";
-    /// The browser app boot (wasm only). Root (RFC-123 §5.5).
-    pub const CLIENT_BOOT: &str = "pocopine.client.boot";
-    /// One page view in the browser (wasm only): root of the trace every
-    /// server-function call of that view joins.
-    pub const CLIENT_NAVIGATION: &str = "pocopine.client.navigation";
-    /// One server-function call from the browser (`otel.kind = client`).
-    /// Child of [`CLIENT_NAVIGATION`], or a root before the first navigation.
-    pub const CLIENT_SERVER_FUNCTION: &str = "pocopine.client.server_function";
 
     /// Every span name, for exhaustive checks.
     pub const ALL: &[&str] = &[
@@ -85,9 +77,6 @@ pub mod spans {
         LIVE_EVENT,
         COLLAB_APPLY,
         COLLAB_CHECKPOINT,
-        CLIENT_BOOT,
-        CLIENT_NAVIGATION,
-        CLIENT_SERVER_FUNCTION,
     ];
 }
 
@@ -165,15 +154,6 @@ pub mod fields {
     /// The W3C `traceparent` a job was enqueued under, when the enqueuer
     /// had one (RFC-123 Phase 4).
     pub const JOB_ENQUEUE_TRACEPARENT: &str = "pocopine.job.enqueue_traceparent";
-
-    /// Browser spans carry their own W3C ids as fields (RFC-123 §5.5): the
-    /// client mints them, sends `traceparent` from them, and the relay ships
-    /// them to the backend verbatim.
-    pub const TRACE_ID: &str = "pocopine.trace_id";
-    pub const SPAN_ID: &str = "pocopine.span_id";
-    pub const PARENT_SPAN_ID: &str = "pocopine.parent_span_id";
-    /// The route component a browser navigation mounted.
-    pub const COMPONENT: &str = "pocopine.component";
 }
 
 /// A span-aware capture layer for tests in other crates: every span with
@@ -1073,7 +1053,7 @@ mod tests {
             );
             assert!(seen.insert(*name), "span `{name}` listed twice");
         }
-        assert_eq!(spans::ALL.len(), 17);
+        assert_eq!(spans::ALL.len(), 14);
     }
 
     #[test]

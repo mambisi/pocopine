@@ -2662,13 +2662,8 @@ impl App {
             devtools,
         } = self;
         let boot_start_ms = js_sys::Date::now();
-        // RFC-123 §5.5: `pocopine.client.boot` — a root of its own; the
-        // initial navigation opens the first page-view trace under it.
-        let boot_span = crate::client_trace::boot_span();
-        let _booting = boot_span.enter();
         clear_existing_boot_errors();
         if let Err(errors) = plugins.validate() {
-            crate::client_trace::close_err(&boot_span, "plugin_validation");
             // Defensive reset: an earlier successful App::run on the
             // same wasm runtime would have activated its own
             // registry. Returning here without clearing would leave
@@ -2706,7 +2701,6 @@ impl App {
             route_count: routes.len(),
         });
         if let Err(errors) = crate::registry::verify_registry() {
-            crate::client_trace::close_err(&boot_span, "component_registry");
             crate::plugin::emit(crate::plugin::AppBootFailed {
                 reason: "component_registry",
             });
@@ -2720,7 +2714,6 @@ impl App {
         // looks like a framework bug. Fail loud at boot with the
         // exact missing names instead.
         if let Err(missing) = check_store_registrations(&components, &stores) {
-            crate::client_trace::close_err(&boot_span, "missing_store_registration");
             crate::plugin::emit(crate::plugin::AppBootFailed {
                 reason: "missing_store_registration",
             });
@@ -2739,14 +2732,12 @@ impl App {
         // there. Whole-body mounting is gone; apps that want
         // multiple roots use `mount_subtree::<C>` instead.
         let Some(window) = web_sys::window() else {
-            crate::client_trace::close_err(&boot_span, "missing_window");
             crate::plugin::emit(crate::plugin::AppBootFailed {
                 reason: "missing_window",
             });
             return;
         };
         let Some(document) = window.document() else {
-            crate::client_trace::close_err(&boot_span, "missing_document");
             crate::plugin::emit(crate::plugin::AppBootFailed {
                 reason: "missing_document",
             });
@@ -2756,7 +2747,6 @@ impl App {
         if let Some(host) = pp_app {
             mount_pp_app_subtree(&host);
         } else {
-            crate::client_trace::close_err(&boot_span, "missing_pp_app_root");
             crate::plugin::emit(crate::plugin::AppBootFailed {
                 reason: "missing_pp_app_root",
             });
@@ -2782,7 +2772,6 @@ impl App {
             });
         }
         let elapsed = js_sys::Date::now() - boot_start_ms;
-        crate::client_trace::close_ok(&boot_span);
         crate::plugin::emit(crate::plugin::AppBootCompleted {
             duration_ms: if elapsed.is_finite() && elapsed >= 0.0 {
                 elapsed

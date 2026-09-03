@@ -1518,9 +1518,6 @@ fn mount_current() -> Option<NavigationFailure> {
         .as_ref()
         .map(|m| m.params.clone())
         .unwrap_or_default();
-    // RFC-123 §5.5: a page view is a span and the root of its own trace;
-    // opened whether or not hooks are installed.
-    crate::client_trace::navigation_started(&path, route_pattern, component_name);
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationStarted {
             path: path.clone(),
@@ -1537,7 +1534,6 @@ fn mount_current() -> Option<NavigationFailure> {
                 RouteGuardDecision::Allow => {}
                 RouteGuardDecision::Pending => {
                     record_pending_guard_navigation(&path, &search);
-                    crate::client_trace::navigation_failed("guard_pending");
                     if has_route_hooks {
                         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                             path: path.clone(),
@@ -1552,7 +1548,6 @@ fn mount_current() -> Option<NavigationFailure> {
                 }
                 RouteGuardDecision::Redirect(target) => {
                     clear_pending_guard_navigation();
-                    crate::client_trace::navigation_failed("guard_redirected");
                     if has_route_hooks {
                         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                             path: path.clone(),
@@ -1742,7 +1737,6 @@ fn finish_route_mount(
             && has_route_hooks
         {
             apply_page_meta(None);
-            crate::client_trace::navigation_completed();
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
                 path: path.to_string(),
                 route_pattern: None,
@@ -1752,7 +1746,6 @@ fn finish_route_mount(
             return None;
         }
         apply_page_meta(None);
-        crate::client_trace::navigation_completed();
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
                 path: path.to_string(),
@@ -1766,7 +1759,6 @@ fn finish_route_mount(
     let name = matched.component_name();
     let route_pattern = matched.route_pattern();
     if ROOT_OUTLET.with(|outlet| outlet.borrow().is_none()) {
-        crate::client_trace::navigation_failed("missing_outlet");
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                 path: path.to_string(),
@@ -1782,7 +1774,6 @@ fn finish_route_mount(
     }
 
     if let Err(reason) = mount_route_chain(matched, preserved_prefix, query, loader_data) {
-        crate::client_trace::navigation_failed(reason);
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                 path: path.to_string(),
@@ -1804,8 +1795,6 @@ fn finish_route_mount(
     // the next navigation starts fresh — defensive against
     // `Option<Loader<T>>` extractors that opt out of consuming.
     clear_pending_loader_data();
-
-    crate::client_trace::navigation_completed();
 
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
@@ -2063,7 +2052,6 @@ fn dispatch_route_rejection(
     let action = handle_route_rejection(matched, path, query, rejection).unwrap_or_else(|| {
         RouteRejectionAction::Paint(RouteErrorSurface::for_rejection(rejection))
     });
-    crate::client_trace::navigation_failed(rejection.reason(source));
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
             path: path.to_string(),

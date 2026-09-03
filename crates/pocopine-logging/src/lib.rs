@@ -855,11 +855,9 @@ mod web {
         EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, emit_tracing,
     };
     use tracing::field::{Field, Visit};
-    use tracing::span::{Attributes, Id, Record};
     use tracing::{Event, Level, Metadata, Subscriber};
     use tracing_subscriber::layer::{Context, Layer};
     use tracing_subscriber::prelude::*;
-    use tracing_subscriber::registry::LookupSpan;
     use tracing_subscriber::util::SubscriberInitExt;
     use wasm_bindgen::JsValue;
 
@@ -948,52 +946,9 @@ mod web {
         config: ConsoleLoggingConfig,
     }
 
-    /// The fields of one open span, kept in its registry extensions so
-    /// events inside it can print the same `name{k=v}` prefix server logs
-    /// show (RFC-123 §5.5).
-    struct SpanFields(std::collections::BTreeMap<String, String>);
-
-    struct SpanFieldVisitor<'a>(&'a mut std::collections::BTreeMap<String, String>);
-
-    impl Visit for SpanFieldVisitor<'_> {
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.0.insert(field.name().to_owned(), value.to_owned());
-        }
-        fn record_bool(&mut self, field: &Field, value: bool) {
-            self.0.insert(field.name().to_owned(), value.to_string());
-        }
-        fn record_i64(&mut self, field: &Field, value: i64) {
-            self.0.insert(field.name().to_owned(), value.to_string());
-        }
-        fn record_u64(&mut self, field: &Field, value: u64) {
-            self.0.insert(field.name().to_owned(), value.to_string());
-        }
-        fn record_f64(&mut self, field: &Field, value: f64) {
-            self.0.insert(field.name().to_owned(), value.to_string());
-        }
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            self.0.insert(field.name().to_owned(), format!("{value:?}"));
-        }
-    }
-
-    /// `name{k=v k=v}` for one span, or just `name` when it has no fields.
-    fn span_prefix(name: &str, fields: Option<&SpanFields>) -> String {
-        match fields {
-            Some(SpanFields(map)) if !map.is_empty() => {
-                let body = map
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("{name}{{{body}}}")
-            }
-            _ => name.to_owned(),
-        }
-    }
-
     impl<S> Layer<S> for ConsoleLayer
     where
-        S: Subscriber + for<'a> LookupSpan<'a>,
+        S: Subscriber,
     {
         fn enabled(&self, metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
             if !level_allowed(*metadata.level(), self.config.max_level) {
@@ -1005,67 +960,23 @@ mod web {
             }
         }
 
-        fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-            let mut map = std::collections::BTreeMap::new();
-            attrs.record(&mut SpanFieldVisitor(&mut map));
-            if let Some(span) = ctx.span(id) {
-                span.extensions_mut().insert(SpanFields(map));
-            }
-        }
-
-        fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
-            if let Some(span) = ctx.span(id) {
-                let mut extensions = span.extensions_mut();
-                if let Some(SpanFields(map)) = extensions.get_mut::<SpanFields>() {
-                    values.record(&mut SpanFieldVisitor(map));
-                }
-            }
-        }
-
-        fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
             let metadata = event.metadata();
             let mut visitor = FieldVisitor::default();
             event.record(&mut visitor);
-            let prefix = ctx
-                .event_scope(event)
-                .map(|scope| {
-                    scope
-                        .from_root()
-                        .map(|span| span_prefix(span.name(), span.extensions().get::<SpanFields>()))
-                        .collect::<Vec<_>>()
-                        .join(":")
-                })
-                .unwrap_or_default();
 
             match self.config.format {
                 ConsoleLogFormat::Text => {
-                    let message = if prefix.is_empty() {
-                        format!(
-                            "{} {} {}",
-                            metadata.level(),
-                            metadata.target(),
-                            visitor.finish_text()
-                        )
-                    } else {
-                        format!(
-                            "{} {}: {} {}",
-                            metadata.level(),
-                            prefix,
-                            metadata.target(),
-                            visitor.finish_text()
-                        )
-                    };
+                    let message = format!(
+                        "{} {} {}",
+                        metadata.level(),
+                        metadata.target(),
+                        visitor.finish_text()
+                    );
                     write_console(*metadata.level(), &JsValue::from_str(message.trim_end()));
                 }
                 ConsoleLogFormat::Json => {
                     let value = visitor.into_console_object(metadata);
-                    if !prefix.is_empty() {
-                        let _ = Reflect::set(
-                            &value,
-                            &JsValue::from_str("spans"),
-                            &JsValue::from_str(&prefix),
-                        );
-                    }
                     write_console(*metadata.level(), &value);
                 }
             }
