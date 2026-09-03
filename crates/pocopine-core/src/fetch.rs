@@ -74,6 +74,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
+use tracing::Instrument as _;
 
 use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::prelude::*;
@@ -471,25 +472,34 @@ where
     let options = options.with_active_context();
 
     let observe = FetchObservation::new(url);
+    // RFC-123 §5.5: `pocopine.client.server_function`, under the current
+    // page view; the hook events below fire inside it.
+    let call = crate::client_trace::CallSpan::open(&public_url_path(url));
     let body = match serde_json::to_string(args) {
         Ok(body) => body,
         Err(err) => {
-            observe.failed("serialize", ResponseIds::default());
+            call.failed("serialize");
+            call.span
+                .in_scope(|| observe.failed("serialize", ResponseIds::default()));
             return Err(ServerError::Network(format!("serialize args: {err}")));
         }
     };
 
+    let mut headers = vec![
+        ("content-type".to_string(), "application/json".to_string()),
+        (
+            CLIENT_SESSION_HEADER.to_string(),
+            client_session_id().to_string(),
+        ),
+    ];
+    if let Some(traceparent) = call.traceparent() {
+        headers.push(("traceparent".to_string(), traceparent));
+    }
     let request = FetchRequest {
         url: url.to_string(),
         method: "POST".to_string(),
         body,
-        headers: vec![
-            ("content-type".to_string(), "application/json".to_string()),
-            (
-                CLIENT_SESSION_HEADER.to_string(),
-                client_session_id().to_string(),
-            ),
-        ],
+        headers,
         abort_signal: options.abort_signal,
         replay_safe: options.replay_safe,
     };
@@ -499,16 +509,22 @@ where
         index: 0,
         middlewares,
     };
-    let response = match next.run(request).await {
+    let response = match next.run(request).instrument(call.span.clone()).await {
         Ok(response) => response,
         Err(err) => {
-            observe.failed(server_error_kind(&err), ResponseIds::default());
+            let kind = server_error_kind(&err);
+            call.failed(kind);
+            call.span
+                .in_scope(|| observe.failed(kind, ResponseIds::default()));
             return Err(err);
         }
     };
 
     let ids = ResponseIds::of(&response);
+    call.response(response.status, ids.request_id);
+    let _inside = call.span.enter();
     if !(200..300).contains(&response.status) {
+        call.failed("http_status");
         observe.failed("http_status", ids);
         return Err(ServerError::Network(format!("HTTP {}", response.status)));
     }
@@ -516,13 +532,21 @@ where
     let outer: ServerResult<R> = match serde_json::from_str(&response.body) {
         Ok(outer) => outer,
         Err(err) => {
+            call.failed("parse_response");
             observe.failed("parse_response", ids.clone());
             return Err(ServerError::Network(format!("parse response: {err}")));
         }
     };
     match &outer {
-        Ok(_) => observe.completed(response.status, ids),
-        Err(err) => observe.failed(server_error_kind(err), ids),
+        Ok(_) => {
+            call.completed();
+            observe.completed(response.status, ids);
+        }
+        Err(err) => {
+            let kind = server_error_kind(err);
+            call.failed(kind);
+            observe.failed(kind, ids);
+        }
     }
     outer
 }
@@ -577,28 +601,44 @@ where
     init.set_body(&JsValue::from_str(body));
     init.set_signal(abort.as_ref());
 
+    let call = crate::client_trace::CallSpan::open(&public_url_path(url));
     let headers =
         web_sys::Headers::new().map_err(|e| ServerError::Network(format!("headers: {e:?}")))?;
     let _ = headers.set("content-type", "application/json");
     let _ = headers.set("accept", "text/event-stream");
     let _ = headers.set(CLIENT_SESSION_HEADER, client_session_id());
+    if let Some(traceparent) = call.traceparent() {
+        let _ = headers.set("traceparent", &traceparent);
+    }
     init.set_headers(&headers);
 
     let req = Request::new_with_str_and_init(url, &init)
         .map_err(|e| ServerError::Network(format!("build request: {e:?}")))?;
     let win =
         web_sys::window().ok_or_else(|| ServerError::Network("no window available".to_string()))?;
-    let resp_js = JsFuture::from(win.fetch_with_request(&req))
+    let resp_js = match JsFuture::from(win.fetch_with_request(&req))
+        .instrument(call.span.clone())
         .await
-        .map_err(|e| ServerError::Network(format!("fetch failed: {e:?}")))?;
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            call.failed("fetch");
+            return Err(ServerError::Network(format!("fetch failed: {e:?}")));
+        }
+    };
     let resp: Response = resp_js
         .dyn_into()
         .map_err(|_| ServerError::Network("fetch returned non-Response".into()))?;
 
     let status = resp.status();
+    let request_id = response_header(&resp, "x-request-id").and_then(|v| v.trim().parse().ok());
+    call.response(status, request_id);
     if !(200..300).contains(&status) {
+        call.failed("http_status");
         return Err(ServerError::Network(format!("HTTP {status}")));
     }
+    // The handshake is the call; the stream's frames are consumed later.
+    call.completed();
 
     let body_stream = resp
         .body()
