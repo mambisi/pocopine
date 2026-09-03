@@ -54,7 +54,7 @@ const CLOUDFLARE_OPENAPI_URL: &str =
 /// verified present upstream — including `commit_dirty` and both
 /// `_headers`/`_redirects` multipart parts on deployment creation, and
 /// `metadata.contentType` on asset upload.)
-const EXPECTED_SHA256: &str = "de5999cfce8aa218b7fe5bf2e77fb1420ee85b59b0d821aea2cf887594aa0350";
+const EXPECTED_SHA256: &str = "5d9d5ac0bb3e9cb3473c97d7fff2f36df3493962acaa0e3ede07c925b02d2499";
 
 const PROJECTS: &str = "/accounts/{account_id}/pages/projects";
 const PROJECT: &str = "/accounts/{account_id}/pages/projects/{project_name}";

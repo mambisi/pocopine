@@ -82,12 +82,17 @@ async fn otlp_smoke_exports_expected_spans_without_payload_leak() {
     let server_span = span_named(&spans, "pocopine.server_function");
     let echo_span = span_named(&spans, "observability_smoke.echo");
 
+    // RFC-123 §2.3: span fields use the `pocopine.*` / semconv vocabulary
+    // (`function` and `route` stay event vocabulary).
     assert_eq!(
-        server_span.attrs.get("function").map(String::as_str),
+        server_span
+            .attrs
+            .get("pocopine.function")
+            .map(String::as_str),
         Some("observe_echo")
     );
     assert_eq!(
-        server_span.attrs.get("route").map(String::as_str),
+        server_span.attrs.get("http.route").map(String::as_str),
         Some("/_pocopine/observe_echo")
     );
     assert_eq!(
