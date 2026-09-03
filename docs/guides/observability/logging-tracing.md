@@ -327,72 +327,6 @@ request event layer so generated `#[server]` handlers can share the HTTP
 typed server hooks: `pocopine-jobs` already emits structured
 `pocopine.trace` / `pocopine.log` events.
 
-## Spans
-
-Events say *what* happened; spans say *inside what*. Every server-side
-unit of work in pocopine hangs from one of three roots — an HTTP request, a
-job attempt, or a server boot — and the agenkit tree hangs from whichever
-of those is current (RFC-123). The set is closed and named under one
-target, `pocopine.trace`:
-
-| Span | Opened by | Parent |
-|---|---|---|
-| `pocopine.server.boot` | `Server::serve`, validation through bind | root |
-| `pocopine.http.request` | the request layer, one per request | root, or an incoming `traceparent` (OTLP) |
-| `pocopine.server_function` | every `#[server]` handler | `http.request` |
-| `pocopine.job.run` | `pocopine-jobs`, one per attempt | root |
-| `pocopine.ai.run` / `pocopine.ai.turn` | an agenkit flow invocation / a conversational turn | whatever is current |
-| `pocopine.ai.step` | `ctx.step`, agent runs, parallel groups and branches, reducers, retrievals | the enclosing `ai.*` |
-| `pocopine.ai.model` / `pocopine.ai.tool` | each model call / tool execution | the enclosing `ai.*` |
-
-Span fields use OpenTelemetry semantic-convention names where one exists
-(`http.request.method`, `http.route`, `http.response.status_code`,
-`gen_ai.request.model`, `gen_ai.usage.input_tokens`, `session.id`,
-`error.type`) and a `pocopine.` prefix otherwise (`pocopine.request_id`,
-`pocopine.function`, `pocopine.job.name`, `pocopine.ai.step_id`). Spans
-carry structural fields only — ids, names, counts, classifications —
-never a body, prompt, header value, or query string. The constants live in
-`pocopine_observe::spans` and `pocopine_observe::fields`.
-
-Spans are **filter-gated, never hook-gated**: they exist whenever the
-subscriber enables `pocopine.trace` at `INFO` (the default filter does),
-regardless of which plugins are installed. Everything emitted while a
-request is in flight — framework events and your own `tracing::warn!` —
-lands inside its span without any extra wiring.
-
-What that looks like in compact output:
-
-```text
-INFO pocopine.http.request{http.request.method=POST http.route=/api/summarize pocopine.request_id=42}:pocopine.server_function{pocopine.function=summarize pocopine.request_id=42}: pocopine.trace: server function completed function=summarize duration_ms=812
-```
-
-JSON output carries the same thing as `span` (current) and `spans` (root
-first) objects beside `fields`, so one request is one query:
-
-```sh
-jq -c 'select(.spans[]? | .["pocopine.request_id"] == 42)' server.jsonl
-```
-
-Two headers ride along. Every response carries `x-request-id` with the
-request's `pocopine.request_id` (opt out with
-`RequestEventOptions::new().with_request_id_header(false)` via
-`request_event_layer_with`). Every server-function call from the browser
-sends `x-pocopine-session`, a per-page-load id the server records as
-`session.id`, so all calls from one page load are one query away in any
-backend. It is a correlation id, not a credential, and not a
-`traceparent`: with no browser-side exporter, a client `traceparent` would
-make every trace the child of a span no backend ever receives.
-
-To turn spans off or down:
-
-```sh
-RUST_LOG='info,pocopine=debug,pocopine.trace=off'   # no spans, no pocopine.trace events
-RUST_LOG='info,pocopine.trace=info'                  # spans + trace events only
-```
-
-Span open/close lines are not printed; the existing `*_completed` events
-already carry `duration_ms`.
-
 ## OTLP trace export
 
 `pocopine-logging` can install an OpenTelemetry layer for OTLP trace
@@ -450,16 +384,7 @@ The OTLP config reads these variables, in order:
 | service name | `POCOPINE_SERVICE_NAME`, `OTEL_SERVICE_NAME` | `pocopine-app` |
 
 Traces export over OTLP/gRPC with the OpenTelemetry SDK batch processor.
-The OpenTelemetry layer exports the spans from the table above and attaches
-each `pocopine.trace` event to its enclosing span; `otel.kind`,
-`otel.status_code`, and the `gen_ai.*` fields map straight onto the
-exported span. Incoming W3C `traceparent` headers become the request
-span's remote parent (opt out with
-`RequestEventOptions::new().with_accept_trace_context(false)`), the
-response echoes the server's own `traceparent`, and observed events get
-their `trace_id` context filled from the exported trace. Sampling is the
-standard `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` pair, read by the
-SDK. Logs still go to the local compact/pretty/JSON formatter. Production
+Logs still go to the local compact/pretty/JSON formatter. Production
 deployments can route JSON logs with their platform log agent and route
 traces through an OpenTelemetry Collector or OTLP-compatible backend.
 Direct vendor SDKs are intentionally out of scope for this layer.
@@ -747,22 +672,15 @@ tracing::error!(
 
 ### Create a trace span
 
-App code can open any span it likes; inside a server function, job, or
-flow it nests under the framework span automatically. `#[instrument]` is
-fine in app code — the framework's own rule against it (RFC-123 §2.6)
-exists because it names spans after functions and records every argument
-by `Debug`.
-
 ```rust
-#[tracing::instrument(skip_all, fields(thread_id = %thread_id))]
-async fn load_thread(thread_id: ThreadId) -> Result<Thread, ServerError> {
-    // shows as pocopine.http.request{…}:pocopine.server_function{…}:load_thread{thread_id=…}
-    todo!()
-}
-```
+let span = tracing::info_span!(
+    target: "pocopine.trace",
+    "server_function",
+    name = "save_profile"
+);
 
-Hold spans across `.await` with `Instrument::instrument`, never with
-`span.enter()`.
+let _entered = span.enter();
+```
 
 ### Emit a stable analytics event
 
