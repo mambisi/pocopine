@@ -406,7 +406,7 @@ fn request_events_wrap_auth_and_ignore_ambient_spans() {
 #[test]
 fn request_span_covers_a_streaming_body() {
     use futures::StreamExt as _;
-    use pocopine_server::axum::body::{Bytes, to_bytes};
+    use pocopine_server::axum::body::Bytes;
 
     let _lock = registry_lock();
     pocopine_server::__reset_for_test();
@@ -458,8 +458,27 @@ fn request_span_covers_a_streaming_body() {
                 Some("200")
             );
 
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            assert_eq!(&body[..], b"frame 1\nframe 2\nframe 3\n");
+            // Poll to end-of-stream while still holding the body: the span
+            // must close at EOF, not when the body is eventually dropped.
+            use http_body_util::BodyExt as _;
+            let mut body = response.into_body();
+            let mut collected = Vec::new();
+            while let Some(frame) = body.frame().await {
+                if let Ok(data) = frame.unwrap().into_data() {
+                    collected.extend_from_slice(&data);
+                }
+            }
+            assert_eq!(&collected[..], b"frame 1\nframe 2\nframe 3\n");
+            let at_eof = probe.spans();
+            let request = at_eof
+                .iter()
+                .find(|s| s.name == "pocopine.http.request")
+                .expect("request span");
+            assert!(
+                request.closed,
+                "released at end-of-stream, body still alive"
+            );
+            drop(body);
         })
     });
 
