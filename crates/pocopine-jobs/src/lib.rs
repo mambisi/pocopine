@@ -81,8 +81,6 @@ mod host {
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    use tracing::Instrument as _;
-
     use chrono::{Duration as ChronoDuration, Utc};
     use cron::Schedule;
     use redis::aio::MultiplexedConnection;
@@ -1047,67 +1045,54 @@ return redis.call(
                 return Ok(());
             };
 
-            // RFC-123 §3.3 — one attempt = one `pocopine.job.run` span; the
-            // started/completed/retry events below land inside it.
-            let span = job_span(&envelope, "redis");
-            async {
-                let started = Instant::now();
-                log_job_started(&envelope, "redis");
-                let payload = serde_json::to_vec(&envelope.payload)?;
-                match run_handler_safely(descriptor.handler, payload).await {
-                    Ok(()) => {
-                        tracing::Span::current().record("otel.status_code", "OK");
-                        log_job_completed(&envelope, "redis", elapsed_ms(started));
-                        self.ack(conn, stream, stream_id).await
+            let started = Instant::now();
+            log_job_started(&envelope, "redis");
+            let payload = serde_json::to_vec(&envelope.payload)?;
+            match run_handler_safely(descriptor.handler, payload).await {
+                Ok(()) => {
+                    log_job_completed(&envelope, "redis", elapsed_ms(started));
+                    self.ack(conn, stream, stream_id).await
+                }
+                Err(err) => {
+                    if envelope.attempt < envelope.max_attempts {
+                        let mut retry = envelope.clone();
+                        retry.attempt += 1;
+                        let due_ms = redis_time_ms(&mut *conn)
+                            .await?
+                            .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
+                        retry.scheduled_for_ms = Some(due_ms);
+                        schedule_retry_and_ack(
+                            conn,
+                            self.client.scheduled_key(),
+                            stream,
+                            &self.config.group,
+                            stream_id,
+                            &retry,
+                            due_ms,
+                        )
+                        .await?;
+                        log_job_retry_scheduled(
+                            &envelope,
+                            &retry,
+                            due_ms,
+                            "redis",
+                            elapsed_ms(started),
+                            &err,
+                        );
+                    } else {
+                        self.move_to_dead_and_ack(
+                            conn,
+                            stream,
+                            stream_id,
+                            &envelope,
+                            &err.to_string(),
+                            Some(elapsed_ms(started)),
+                        )
+                        .await?;
                     }
-                    Err(err) => {
-                        {
-                            let span = tracing::Span::current();
-                            span.record("otel.status_code", "ERROR");
-                            span.record("error.type", job_error_type(&err));
-                        }
-                        if envelope.attempt < envelope.max_attempts {
-                            let mut retry = envelope.clone();
-                            retry.attempt += 1;
-                            let due_ms = redis_time_ms(&mut *conn)
-                                .await?
-                                .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
-                            retry.scheduled_for_ms = Some(due_ms);
-                            schedule_retry_and_ack(
-                                conn,
-                                self.client.scheduled_key(),
-                                stream,
-                                &self.config.group,
-                                stream_id,
-                                &retry,
-                                due_ms,
-                            )
-                            .await?;
-                            log_job_retry_scheduled(
-                                &envelope,
-                                &retry,
-                                due_ms,
-                                "redis",
-                                elapsed_ms(started),
-                                &err,
-                            );
-                        } else {
-                            self.move_to_dead_and_ack(
-                                conn,
-                                stream,
-                                stream_id,
-                                &envelope,
-                                &err.to_string(),
-                                Some(elapsed_ms(started)),
-                            )
-                            .await?;
-                        }
-                        Ok(())
-                    }
+                    Ok(())
                 }
             }
-            .instrument(span)
-            .await
         }
 
         async fn run_envelope_memory(&self, envelope: JobEnvelope) -> JobResult<()> {
@@ -1116,54 +1101,41 @@ return redis.call(
                 return Ok(());
             };
 
-            // RFC-123 §3.3 — one attempt = one `pocopine.job.run` span; the
-            // started/completed/retry events below land inside it.
-            let span = job_span(&envelope, "memory");
-            async {
-                let started = Instant::now();
-                log_job_started(&envelope, "memory");
-                let payload = serde_json::to_vec(&envelope.payload)?;
-                match run_handler_safely(descriptor.handler, payload).await {
-                    Ok(()) => {
-                        tracing::Span::current().record("otel.status_code", "OK");
-                        log_job_completed(&envelope, "memory", elapsed_ms(started));
-                        Ok(())
+            let started = Instant::now();
+            log_job_started(&envelope, "memory");
+            let payload = serde_json::to_vec(&envelope.payload)?;
+            match run_handler_safely(descriptor.handler, payload).await {
+                Ok(()) => {
+                    log_job_completed(&envelope, "memory", elapsed_ms(started));
+                    Ok(())
+                }
+                Err(err) => {
+                    if envelope.attempt < envelope.max_attempts {
+                        let mut retry = envelope.clone();
+                        retry.attempt += 1;
+                        let due_ms = epoch_ms(SystemTime::now())?
+                            .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
+                        retry.scheduled_for_ms = Some(due_ms);
+                        let store = self.client.cached_memory_store()?;
+                        memory_schedule_envelope(&store, retry.clone())?;
+                        log_job_retry_scheduled(
+                            &envelope,
+                            &retry,
+                            due_ms,
+                            "memory",
+                            elapsed_ms(started),
+                            &err,
+                        );
+                    } else {
+                        self.move_to_dead_memory(
+                            envelope,
+                            &err.to_string(),
+                            Some(elapsed_ms(started)),
+                        )?;
                     }
-                    Err(err) => {
-                        {
-                            let span = tracing::Span::current();
-                            span.record("otel.status_code", "ERROR");
-                            span.record("error.type", job_error_type(&err));
-                        }
-                        if envelope.attempt < envelope.max_attempts {
-                            let mut retry = envelope.clone();
-                            retry.attempt += 1;
-                            let due_ms = epoch_ms(SystemTime::now())?
-                                .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
-                            retry.scheduled_for_ms = Some(due_ms);
-                            let store = self.client.cached_memory_store()?;
-                            memory_schedule_envelope(&store, retry.clone())?;
-                            log_job_retry_scheduled(
-                                &envelope,
-                                &retry,
-                                due_ms,
-                                "memory",
-                                elapsed_ms(started),
-                                &err,
-                            );
-                        } else {
-                            self.move_to_dead_memory(
-                                envelope,
-                                &err.to_string(),
-                                Some(elapsed_ms(started)),
-                            )?;
-                        }
-                        Ok(())
-                    }
+                    Ok(())
                 }
             }
-            .instrument(span)
-            .await
         }
 
         fn move_to_dead_memory(
@@ -1219,37 +1191,6 @@ return redis.call(
 
     fn elapsed_ms(started: Instant) -> u64 {
         started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
-    }
-
-    /// Open the `pocopine.job.run` span for one attempt (RFC-123 §3.3).
-    /// Field names are spelled inline and match `pocopine_observe::fields`.
-    fn job_span(envelope: &JobEnvelope, backend: &'static str) -> tracing::Span {
-        tracing::info_span!(
-            target: pocopine_observe::TRACE_TARGET,
-            pocopine_observe::spans::JOB_RUN,
-            otel.kind = "consumer",
-            pocopine.job.name = %envelope.job_name,
-            pocopine.job.id = %envelope.job_id,
-            pocopine.job.queue = %envelope.queue,
-            pocopine.job.attempt = envelope.attempt,
-            pocopine.job.max_attempts = envelope.max_attempts,
-            pocopine.job.backend = backend,
-            otel.status_code = tracing::field::Empty,
-            error.type = tracing::field::Empty,
-        )
-    }
-
-    /// Stable classification for the span's `error.type` — never the message.
-    fn job_error_type(error: &JobError) -> &'static str {
-        match error {
-            JobError::Redis(_) => "redis",
-            JobError::Json(_) => "json",
-            JobError::Env(_) => "env",
-            JobError::UnknownJob(_) => "unknown_job",
-            JobError::Time(_) => "time",
-            JobError::Unsupported(_) => "unsupported",
-            JobError::Handler(_) => "handler",
-        }
     }
 
     fn log_job_started(envelope: &JobEnvelope, backend: &'static str) {

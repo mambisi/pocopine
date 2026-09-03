@@ -318,34 +318,6 @@ fn memory_backend_emits_job_lifecycle_trace_without_payload() {
             .all(|value| !value.contains("trace-payload")),
         "job lifecycle logs must not include raw payloads"
     );
-
-    // RFC-123 §3.3 — both events hang from one `pocopine.job.run` span
-    // that carries the attempt's structural fields and closed OK.
-    assert_eq!(started.ancestry(), ["pocopine.job.run"]);
-    assert_eq!(completed.ancestry(), ["pocopine.job.run"]);
-    let span = capture
-        .spans_named("pocopine.job.run")
-        .into_iter()
-        .find(|span| span.field("pocopine.job.queue") == Some("trace"))
-        .expect("job.run span for the traced queue");
-    assert_eq!(span.target, "pocopine.trace");
-    assert_eq!(span.field("otel.kind"), Some("consumer"));
-    assert_eq!(span.field("pocopine.job.backend"), Some("memory"));
-    assert_eq!(span.field("pocopine.job.attempt"), Some("1"));
-    assert_eq!(span.field("pocopine.job.max_attempts"), Some("1"));
-    assert_eq!(span.field("otel.status_code"), Some("OK"));
-    assert_eq!(span.field("error.type"), None);
-    assert!(
-        span.field("pocopine.job.name")
-            .is_some_and(|value| value.ends_with("::traced_memory_job"))
-    );
-    assert!(
-        !span
-            .fields
-            .values()
-            .any(|value| value.contains("trace-payload")),
-        "the span carries structural fields only"
-    );
 }
 
 #[test]
