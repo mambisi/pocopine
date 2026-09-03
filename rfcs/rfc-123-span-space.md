@@ -1,6 +1,6 @@
 # RFC-123: Span space — one trunk of work every event hangs from
 
-**Status:** Phases 1–3 implemented (server trunk, agenkit spans, cross-tier link) on `feat/rfc-123-span-space`; Phase 4 (long-lived streams, job enqueue links) and Phase 5 (the client end: browser spans, shared trace id, relay — §5.5) open
+**Status:** Implemented — Phases 1–3 (server trunk, agenkit spans, cross-tier link) on `feat/rfc-123-span-space`; Phase 4 (long-lived streams, job enqueue links) open
 **Crates:** `pocopine-observe` (span-name and field constants), `pocopine-server` (`pocopine.http.request`, optional `otel` feature for parent linking), `pocopine-macros` (`pocopine.server_function` fields), `pocopine-jobs` (`pocopine.job.run`), `pocopine-agenkit` (`pocopine.ai.*`), `pocopine-logging` (fills `ObserveContext.trace_id`, feature wiring), `pocopine-core` (Phase 3 only: `traceparent` on server-function fetches)
 **Relates to:** RFC-069 (observability — this is the "first-class route and server-function instrumentation points" and "OpenTelemetry adapter" phases it deferred), RFC-093 (agenkit — the `TraceEvent` stream stays the stable schema; spans are added beside it), RFC-119 (authority is explicit — a span never carries a principal, only a hash)
 
@@ -20,11 +20,7 @@ Spans exist for **topology and timing**. Events remain the stable schema
 
 The load-bearing decision is the **trunk**. Every server-side unit of work
 hangs from one of three roots — an HTTP request, a job run, or a server boot —
-and the agenkit tree hangs from whichever of those is current. The browser is
-the fourth root, above the HTTP one: a page view is a span, each
-server-function call under it is a span, and the relay of §5.5 is what makes
-those spans real to a backend so one trace tells the whole story from click
-to model call. Once the trunk
+and the agenkit tree hangs from whichever of those is current. Once the trunk
 exists, every existing event lands inside a span for free, `request_id`
 becomes a span field instead of a copied one, and the OTLP export becomes
 useful without touching any event.
@@ -84,21 +80,14 @@ buys nothing and breaks anyone filtering on it.
 | `pocopine.ai.step` | `ctx.step`, `ctx.parallel`, `ctx.reduce`, `ctx.retrieve` | internal | `ai.run` / `ai.turn` / enclosing `ai.step` |
 | `pocopine.ai.model` | `loop_core::run_model_step` | client | enclosing `ai.*` |
 | `pocopine.ai.tool` | tool execution inside the agent loop | internal | enclosing `ai.*` |
-| `pocopine.client.boot` | `pocopine-core` app boot (wasm) | internal | root |
-| `pocopine.client.navigation` | `pocopine-core` router, one page view (wasm) | internal | root — the trace every server call of that view joins |
-| `pocopine.client.server_function` | `pocopine-core` fetch, one server-function call (wasm) | client | `client.navigation`, or `client.boot` before the first navigation |
 
 Adding a name means adding a row here and a constant in `pocopine-observe`.
 Long-lived streams (`pocopine-live` SSE, collab and sync sessions) are
-deliberately absent from Phases 1–3 — see §9 Phase 4 and §10. The
-`pocopine.client.*` rows are Phase 5 (§5.5); they exist only in the wasm
-build and reach a backend only through the relay.
+deliberately absent from v1 — see §10.
 
 ```mermaid
 flowchart TD
     B[pocopine.server.boot]
-    CN[pocopine.client.navigation] --> CS[pocopine.client.server_function]
-    CS -. traceparent + relay .-> H
     H[pocopine.http.request] --> S[pocopine.server_function]
     S --> R[pocopine.ai.run]
     J[pocopine.job.run] --> R2[pocopine.ai.run]
@@ -125,9 +114,6 @@ collides.
 | `ai.step` | `pocopine.ai.step_id`, `pocopine.ai.step_kind`, `pocopine.ai.step_name`, `pocopine.ai.parallel_group_id` | `otel.status_code` |
 | `ai.model` | `gen_ai.operation.name` = `chat`, `gen_ai.provider.name`, `gen_ai.request.model`, `pocopine.ai.step_id` | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.model` if reported, `otel.status_code` |
 | `ai.tool` | `gen_ai.tool.name`, `pocopine.ai.step_id` | `otel.status_code`, `error.type` |
-| `client.boot` | `session.id` (the `x-pocopine-session` value) | `otel.status_code`, `error.type` |
-| `client.navigation` | `url.path` (path only, never the query), `http.route` (the matched route pattern), `pocopine.component`, `session.id` | `otel.status_code`, `error.type` |
-| `client.server_function` | `http.request.method`, `http.route` (the server-function path) | `http.response.status_code`, `pocopine.request_id` (from `x-request-id`), `otel.status_code`, `error.type` |
 
 `pocopine.ai.step_id` is the **join key**: it is the same `StepId` the
 `TraceEvent` stream carries, so a backend that has both the OTel tree and the
@@ -297,85 +283,6 @@ so a browser devtools user can paste it into the backend. Two headers, both
 opt-out via `ServerObservabilityConfig` (`with_request_id_header(false)`,
 `with_trace_context_header(false)`) or `RequestEventOptions`.
 
-### 5.5 The client end: browser spans, one shared trace id, and the relay
-
-A server-only trace tells half the story. The click, the navigation, the
-fetch, and the wait for the response all happen in the browser, and today
-the browser side is events only (`AppBoot*`, `RouteNavigation*`,
-`ServerFunctionClient*` hooks → observed events → the console layer). This
-section makes the browser the fourth root of the trunk. It is Phase 5 and
-is **one feature, shipped together**: client spans without the relay
-produce orphan parents on the server side, and the relay without client
-spans has nothing to carry.
-
-**Client spans.** The three `pocopine.client.*` spans in §2.2 are opened at
-the seams that already emit the paired hooks: app boot in `App::run`, route
-navigation in the router, and each server-function call in
-`pocopine_core::fetch` around the `window.fetch`. Same rules as the server:
-target `pocopine.trace`, names by constant, structural fields only (§2.5),
-no `#[instrument]`. The browser console layer, which ignores spans today,
-learns `on_new_span` / `on_close` so the compact prefix appears in the
-console exactly as it does in server logs. Reactivity stays span-free (§8).
-
-**One trace per page view.** The trace id is minted when
-`pocopine.client.navigation` opens (and once at boot, for calls made before
-the first navigation) — not per boot, because a page view is the unit a
-person asks about, and not per call, because then the calls of one view
-would be unrelated traces. Every `client.server_function` span under it is
-a child, and each call sends `traceparent: 00-<trace>-<client span>-01`.
-The server adopts it exactly as it adopts any remote parent (§5.3), so
-`http.request` → `server_function` → `ai.*` hang under the browser's call
-span. `x-pocopine-session` (§5.4) is still sent: it spans navigations, the
-trace id does not.
-
-**Reading the answer back.** The fetch layer reads `x-request-id` and
-`traceparent` off the response and records `pocopine.request_id` on the
-call span; the same ids ride the `ServerFunctionClientCompleted` /
-`Failed` hooks so a console line names the exact server span even when the
-relay is off. This is the cheap half and lands first.
-
-**The relay — how a browser span reaches a backend.** The browser never
-talks OTLP: no collector CORS, no credentials in the bundle, no vendor SDK
-(RFC-069 §3.2). Instead, closed client spans are queued in a bounded batch
-— the `BoundedAnalyticsSink` / `ExporterMetrics` primitives
-`pocopine-analytics` already has, with the same drop counters — and posted
-to `POST /_pocopine/trace`, a route the server observability plugin
-installs on opt-in (`ServerObservabilityConfig::with_client_trace_relay(true)`,
-`FrontendObservabilityConfig::with_trace_relay(true)`). On page unload the
-last batch goes out with `navigator.sendBeacon`. The server validates each
-record hard before doing anything with it:
-
-- span name must be one of the `pocopine.client.*` constants;
-- fields must be from the §2.3 rows for that span, with `url.path` path-only
-  and every value length-capped;
-- trace id, span id, parent id must be well-formed W3C ids; timestamps must
-  be within a bounded window of the server clock;
-- payload and batch sizes are capped and the route is rate-limited per
-  `session.id`;
-- the payload is data, never instructions: nothing in it is echoed into a
-  log message or interpolated anywhere.
-
-With `otlp` on, each accepted record is re-emitted through the
-OpenTelemetry SDK's `SpanBuilder` with the **client's** trace id, span id,
-parent, start and end times, so the browser span is the genuine root of the
-server trace and the backend renders one tree. Without `otlp` it is
-re-emitted as a `client_span_closed` observed event on `pocopine.trace`,
-carrying the ids as fields, so local logs still show the client half next
-to the server half.
-
-**Sampling stays consistent for free.** Both sides use the trace-id-ratio
-sampler, whose decision is a pure function of the trace id; the relayed
-client spans go through the same SDK provider as the server's own, so a
-trace is kept or dropped as a whole.
-
-**Two things this deliberately is not.** Not a client `traceparent` without
-the relay — that is the orphan-parent failure §9 Phase 3 avoids, and the
-fetch layer sends the header only when the relay is enabled. And not an
-authenticated endpoint: like any analytics beacon it accepts unauthenticated
-posts, which means ids are spoofable. That is acceptable for telemetry and
-is why the validation above is strict and why nothing in a relayed record
-may carry free text, a query string, or a body.
-
 ## 6. Cost
 
 | App configuration | Per-request cost added by this RFC |
@@ -414,11 +321,7 @@ Worked examples of all of the above: Appendix A.
 - **No replacement of the agenkit `TraceEvent` stream** or `TraceSpan` tree.
 - **No metrics from spans** (no `tracing-opentelemetry` `MetricsLayer`);
   `pocopine.metric` is a separate target per RFC-069.
-- **No client `traceparent` without the relay.** A browser span that never
-  reaches the backend makes every server trace the child of a span nobody
-  received; the header is sent only when §5.5's relay is on.
-- **No browser-to-collector export.** The relay endpoint is the only path a
-  client span takes; no OTLP, CORS setup, or vendor SDK in the bundle.
+- **No client-side spans** in v1; §9 Phase 3 only injects a header.
 
 ## 9. Phases
 
@@ -436,30 +339,12 @@ Worked examples of all of the above: Appendix A.
    sends `x-pocopine-session: <hex>`, generated once per app boot (random
    bytes via `pocopine-crypto`, hex via `pocopine-codec`); the server records
    it as `session.id` on `http.request` and fills `ObserveContext.session_id`
-   server-side. The browser sends **no** `traceparent` in this phase:
-   without the relay every request would become the child of a span no
-   backend ever receives (Appendix A.7). Phase 5 adds the header together
-   with the relay that makes the client span real.
-4. **Long-lived streams and job links, same rules.** The request span is
-   extended to cover the response body (the span is entered on every body
-   frame and closes at end-of-stream, as tower-http does), which puts every
-   SSE producer — live, sync-query, streaming server functions — inside
-   `http.request` with no per-crate work. WebSocket sessions
-   (`pocopine-realtime`) instrument the `on_upgrade` future with a
-   `server`-kind session span whose parent is the request span, with a short
-   child span per message; fan-out hub tasks get their own short root spans
-   and never inherit a connection's. Job enqueue → run links via a
-   `traceparent` stored in `JobEnvelope`.
-5. **The client end (§5.5).** In this order: (a) `x-request-id` and
-   `traceparent` read off the fetch response onto the `ServerFunctionClient*`
-   hooks; (b) `pocopine.client.*` spans and console-layer span support;
-   (c) per-navigation trace id, `traceparent` from the fetch layer, gated on
-   the relay flag; (d) the relay route, its validation, and the OTel
-   re-emission with client ids. Tests: a wasm test that the call span
-   carries the server's request id; a host test that a relayed batch with a
-   bad name, an oversized field, or a malformed id is rejected whole; and a
-   host test with an in-process tracer provider that a relayed client span
-   and the request span it parented share a trace id.
+   server-side. The browser sends **no** `traceparent`: without a client
+   exporter every request would become the child of a span no backend ever
+   receives (Appendix A.7).
+4. **Later, same rules.** Long-lived streams (`pocopine-live` SSE, collab and
+   sync sessions) as `server`-kind spans with per-message child spans; job
+   enqueue → run links via a `traceparent` stored in `JobEnvelope`.
 
 ## 10. Open questions
 
@@ -479,20 +364,6 @@ Worked examples of all of the above: Appendix A.
 - **`enduser.pseudo.id`** on `ai.run`: hash of the principal id, same hash as
   `ObserveContext.user_id_hash`. Confirm that hash is routed through
   `pocopine-crypto` and salted per service, or omit the field.
-- **Client clock skew (Phase 5).** Relayed spans carry browser timestamps.
-  Rebase each client span against the server's own receive time for the
-  matching request (offset = server start − client send), or trust the
-  client clock and let the backend cope with a parent that appears to start
-  after its child. Proposed: rebase when the matching request span is known,
-  else trust.
-- **Relay abuse (Phase 5).** Rate limit per `session.id` and per source
-  address, and drop batches over a size cap — proposed defaults 64 spans and
-  32 KiB per post, 10 posts per minute per session. Whether the route should
-  require the app's CSRF token where one exists.
-- **Trace id per navigation vs per interaction (Phase 5).** Per navigation
-  makes one page view one trace; a long-lived view (a chat) accumulates
-  every call under one root. Cap: mint a fresh trace id after N calls or
-  T minutes, or on a `pocopine.client.interaction` span if one is ever added.
 
 ## Appendix A — Worked examples
 
@@ -693,10 +564,9 @@ Compact output for a warning inside `load_thread`:
 … WARN pocopine.http.request{…}:pocopine.server_function{…}:load_thread{thread_id=th_9f2}: app::api: thread has 0 messages
 ```
 
-### A.7 Headers on the wire (Phase 3, before the relay)
+### A.7 Headers on the wire (Phase 3)
 
-Until the relay of §5.5 exists, the browser sends a session id, not a
-`traceparent`:
+The browser sends a session id, not a `traceparent`:
 
 ```
 POST /api/summarize_thread HTTP/1.1
@@ -712,8 +582,8 @@ The server records `session.id = 7f3a…` on `pocopine.http.request`. Every
 request from that page load is then one query away in any backend
 (`session.id = "7f3a…"`), and each request is still its own well-formed trace
 with a root the backend actually received. Had the client sent a
-`traceparent` without the relay, every trace would have shown as the child
-of a span that never arrived. See A.10 for the Phase 5 shape.
+`traceparent` instead, every trace would have shown as the child of a span
+that never arrived.
 
 An upstream service or edge that *does* export its own spans may send a
 `traceparent`; with `pocopine-server/otel` on, `http.request` becomes its
@@ -769,55 +639,3 @@ async fn trace_events_hang_from_the_request_span() {
     assert_eq!(request.field("pocopine.request_id"), completed.field("request_id"));
 }
 ```
-
-### A.10 The client end (Phase 5): one trace from click to model call
-
-With the relay enabled the browser opens a span per page view and per call,
-sends the trace context, and ships its closed spans through the server:
-
-```
-browser                                                      server
-pocopine.client.navigation  trace=4bf9…  (root)
- └ pocopine.client.server_function  span=c1f2…
-      POST /api/summarize_thread
-      traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-c1f2e3d4a5b6c7d8-01
-      x-pocopine-session: 7f3a…                         ──►  pocopine.http.request   (child of c1f2…)
-                                                              └ pocopine.server_function
-                                                                   └ pocopine.ai.run …
-      ◄── 200  x-request-id: 42  traceparent: 00-4bf9…-9c8d…-01 ──┘
-      (span records pocopine.request_id=42, http.response.status_code=200)
-
- closed spans, batched ── POST /_pocopine/trace ──►  validate → SpanBuilder{trace_id: 4bf9…, span_id: c1f2…, …}
-```
-
-What the backend shows afterwards, as one tree:
-
-```
-pocopine.client.navigation   /threads/:id                 2.4 s
-└ pocopine.client.server_function   POST /api/summarize_thread   830 ms
-  └ pocopine.http.request   POST /api/summarize_thread          815 ms
-    └ pocopine.server_function   summarize_thread                812 ms
-      └ pocopine.ai.run   flow=summarize                         790 ms
-        └ …
-```
-
-One relayed record, as the server receives it (everything else is rejected):
-
-```json
-{
-  "name": "pocopine.client.server_function",
-  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
-  "span_id": "c1f2e3d4a5b6c7d8",
-  "parent_span_id": "a1b2c3d4e5f60718",
-  "start_unix_ms": 1756900321204.5,
-  "end_unix_ms": 1756900322034.9,
-  "fields": {
-    "http.request.method": "POST",
-    "http.route": "/api/summarize_thread",
-    "http.response.status_code": 200,
-    "pocopine.request_id": 42,
-    "otel.status_code": "OK"
-  }
-}
-```
-
