@@ -1897,22 +1897,37 @@ mod host {
             )));
         } else {
             let replay_events = std::mem::take(&mut subscription.opening.replay.events);
-            opening.extend(
-                replay_events
-                    .into_iter()
-                    .map(|event| Ok(sse_for_envelope(event))),
-            );
+            opening.extend(replay_events.into_iter().map(|event| {
+                let span = live_event_span(&event);
+                Ok(span.in_scope(|| sse_for_envelope(event)))
+            }));
         }
 
         let live = stream::unfold(subscription, |mut subscription| async move {
             match subscription.next().await {
-                Ok(Some(event)) => Some((Ok(sse_for_envelope(event)), subscription)),
+                Ok(Some(event)) => {
+                    let span = live_event_span(&event);
+                    let sse = span.in_scope(|| sse_for_envelope(event));
+                    Some((Ok(sse), subscription))
+                }
                 Ok(None) => None,
                 Err(err) => Some((Ok(sse_for_error(err)), subscription)),
             }
         });
 
         Sse::new(stream::iter(opening).chain(live))
+    }
+
+    /// RFC-123 Phase 4: one short `pocopine.live.event` span per delivered
+    /// event — replayed or live — under the request span whose body carries
+    /// the stream.
+    fn live_event_span(envelope: &EventEnvelope) -> tracing::Span {
+        tracing::info_span!(
+            target: pocopine_observe::TRACE_TARGET,
+            pocopine_observe::spans::LIVE_EVENT,
+            pocopine.live.kind = envelope.kind.as_str(),
+            pocopine.live.cursor = envelope.cursor.as_str(),
+        )
     }
 
     fn sse_for_envelope(envelope: EventEnvelope) -> SseEvent {
