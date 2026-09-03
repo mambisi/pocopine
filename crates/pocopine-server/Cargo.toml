@@ -50,3 +50,4 @@ tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 # RFC-123 §5.3 test support: an in-process tracer provider for the
 # `otel` feature's traceparent round-trip test (no exporter needed).
 opentelemetry_sdk = { version = "0.31", features = ["trace"] }
+http-body-util = "0.1"
