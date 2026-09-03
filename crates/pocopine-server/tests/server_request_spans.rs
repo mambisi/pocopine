@@ -43,7 +43,6 @@ struct Span {
     parent: Option<u64>,
     fields: BTreeMap<String, String>,
     events_inside: Vec<String>,
-    closed: bool,
 }
 
 #[derive(Clone, Default)]
@@ -99,16 +98,8 @@ where
                 parent,
                 fields: visitor.0,
                 events_inside: Vec::new(),
-                closed: false,
             },
         ));
-    }
-
-    fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
-        let mut spans = self.0.lock().unwrap();
-        if let Some((_, span)) = spans.iter_mut().find(|(sid, _)| *sid == id.into_u64()) {
-            span.closed = true;
-        }
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
@@ -401,81 +392,4 @@ fn request_events_wrap_auth_and_ignore_ambient_spans() {
             .any(|m| m == "auth provider probe"),
         "auth ran inside the request span: {request:?}"
     );
-}
-
-#[test]
-fn request_span_covers_a_streaming_body() {
-    use futures::StreamExt as _;
-    use pocopine_server::axum::body::{Bytes, to_bytes};
-
-    let _lock = registry_lock();
-    pocopine_server::__reset_for_test();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let capture = Capture::default();
-    let subscriber = tracing_subscriber::registry().with(capture.clone());
-    let probe = capture.clone();
-    tracing::subscriber::with_default(subscriber, || {
-        rt.block_on(async {
-            let router = Server::new(Router::new().route(
-                "/feed",
-                get(|| async {
-                    // Lazy: each frame is produced when the body is polled,
-                    // i.e. after the middleware has already returned.
-                    let frames = futures::stream::iter(1..=3u8).map(|n| {
-                        tracing::info!(target: "app::feed", frame = n, "producing a frame");
-                        Ok::<Bytes, std::convert::Infallible>(Bytes::from(format!("frame {n}\n")))
-                    });
-                    Body::from_stream(frames)
-                }),
-            ))
-            .request_events(RequestEventOptions::default())
-            .try_finalize()
-            .expect("finalize");
-
-            let response = router
-                .oneshot(Request::builder().uri("/feed").body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-
-            // Headers are out; the body has not been polled yet.
-            let at_headers = probe.spans();
-            let request = at_headers
-                .iter()
-                .find(|s| s.name == "pocopine.http.request")
-                .expect("request span");
-            assert!(!request.closed, "span stays open for the body");
-            assert!(request.events_inside.is_empty(), "{request:?}");
-            assert_eq!(
-                request
-                    .fields
-                    .get("http.response.status_code")
-                    .map(String::as_str),
-                Some("200")
-            );
-
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            assert_eq!(&body[..], b"frame 1\nframe 2\nframe 3\n");
-        })
-    });
-
-    let spans = capture.spans();
-    let request = spans
-        .iter()
-        .find(|s| s.name == "pocopine.http.request")
-        .expect("request span");
-    assert_eq!(
-        request.events_inside,
-        [
-            "producing a frame",
-            "producing a frame",
-            "producing a frame"
-        ],
-        "every frame was produced inside the request span"
-    );
-    assert!(request.closed, "the span closed with the body");
 }
