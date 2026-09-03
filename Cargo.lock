@@ -7244,8 +7244,6 @@ version = "0.1.1"
 dependencies = [
  "futures",
  "js-sys",
- "opentelemetry",
- "opentelemetry_sdk",
  "phf 0.13.1",
  "pocopine-analytics",
  "pocopine-auth",
@@ -7265,7 +7263,6 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "trybuild",
  "wasm-bindgen",
@@ -7692,14 +7689,12 @@ dependencies = [
  "chrono",
  "cron",
  "inventory",
- "opentelemetry",
  "pocopine-observe",
  "redis",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
- "tracing-opentelemetry",
 ]
 
 [[package]]

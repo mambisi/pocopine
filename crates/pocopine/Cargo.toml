@@ -14,7 +14,7 @@ default = ["runtime-expr-fallback"]
 analytics = ["dep:pocopine-analytics", "observe"]
 devtools = ["pocopine-core/devtools"]
 logging = ["dep:pocopine-logging", "observe"]
-logging-otlp = ["logging", "pocopine-logging/otlp", "pocopine-jobs/otel"]
+logging-otlp = ["logging", "pocopine-logging/otlp"]
 live = ["dep:pocopine-live"]
 live-redis = ["live", "pocopine-live/redis"]
 mount-profiler = ["pocopine-core/mount-profiler"]
@@ -70,12 +70,6 @@ web-sys = { version = "0.3", features = [
 # Host-only — the wasm32 test build can't reach Docker, and tokio's
 # `rt-multi-thread` feature is incompatible with the wasm target.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# RFC-123 Phase 4 — the job enqueue→run link test drives an in-process
-# OpenTelemetry tracer provider (no exporter) under `logging-otlp`.
-pocopine-observe = { workspace = true, features = ["test-support"] }
-opentelemetry = { version = "0.31", features = ["trace"] }
-opentelemetry_sdk = { version = "0.31", features = ["trace"] }
-tracing-opentelemetry = "0.32"
 # trybuild shells out to cargo (std::process::Command) and reads files
 # — host-only; the RFC-097 compile-fail driver (field_handles_ui.rs) is
 # gated to non-wasm to match.

@@ -1224,7 +1224,7 @@ return redis.call(
     /// Open the `pocopine.job.run` span for one attempt (RFC-123 §3.3).
     /// Field names are spelled inline and match `pocopine_observe::fields`.
     fn job_span(envelope: &JobEnvelope, backend: &'static str) -> tracing::Span {
-        let span = tracing::info_span!(
+        tracing::info_span!(
             target: pocopine_observe::TRACE_TARGET,
             parent: None,
             pocopine_observe::spans::JOB_RUN,
@@ -1235,12 +1235,9 @@ return redis.call(
             pocopine.job.attempt = envelope.attempt,
             pocopine.job.max_attempts = envelope.max_attempts,
             pocopine.job.backend = backend,
-            pocopine.job.enqueue_traceparent = tracing::field::Empty,
             otel.status_code = tracing::field::Empty,
             error.type = tracing::field::Empty,
-        );
-        link_enqueuer(&span, envelope.trace_parent.as_deref());
-        span
+        )
     }
 
     /// Stable classification for the span's `error.type` — never the message.
@@ -1384,11 +1381,6 @@ return redis.call(
         max_attempts: u32,
         created_at_ms: u64,
         scheduled_for_ms: Option<u64>,
-        /// The W3C `traceparent` the enqueuer was running under, when the
-        /// `otel` feature could read one (RFC-123 Phase 4). Absent from older
-        /// envelopes; carried unchanged across retries.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        trace_parent: Option<String>,
     }
 
     impl JobEnvelope {
@@ -1411,54 +1403,7 @@ return redis.call(
                 max_attempts: max_attempts.max(1),
                 created_at_ms: epoch_ms(SystemTime::now())?,
                 scheduled_for_ms,
-                trace_parent: current_traceparent(),
             })
-        }
-    }
-
-    /// The enqueuer's W3C `traceparent`, through the global propagator —
-    /// `None` when no OpenTelemetry layer is installed or the current span
-    /// is not sampled.
-    #[cfg(feature = "otel")]
-    fn current_traceparent() -> Option<String> {
-        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-        let context = tracing::Span::current().context();
-        let mut carrier: HashMap<String, String> = HashMap::new();
-        opentelemetry::global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(&context, &mut carrier)
-        });
-        carrier.remove("traceparent")
-    }
-
-    #[cfg(not(feature = "otel"))]
-    fn current_traceparent() -> Option<String> {
-        None
-    }
-
-    /// Link `pocopine.job.run` to the trace the job was enqueued from: the
-    /// raw `traceparent` as a field always, and an OpenTelemetry span link
-    /// when the feature can resolve it.
-    fn link_enqueuer(span: &tracing::Span, trace_parent: Option<&str>) {
-        let Some(trace_parent) = trace_parent else {
-            return;
-        };
-        span.record(
-            pocopine_observe::fields::JOB_ENQUEUE_TRACEPARENT,
-            trace_parent,
-        );
-        #[cfg(feature = "otel")]
-        {
-            use opentelemetry::trace::TraceContextExt as _;
-            use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-            let mut carrier: HashMap<String, String> = HashMap::new();
-            carrier.insert("traceparent".to_owned(), trace_parent.to_owned());
-            let context = opentelemetry::global::get_text_map_propagator(|propagator| {
-                propagator.extract(&carrier)
-            });
-            let remote = context.span().span_context().clone();
-            if remote.is_valid() {
-                span.add_link(remote);
-            }
         }
     }
 
@@ -1613,8 +1558,6 @@ return redis.call(
             .arg(envelope.created_at_ms)
             .arg("scheduled_for_ms")
             .arg(envelope.scheduled_for_ms.unwrap_or(0))
-            .arg("trace_parent")
-            .arg(envelope.trace_parent.as_deref().unwrap_or(""))
             .query_async(conn)
             .await?;
         Ok(())
@@ -1769,14 +1712,6 @@ return redis.call(
             scheduled_for_ms: match field::<u64>(map, "scheduled_for_ms")? {
                 0 => None,
                 value => Some(value),
-            },
-            // Optional: entries written before RFC-123 Phase 4 have no field.
-            trace_parent: match map.get("trace_parent") {
-                Some(value) => {
-                    let value: String = String::from_redis_value(value)?;
-                    (!value.is_empty()).then_some(value)
-                }
-                None => None,
             },
         })
     }
