@@ -35,16 +35,6 @@ pub enum FrameKind {
 }
 
 impl FrameKind {
-    /// Stable lowercase name, for span fields.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Control => "control",
-            Self::Subscribe => "subscribe",
-            Self::Unsubscribe => "unsubscribe",
-            Self::Data => "data",
-        }
-    }
-
     fn to_u64(self) -> u64 {
         match self {
             Self::Control => 0,

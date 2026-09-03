@@ -37,7 +37,5 @@ serde_urlencoded = "0.7"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 http-body-util = "0.1"
-pocopine-observe = { workspace = true, features = ["test-support"] }
-pocopine-server = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 tower = { version = "0.5", features = ["util"] }

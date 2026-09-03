@@ -6,15 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Shared observability event contract for pocopine logging, tracing, and analytics."
 
-[features]
-default = []
-# A span-aware capture layer for other crates' tests (`test_support`).
-test-support = ["dep:tracing-subscriber"]
-
 [dependencies]
 serde = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["registry", "std"], optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
