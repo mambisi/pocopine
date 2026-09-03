@@ -27,11 +27,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use pocopine_auth::AuthProvider;
-use pocopine_observe::{TRACE_TARGET, fields, spans};
 use tower::Layer;
 use tower::Service;
-use tracing::Instrument as _;
-use tracing::field::Empty;
 
 use crate::plugin::{
     self, PluginRegistry, PluginValidationError, ServerBootFailed, ServerBootStarted, ServerHook,
@@ -349,37 +346,7 @@ impl Server {
     /// signal. [`ServerBootFailed`] still fires for runtime failures
     /// after validation has succeeded (`address_parse`, `bind`).
     pub async fn serve(self, addr: &str) -> std::io::Result<()> {
-        // RFC-123 §3.4 — `pocopine.server.boot` wraps validation through
-        // bind; serving itself is not booting and stays outside it.
-        let span = tracing::info_span!(
-            target: TRACE_TARGET,
-            spans::SERVER_BOOT,
-            otel.kind = "internal",
-            server.address = addr,
-            otel.status_code = Empty,
-            error.type = Empty,
-        );
-        match self.boot(addr).instrument(span.clone()).await {
-            Ok((listener, router)) => {
-                span.record(fields::OTEL_STATUS_CODE, "OK");
-                drop(span);
-                axum::serve(listener, router).await
-            }
-            Err((reason, err)) => {
-                span.record(fields::OTEL_STATUS_CODE, "ERROR");
-                span.record(fields::ERROR_TYPE, reason);
-                Err(err)
-            }
-        }
-    }
-
-    /// Validate, bind, and announce. `Err` carries the stable failure
-    /// classification recorded on the boot span beside the io error.
-    async fn boot(
-        self,
-        addr: &str,
-    ) -> Result<(tokio::net::TcpListener, Router), (&'static str, std::io::Error)> {
-        let router = self.try_finalize().map_err(|err| ("validation", err))?;
+        let router = self.try_finalize()?;
 
         if plugin::has_server_boot_started_hooks() {
             plugin::emit(ServerBootStarted {
@@ -401,10 +368,7 @@ impl Server {
                     error = %err,
                     "pocopine server: invalid bind address"
                 );
-                return Err((
-                    "address_parse",
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, err),
-                ));
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, err));
             }
         };
 
@@ -420,7 +384,7 @@ impl Server {
                     error = %err,
                     "pocopine server: bind failed"
                 );
-                return Err(("bind", err));
+                return Err(err);
             }
         };
 
@@ -431,7 +395,7 @@ impl Server {
             });
         }
 
-        Ok((listener, router))
+        axum::serve(listener, router).await
     }
 }
 

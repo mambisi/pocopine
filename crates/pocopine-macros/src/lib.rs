@@ -5734,33 +5734,10 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // RFC-107 — a streaming `#[server]` frames its result (and any pre-body
     // error) as SSE; a unary one stays JSON. Branch the response sites once.
-    // Close the `pocopine.server_function` span as failed before any
-    // early return: `Span::current()` is that span inside the
-    // `.instrument`ed handler body (RFC-123 §3.2).
-    let span_error_record = quote! {
-        {
-            let __pocopine_span = ::pocopine_server::tracing::Span::current();
-            __pocopine_span.record("otel.status_code", "ERROR");
-            __pocopine_span.record(
-                "error.type",
-                match &__pocopine_error {
-                    ::pocopine::ServerError::App(_) => "app",
-                    ::pocopine::ServerError::Unauthorized(_) => "unauthorized",
-                    ::pocopine::ServerError::Forbidden(_) => "forbidden",
-                    ::pocopine::ServerError::BadRequest(_) => "bad_request",
-                    ::pocopine::ServerError::Network(_) => "network",
-                },
-            );
-        }
-    };
     let error_return = if streaming {
-        quote! {
-            #span_error_record
-            return ::pocopine_server::sse_error_response(__pocopine_error);
-        }
+        quote! { return ::pocopine_server::sse_error_response(__pocopine_error); }
     } else {
         quote! {
-            #span_error_record
             let result = ::core::result::Result::Err(__pocopine_error);
             return ::pocopine_server::axum::Json(result);
         }
@@ -5828,10 +5805,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Always destructure the request into parts so the
     // server-function plugin event can read the framework-stamped
     // RequestId (set by `request_event_layer`).
-    let parts_binding = quote! {
-        #[allow(unused_variables)]
-        let (parts, body) = request.into_parts();
-    };
+    let parts_binding = quote! { let (parts, body) = request.into_parts(); };
     let needs_request_context = policy.guard.is_some() || !server_extractor_params.is_empty();
     let request_context_setup = if needs_request_context {
         quote! {
@@ -5901,28 +5875,14 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
             |request: ::pocopine_server::axum::extract::Request| async move {
                 use ::pocopine_server::tracing::Instrument as _;
 
-                let __pocopine_request_id: u64 = request
-                    .extensions()
-                    .get::<::pocopine_server::RequestId>()
-                    .map(|id| id.0)
-                    .unwrap_or_else(|| ::pocopine_server::next_request_id());
-                // RFC-123 §3.2 — the `pocopine.server_function` span. Field
-                // names are spelled inline and match `pocopine_observe::fields`.
-                let __pocopine_span = ::pocopine_server::tracing::info_span!(
-                    target: "pocopine.trace",
-                    ::pocopine_server::pocopine_observe::spans::SERVER_FUNCTION,
-                    otel.kind = "internal",
-                    pocopine.function = #fn_name_str,
-                    pocopine.function_path = #function_path_ident(),
-                    http.route = #path_ident(),
-                    pocopine.request_id = __pocopine_request_id,
-                    otel.status_code = ::pocopine_server::tracing::field::Empty,
-                    error.type = ::pocopine_server::tracing::field::Empty,
-                );
-
                 async move {
                     let __pocopine_started = ::std::time::Instant::now();
                     #parts_binding
+                    let __pocopine_request_id: u64 = parts
+                        .extensions
+                        .get::<::pocopine_server::RequestId>()
+                        .map(|id| id.0)
+                        .unwrap_or_else(|| ::pocopine_server::next_request_id());
                     if ::pocopine_server::has_server_function_started_hooks() {
                         ::pocopine_server::emit(
                             ::pocopine_server::ServerFunctionStarted {
@@ -6013,8 +5973,6 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                         __pocopine_started.elapsed().as_secs_f64() * 1_000.0;
                     match &result {
                         ::core::result::Result::Ok(_) => {
-                            ::pocopine_server::tracing::Span::current()
-                                .record("otel.status_code", "OK");
                             ::pocopine_server::tracing::info!(
                                 target: "pocopine.trace",
                                 function = #fn_name_str,
@@ -6043,11 +6001,6 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 ::pocopine::ServerError::BadRequest(_) => "bad_request",
                                 ::pocopine::ServerError::Network(_) => "network",
                             };
-                            {
-                                let __pocopine_span = ::pocopine_server::tracing::Span::current();
-                                __pocopine_span.record("otel.status_code", "ERROR");
-                                __pocopine_span.record("error.type", __pocopine_error_kind);
-                            }
                             ::pocopine_server::tracing::warn!(
                                 target: "pocopine.log",
                                 function = #fn_name_str,
@@ -6074,7 +6027,13 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                     #final_return
                 }
-                .instrument(__pocopine_span)
+                .instrument(::pocopine_server::tracing::info_span!(
+                    target: "pocopine.trace",
+                    "pocopine.server_function",
+                    function = #fn_name_str,
+                    function_path = #function_path_ident(),
+                    route = #path_ident(),
+                ))
                 .await
             },
         )

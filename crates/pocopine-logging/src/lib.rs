@@ -241,47 +241,6 @@ mod server {
         include_unmatched_paths: bool,
     }
 
-    /// The request-scoped fields every `HttpRequest*` hook event carries.
-    struct RequestParts {
-        method: String,
-        path: String,
-        route_pattern: Option<String>,
-        request_id: u64,
-        session_id: Option<String>,
-    }
-
-    impl RequestParts {
-        fn started(event: HttpRequestStarted) -> Self {
-            Self {
-                method: event.method,
-                path: event.path,
-                route_pattern: event.route_pattern,
-                request_id: event.request_id,
-                session_id: event.session_id,
-            }
-        }
-
-        fn completed(event: &HttpRequestCompleted) -> Self {
-            Self {
-                method: event.method.clone(),
-                path: event.path.clone(),
-                route_pattern: event.route_pattern.clone(),
-                request_id: event.request_id,
-                session_id: event.session_id.clone(),
-            }
-        }
-
-        fn failed(event: &HttpRequestFailed) -> Self {
-            Self {
-                method: event.method.clone(),
-                path: event.path.clone(),
-                route_pattern: event.route_pattern.clone(),
-                request_id: event.request_id,
-                session_id: event.session_id.clone(),
-            }
-        }
-    }
-
     impl ServerObservability {
         pub fn emit(&self, event: ObservedEvent) {
             let event = self.with_base_context(event);
@@ -314,35 +273,25 @@ mod server {
             &self,
             name: &'static str,
             class: EventClass,
-            request: RequestParts,
+            method: String,
+            path: String,
+            route_pattern: Option<String>,
+            request_id: u64,
         ) -> ObservedEvent {
-            let RequestParts {
-                method,
-                path,
-                route_pattern,
-                request_id,
-                session_id,
-            } = request;
             let matched = route_pattern.is_some();
             let mut event = ObservedEvent::new(name, class)
                 .field("method", method, FieldPrivacy::Public)
                 .field("matched", matched, FieldPrivacy::Public)
                 .field("request_id", request_id, FieldPrivacy::Public);
 
-            // RFC-123 §5.4 — the client's per-page-load session id fills the
-            // context slot the schema always had for it.
-            let mut context = match route_pattern.as_deref() {
-                Some(route) => self.context_with_route(route),
-                None => self.context(),
-            };
-            context.session_id = session_id;
-
             if let Some(route) = route_pattern {
-                event = event
-                    .context(context)
-                    .field("route", route, FieldPrivacy::Public);
+                event = event.context(self.context_with_route(&route)).field(
+                    "route",
+                    route,
+                    FieldPrivacy::Public,
+                );
             } else {
-                event = event.context(context);
+                event = event.context(self.context());
                 if self.include_unmatched_paths {
                     event = event.field("path", path, FieldPrivacy::Pseudonymous);
                 }
@@ -389,7 +338,10 @@ mod server {
                 .request_event(
                     "http_request_started",
                     EventClass::Trace,
-                    RequestParts::started(event),
+                    event.method,
+                    event.path,
+                    event.route_pattern,
+                    event.request_id,
                 )
                 .priority(EventPriority::Low);
             self.emit(observed);
@@ -404,7 +356,10 @@ mod server {
                 .request_event(
                     "http_request_completed",
                     EventClass::Trace,
-                    RequestParts::completed(&event),
+                    event.method,
+                    event.path,
+                    event.route_pattern,
+                    event.request_id,
                 )
                 .field("status", status, FieldPrivacy::Public)
                 .field("duration_ms", duration_ms, FieldPrivacy::Public);
@@ -420,7 +375,10 @@ mod server {
                 .request_event(
                     "http_request_failed",
                     EventClass::Log,
-                    RequestParts::failed(&event),
+                    event.method,
+                    event.path,
+                    event.route_pattern,
+                    event.request_id,
                 )
                 .priority(EventPriority::High)
                 .field("reason", reason, FieldPrivacy::Public)

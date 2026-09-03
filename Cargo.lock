@@ -7689,7 +7689,6 @@ dependencies = [
  "chrono",
  "cron",
  "inventory",
- "pocopine-observe",
  "redis",
  "serde",
  "serde_json",
@@ -7823,11 +7822,9 @@ dependencies = [
  "axum 0.7.9",
  "futures",
  "inventory",
- "opentelemetry",
  "pocopine-assets",
  "pocopine-auth",
  "pocopine-core",
- "pocopine-observe",
  "serde",
  "serde_json",
  "tempfile",
@@ -7835,8 +7832,6 @@ dependencies = [
  "tower 0.5.3",
  "tower-http",
  "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
 ]
 
 [[package]]
