@@ -3,8 +3,9 @@
   <h1><span class="brand">poco</span>pine</h1>
   <p class="tagline">
     A full-stack Rust application framework — reactive Rust/WASM UI,
-    type-safe server functions, a local-first data layer, auth,
-    storage, and one-command deploy. One language, end to end.
+    type-safe server functions that stream, a local-first data layer,
+    realtime collaboration, typed AI flows, auth, storage, and
+    one-command deploy. One language, end to end.
   </p>
   <div class="hero-actions">
     <a class="cta-primary" href="/docs/getting-started/introduction" pp-route>Get started</a>
