@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agenkitty"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "agenkitty-core",
  "agenkitty-skills",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "agenkitty-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine-agenkit-core",
  "serde",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "agenkitty-skills"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "agenkitty-core",
  "pocopine-crypto",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "blog"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine",
  "pocopine-logging",
@@ -1481,7 +1481,7 @@ dependencies = [
 
 [[package]]
 name = "charts"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pine-charts",
  "pocopine",
@@ -1598,7 +1598,7 @@ dependencies = [
 
 [[package]]
 name = "collab-canvas"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "js-sys",
@@ -1860,7 +1860,7 @@ dependencies = [
 
 [[package]]
 name = "counter"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine",
  "serde",
@@ -2911,7 +2911,7 @@ dependencies = [
 
 [[package]]
 name = "file-browser-example"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aws-sdk-s3",
  "bytes",
@@ -3246,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "gen-model-catalog"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde_json",
 ]
@@ -4370,7 +4370,7 @@ dependencies = [
 
 [[package]]
 name = "hn"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "js-sys",
@@ -5179,7 +5179,7 @@ dependencies = [
 
 [[package]]
 name = "jsbench"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine",
  "serde",
@@ -5189,7 +5189,7 @@ dependencies = [
 
 [[package]]
 name = "jsbench-leptos"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "leptos",
  "wasm-bindgen",
@@ -5198,7 +5198,7 @@ dependencies = [
 
 [[package]]
 name = "jsbench-yew"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "wasm-bindgen",
  "web-sys",
@@ -5259,7 +5259,7 @@ dependencies = [
 
 [[package]]
 name = "keep-example"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -5351,7 +5351,7 @@ dependencies = [
 
 [[package]]
 name = "layout-demo"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pine-layout",
  "pine-motion",
@@ -5601,7 +5601,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "live-example"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "http-body-util",
  "pocopine",
@@ -6330,7 +6330,7 @@ dependencies = [
 
 [[package]]
 name = "observability-frontend"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "phf 0.13.1",
  "pocopine",
@@ -6341,7 +6341,7 @@ dependencies = [
 
 [[package]]
 name = "observability-smoke"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "opentelemetry-proto",
  "pocopine",
@@ -6978,7 +6978,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pine-charts"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pocopine",
@@ -6992,7 +6992,7 @@ dependencies = [
 
 [[package]]
 name = "pine-icons"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pine-icons-macros",
  "pocopine",
@@ -7006,7 +7006,7 @@ dependencies = [
 
 [[package]]
 name = "pine-icons-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7016,7 +7016,7 @@ dependencies = [
 
 [[package]]
 name = "pine-layout"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pocopine",
@@ -7030,7 +7030,7 @@ dependencies = [
 
 [[package]]
 name = "pine-motion"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pocopine-core",
@@ -7041,7 +7041,7 @@ dependencies = [
 
 [[package]]
 name = "pine-richtext"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "html5ever 0.27.0",
@@ -7066,7 +7066,7 @@ dependencies = [
 
 [[package]]
 name = "pine-richtext-collab"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "js-sys",
@@ -7082,7 +7082,7 @@ dependencies = [
 
 [[package]]
 name = "pine-richtext-extensions"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pine-icons",
@@ -7101,7 +7101,7 @@ dependencies = [
 
 [[package]]
 name = "pine-richtext-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7110,7 +7110,7 @@ dependencies = [
 
 [[package]]
 name = "pine-ui"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pocopine",
@@ -7242,7 +7242,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "js-sys",
@@ -7278,7 +7278,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-agenkit"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum 0.7.9",
  "futures",
@@ -7308,7 +7308,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-agenkit-anthropic"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "pocopine-agenkit",
@@ -7324,7 +7324,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-agenkit-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7332,7 +7332,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-agenkit-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7342,7 +7342,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-agenkit-oai"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "pocopine-agenkit",
@@ -7358,7 +7358,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-agenkit-qwen"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "pocopine-agenkit",
@@ -7372,7 +7372,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-analytics"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pocopine-observe",
@@ -7385,7 +7385,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-assets"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aws-sdk-s3",
  "testcontainers",
@@ -7396,7 +7396,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-auth"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine-core",
  "serde",
@@ -7405,7 +7405,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-auth-client"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pocopine-auth",
@@ -7422,7 +7422,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-auth-credentials"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -7444,7 +7444,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-auth-jwt"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "http 1.4.2",
@@ -7464,7 +7464,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-auth-oauth"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.2.17",
  "pocopine-codec",
@@ -7478,7 +7478,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "brotli",
@@ -7516,7 +7516,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-client-codegen"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "oxc_allocator",
@@ -7529,7 +7529,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-codec"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "percent-encoding",
@@ -7539,7 +7539,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-collab"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -7587,7 +7587,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-crypto"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "crc32c",
@@ -7599,7 +7599,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-deploy"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -7614,7 +7614,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-deploy-cloudflare-pages"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "mime_guess",
@@ -7634,7 +7634,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-deploy-railway"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "graphql_client",
@@ -7652,7 +7652,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-deploy-render"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "indicatif",
@@ -7670,11 +7670,11 @@ dependencies = [
 
 [[package]]
 name = "pocopine-directives"
-version = "0.1.1"
+version = "0.2.0"
 
 [[package]]
 name = "pocopine-events"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "pocopine-observe",
@@ -7687,11 +7687,11 @@ dependencies = [
 
 [[package]]
 name = "pocopine-expr"
-version = "0.1.1"
+version = "0.2.0"
 
 [[package]]
 name = "pocopine-jobs"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cron",
@@ -7708,11 +7708,11 @@ dependencies = [
 
 [[package]]
 name = "pocopine-launcher"
-version = "0.1.1"
+version = "0.2.0"
 
 [[package]]
 name = "pocopine-live"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum 0.7.9",
  "futures-util",
@@ -7734,7 +7734,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-logging"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "opentelemetry",
@@ -7756,7 +7756,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "annotate-snippets",
  "cron",
@@ -7773,7 +7773,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-native"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "http 1.4.2",
  "pocopine-server",
@@ -7784,7 +7784,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-native-tauri"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "http 1.4.2",
  "pocopine-native",
@@ -7797,7 +7797,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-observe"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7807,7 +7807,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-realtime"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -7833,7 +7833,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-server"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "axum 0.7.9",
  "futures",
@@ -7859,7 +7859,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-storage"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -7893,7 +7893,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-storage-azure"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "azure_core",
  "azure_storage_blob",
@@ -7914,7 +7914,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-storage-gcs"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "futures-util",
@@ -7936,7 +7936,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-storage-s3"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aws-runtime",
  "aws-sdk-s3",
@@ -7962,7 +7962,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-stylekit"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine-template-parser",
  "serde",
@@ -7973,7 +7973,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-sync"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "http-body-util",
  "js-sys",
@@ -7997,7 +7997,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-sync-indexdb"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "js-sys",
@@ -8012,7 +8012,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-sync-query"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -8036,7 +8036,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-sync-query-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -8055,7 +8055,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-sync-sqlite"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "futures",
  "js-sys",
@@ -8071,7 +8071,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-template-parser"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "html5ever 0.27.0",
  "markup5ever_rcdom",
@@ -8080,7 +8080,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-ts-rs"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arrayvec",
  "bigdecimal",
@@ -8105,7 +8105,7 @@ dependencies = [
 
 [[package]]
 name = "pocopine-ts-rs-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8862,7 +8862,7 @@ dependencies = [
 
 [[package]]
 name = "richtext"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pine-richtext",
  "pocopine",
@@ -8874,7 +8874,7 @@ dependencies = [
 
 [[package]]
 name = "richtext-external-blocks"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pine-richtext",
  "pine-richtext-extensions",
@@ -9767,7 +9767,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "site"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine",
  "pocopine-logging",
@@ -9905,7 +9905,7 @@ dependencies = [
 
 [[package]]
 name = "spa"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine",
  "serde",
@@ -10274,7 +10274,7 @@ dependencies = [
 
 [[package]]
 name = "sync-external-e2e"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine-sync",
  "pocopine-sync-indexdb",
@@ -10380,7 +10380,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tags_input_repro"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pine-ui",
  "pocopine",
@@ -10390,7 +10390,7 @@ dependencies = [
 
 [[package]]
 name = "tailwind-demo"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine",
  "serde",
@@ -10925,7 +10925,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "todo"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pocopine",
  "serde",
@@ -12094,7 +12094,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "pine-charts",
@@ -12739,7 +12739,7 @@ checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
 name = "workspace-demo"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "pine-layout",
  "pocopine",

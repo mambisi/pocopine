@@ -6,6 +6,12 @@ license.workspace = true
 repository.workspace = true
 description = "Agenkitty framework: reusable agent specs, policy, events, and local AgentSession wiring on top of Pocopine Agenkit."
 
+# Not part of the binary release: `pocopine-cli` is the only dist'd app, and
+# this crate's second [[bin]] is a test fixture that must never ship. Drop
+# this (and scope `binaries` to just "agenkitty") to distribute the agent CLI.
+[package.metadata.dist]
+dist = false
+
 [[bin]]
 name = "agenkitty"
 path = "src/main.rs"

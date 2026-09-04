@@ -1,11 +1,12 @@
 [package]
 name = "pocopine-core"
-# 0.2.0 — RFC-095/096: signals-first reactive core. Field signals
-# with versioned projections replace the Alpine-era proxy hot path
+# RFC-095/096: signals-first reactive core. Field signals with
+# versioned projections replace the Alpine-era proxy hot path
 # (FIELD_CACHE/FRESH_FIELDS deleted, DEPS/REVERSE deleted, magics
 # $el/$refs/$dispatch/$id removed, js_bridge is the one explicit
-# proxy door). Diverges from the workspace version line.
-version = "0.2.0"
+# proxy door). This crate ran ahead of the workspace on 0.2.0; the
+# two converged at the 0.2.0 release and it inherits again.
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

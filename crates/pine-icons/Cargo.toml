@@ -10,7 +10,7 @@ description = "Tabler Icons (MIT) packaged as a pocopine / Pine primitive. Proc-
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pine-icons-macros = { path = "../pine-icons-macros", version = "0.1.0" }
+pine-icons-macros = { path = "../pine-icons-macros", version = "0.2.0" }
 pocopine = { path = "../pocopine" }
 pocopine-core = { workspace = true }
 serde = { workspace = true }
