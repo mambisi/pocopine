@@ -18,7 +18,8 @@
     <button class="sfw-tab" data-feat="3" :data-active="active == 3 ? 'true' : 'false'">Data &amp; live</button>
     <button class="sfw-tab" data-feat="4" :data-active="active == 4 ? 'true' : 'false'">Auth</button>
     <button class="sfw-tab" data-feat="5" :data-active="active == 5 ? 'true' : 'false'">Deploy</button>
-    <button class="sfw-tab" data-feat="6" :data-active="active == 6 ? 'true' : 'false'">Observe</button>
+    <button class="sfw-tab" data-feat="6" :data-active="active == 6 ? 'true' : 'false'">AI</button>
+    <button class="sfw-tab" data-feat="7" :data-active="active == 7 ? 'true' : 'false'">Observe</button>
   </div>
 
   <div class="sfw-grid">
