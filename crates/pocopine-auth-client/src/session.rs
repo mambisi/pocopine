@@ -280,6 +280,7 @@ mod tests {
 
     #[test]
     fn anonymous_session_has_no_user_and_epoch_zero() {
+        let _guard = crate::test_util::lock_serial();
         let session = AuthSession::new();
         assert!(session.is_ready());
         assert!(!session.is_restoring());
@@ -290,6 +291,7 @@ mod tests {
 
     #[test]
     fn pending_session_blocks_until_ready() {
+        let _guard = crate::test_util::lock_serial();
         let session = AuthSession::pending();
         assert!(!session.is_ready());
         assert!(!session.is_restoring());
@@ -303,6 +305,7 @@ mod tests {
 
     #[test]
     fn restoring_session_uses_snapshot_until_confirmed() {
+        let _guard = crate::test_util::lock_serial();
         let snapshot = AuthSessionSnapshot::new(Principal::from_user(AuthUser::new("u1"))).unwrap();
         let session = AuthSession::restoring(snapshot);
         assert!(!session.is_ready());
@@ -317,6 +320,7 @@ mod tests {
 
     #[test]
     fn set_principal_bumps_epoch_on_each_change() {
+        let _guard = crate::test_util::lock_serial();
         let session = AuthSession::new();
         let user = AuthUser::new("u1");
         session.set_principal(Principal::from_user(user.clone()));
@@ -335,6 +339,7 @@ mod tests {
 
     #[test]
     fn sign_out_resets_principal_and_clears_bearer_slot() {
+        let _guard = crate::test_util::lock_serial();
         let session = AuthSession::new();
         session.sign_in("token-abc", Principal::from_user(AuthUser::new("u1")));
         assert!(session.is_authenticated());
@@ -349,6 +354,7 @@ mod tests {
 
     #[test]
     fn principal_changes_write_through_to_snapshot_storage() {
+        let _guard = crate::test_util::lock_serial();
         crate::storage::__reset_storage_for_test();
         let storage = Rc::new(crate::storage::TestStorage::default());
         crate::storage::install_session_snapshot_storage(storage.clone());
@@ -372,6 +378,7 @@ mod tests {
 
     #[test]
     fn handle_is_cheap_to_clone_and_shares_state() {
+        let _guard = crate::test_util::lock_serial();
         let a = AuthSession::new();
         let b = a.clone();
         a.set_principal(Principal::from_user(AuthUser::new("u1")));
@@ -381,6 +388,7 @@ mod tests {
 
     #[test]
     fn bump_epoch_advances_without_changing_principal() {
+        let _guard = crate::test_util::lock_serial();
         let session = AuthSession::new();
         let user = AuthUser::new("u1");
         session.set_principal(Principal::from_user(user.clone()));
@@ -393,6 +401,7 @@ mod tests {
 
     #[test]
     fn cross_tab_missing_token_clears_principal() {
+        let _guard = crate::test_util::lock_serial();
         crate::storage::__reset_storage_for_test();
         let storage = Rc::new(crate::storage::TestStorage::default());
         crate::storage::install_session_snapshot_storage(storage.clone());
@@ -414,6 +423,7 @@ mod tests {
 
     #[test]
     fn cross_tab_present_token_only_bumps_epoch() {
+        let _guard = crate::test_util::lock_serial();
         let session = AuthSession::new();
         session.set_principal(Principal::from_user(AuthUser::new("u1")));
         let before = session.epoch();

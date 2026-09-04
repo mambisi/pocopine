@@ -183,6 +183,7 @@ mod tests {
 
     #[test]
     fn closure_blanket_impl_drives_through_trait_object() {
+        let _guard = crate::test_util::lock_serial();
         let refresh: Rc<dyn TokenRefresh> = Rc::new(|| async { Ok("new-token".to_string()) });
         let result = block_on(refresh.refresh());
         assert!(matches!(result.as_deref(), Ok("new-token")));
@@ -190,6 +191,7 @@ mod tests {
 
     #[test]
     fn closure_can_propagate_refresh_error() {
+        let _guard = crate::test_util::lock_serial();
         let refresh: Rc<dyn TokenRefresh> =
             Rc::new(|| async { Err(ServerError::unauthorized("refresh denied")) });
         let result = block_on(refresh.refresh());
@@ -198,6 +200,7 @@ mod tests {
 
     #[test]
     fn single_flight_dedupes_concurrent_callers() {
+        let _guard = crate::test_util::lock_serial();
         __reset_refresh_for_test();
 
         // Refresh yields once before resolving so the second caller
@@ -237,6 +240,7 @@ mod tests {
 
     #[test]
     fn single_flight_releases_after_completion() {
+        let _guard = crate::test_util::lock_serial();
         __reset_refresh_for_test();
 
         let count: Rc<std::cell::Cell<usize>> = Rc::new(std::cell::Cell::new(0));
@@ -258,6 +262,7 @@ mod tests {
 
     #[test]
     fn no_refresh_configured_yields_unauthorized() {
+        let _guard = crate::test_util::lock_serial();
         __reset_refresh_for_test();
         let result = block_on(refresh_single_flight());
         assert!(matches!(result, Err(e) if matches!(*e, ServerError::Unauthorized(_))));
@@ -265,6 +270,7 @@ mod tests {
 
     #[test]
     fn aborted_driver_wakes_waiters_with_synthetic_error() {
+        let _guard = crate::test_util::lock_serial();
         // ClearOnDrop must publish a synthetic error when the driver
         // is dropped (or panics out) before publishing — otherwise
         // waiters hang on a never-completed slot. Panic recovery

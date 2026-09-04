@@ -453,6 +453,7 @@ mod tests {
 
     #[test]
     fn auth_plugin_default_has_no_login_route() {
+        let _guard = crate::test_util::lock_serial();
         let plugin = auth_plugin();
         assert!(plugin.login_route.is_none());
         assert_eq!(plugin.return_to_query_param, "redirect");
@@ -464,6 +465,7 @@ mod tests {
 
     #[test]
     fn auth_plugin_builder_sets_options() {
+        let _guard = crate::test_util::lock_serial();
         let plugin = auth_plugin()
             .login_route("/signin")
             .return_to_query_param("next")
@@ -482,6 +484,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "with_cross_tab_sync(true) requires with_token_storage")]
     fn cross_tab_without_storage_panics_at_install() {
+        let _guard = crate::test_util::lock_serial();
         // P2: without storage, cross-tab broadcast can't tell peer
         // tabs what the new token is. Fail at install time.
         use pocopine_core::App;
@@ -491,6 +494,7 @@ mod tests {
 
     #[test]
     fn cross_tab_with_storage_installs_cleanly() {
+        let _guard = crate::test_util::lock_serial();
         use pocopine_core::App;
         // Stand-up storage (using a test impl) and cross-tab; install
         // should not panic. We can't observe the cross-tab channel on
@@ -506,6 +510,7 @@ mod tests {
 
     #[test]
     fn unauthorized_redirect_returns_none_without_login_route() {
+        let _guard = crate::test_util::lock_serial();
         let handler = UnauthorizedRedirect {
             login_route: None,
             param: "redirect",
@@ -528,6 +533,7 @@ mod tests {
 
     #[test]
     fn unauthorized_redirect_appends_return_to_when_configured() {
+        let _guard = crate::test_util::lock_serial();
         let handler = UnauthorizedRedirect {
             login_route: Some("/login".to_string()),
             param: "redirect",
@@ -558,6 +564,7 @@ mod tests {
 
     #[test]
     fn unauthorized_redirect_re_encodes_reserved_chars_in_query() {
+        let _guard = crate::test_util::lock_serial();
         // Codex review MEDIUM: the router decodes query into a
         // HashMap, so a value that arrived as `q=a%26b` becomes
         // `q=a&b` — reconstructing without re-encoding would
@@ -610,6 +617,7 @@ mod tests {
 
     #[test]
     fn unauthorized_redirect_query_param_order_is_deterministic() {
+        let _guard = crate::test_util::lock_serial();
         // Two queries with the same content inserted in different
         // orders must produce the same return-to URL. HashMap
         // iteration is non-deterministic; we sort by key.
@@ -645,6 +653,7 @@ mod tests {
 
     #[test]
     fn unauthorized_redirect_passes_through_non_unauthorized() {
+        let _guard = crate::test_util::lock_serial();
         let handler = UnauthorizedRedirect {
             login_route: Some("/login".to_string()),
             param: "redirect",
@@ -668,6 +677,7 @@ mod tests {
 
     #[test]
     fn predicate_check_decisions() {
+        let _guard = crate::test_util::lock_serial();
         // Drive the Predicate path directly; the route-guard
         // wrapper is just a Decision→RouteGuardDecision map. The
         // wasm-side integration test exercises the full path.
@@ -689,6 +699,7 @@ mod tests {
 
     #[test]
     fn predicate_guard_waits_for_pending_session() {
+        let _guard = crate::test_util::lock_serial();
         let session = AuthSession::pending();
         crate::session::__set_test_session(Some(session.clone()));
 
@@ -712,6 +723,7 @@ mod tests {
 
     #[test]
     fn predicate_guard_allows_restoring_session_snapshot() {
+        let _guard = crate::test_util::lock_serial();
         let snapshot = crate::AuthSessionSnapshot::new(pocopine_auth::Principal::from_user(
             AuthUser::new("u1"),
         ))
