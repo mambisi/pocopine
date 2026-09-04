@@ -327,23 +327,13 @@ mod tests {
     use std::rc::Rc;
     use std::task::{Context, Poll};
 
-    // The token store, INSTALLED flag, and `pocopine_core::fetch`
-    // chain are all process- or thread-local globals. Serialize all
-    // tests in this binary so they don't observe each other's writes.
-    // We rely on `pocopine_core::fetch::call` happening to compile on
-    // the host target — if that ever moves behind
+    // The globals these tests touch are shared crate-wide, so the lock
+    // that serializes them lives in `test_util` and every module's tests
+    // take it. We rely on `pocopine_core::fetch::call` happening to
+    // compile on the host target — if that ever moves behind
     // `#[cfg(target_arch = "wasm32")]`, port these to
     // `wasm_bindgen_test`.
-    static SERIAL: Mutex<()> = Mutex::new(());
-
-    /// Acquire SERIAL while tolerating prior-test poison: the
-    /// `should_panic` cases here panic by design, and a stray panic in
-    /// any other test would otherwise cascade into "every other test
-    /// panics on Mutex::lock". The test isolation we need from SERIAL
-    /// is "only one test holds it at a time" — poison state is noise.
-    fn lock_serial() -> std::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    use crate::test_util::lock_serial;
 
     fn full_reset() {
         clear_token();

@@ -319,6 +319,7 @@ mod tests {
 
     #[test]
     fn in_memory_storage_is_a_no_op() {
+        let _guard = crate::test_util::lock_serial();
         let storage = InMemory;
         storage.save("hello");
         assert_eq!(storage.load(), None);
@@ -328,6 +329,7 @@ mod tests {
 
     #[test]
     fn install_and_read_back_through_thread_local() {
+        let _guard = crate::test_util::lock_serial();
         __reset_storage_for_test();
         let test = Rc::new(TestStorage::default());
         install_storage(test.clone());
@@ -342,6 +344,7 @@ mod tests {
 
     #[test]
     fn install_and_read_snapshot_through_thread_local() {
+        let _guard = crate::test_util::lock_serial();
         __reset_storage_for_test();
         let test = Rc::new(TestStorage::default());
         install_session_snapshot_storage(test.clone());
