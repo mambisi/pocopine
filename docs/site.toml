@@ -130,6 +130,7 @@ pages = [
   { title = "Sync (server)",          path = "guides/data/sync-server.md" },
   { title = "Object-storage uploads and reads", path = "guides/data/storage-uploads.md" },
   { title = "Browser storage",        path = "guides/data/browser-storage.md" },
+  { title = "Migrating to sync-query", path = "legacy-sync-to-query-migration.md" },
 ]
 
 [[group]]

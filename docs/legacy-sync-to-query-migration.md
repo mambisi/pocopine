@@ -1,3 +1,8 @@
+---
+title: "Migrating to pocopine-sync-query"
+description: "Move an app off the legacy pocopine_sync collection client (SyncClient / SyncCollection / CollectionState) onto QueryClient / QueryView and the Source trait. The legacy client was removed in 0.2.0; examples/keep is the worked reference."
+---
+
 # Migrating an app from the legacy sync client to `pocopine-sync-query`
 
 This guide walks the migration of an app off the legacy
