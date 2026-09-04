@@ -6,22 +6,24 @@
 
 <p align="center">
   <em>A full-stack Rust application framework — reactive Rust/WASM UI,
-  type-safe server functions, a local-first data layer, auth, storage,
-  background jobs, and one-command deploy. One language, end to end.</em>
+  type-safe server functions that stream, a local-first data layer,
+  realtime collaboration, typed AI flows, auth, storage, background
+  jobs, and one-command deploy. One language, end to end.</em>
 </p>
 
 ---
 
 pocopine is a full-stack application framework written in Rust. The
-front end is a directive-driven Rust/WASM UI layer: a Vue-3-style
-reactive core (real `Proxy` traps, auto dep-tracking) wired into
-compiled `.poco` template plans, with tag-based components and a
+front end is a directive-driven Rust/WASM UI layer: a signals-first
+reactive core — field signals with versioned projections, not a proxy
+hot path — wired into compiled template plans that live inline as
+`poco!` or in their own `.poco` file, with tag-based components and a
 built-in SPA router. The back end is reached through a type-safe
 server-function bridge — write an `async fn`, call it from the client
 as a typed stub. Around that core sits a set of opt-in crates for the
 rest of an application: a query-centric data layer, auth, object
-storage, live updates, background jobs, observability, and deploy
-adapters.
+storage, live updates, realtime collaboration, typed AI flows,
+background jobs, observability, and deploy adapters.
 
 Templates are plain HTML, styles plain CSS, logic plain Rust. No
 mixed-language SFCs, no virtual DOM, and no JavaScript toolchain unless
@@ -208,8 +210,19 @@ module is documented under [`docs/`](./docs).
 | Crate | What it does |
 |---|---|
 | [`pocopine-live`](./crates/pocopine-live) | Browser live-invalidation streams (SSE) for collection/query refresh. |
+| [`pocopine-realtime`](./crates/pocopine-realtime) | Bidirectional WebSocket gateway — payload-agnostic frames, heartbeats, per-subscription sequencing with resume, local or Redis fan-out. |
+| [`pocopine-collab`](./crates/pocopine-collab) | CRDT collaboration on `yrs` — a document is a topic; persistence behind a `CollabStore`. |
 | [`pocopine-events`](./crates/pocopine-events) | Event envelopes, cursors, and backends for live features. |
 | [`pocopine-jobs`](./crates/pocopine-jobs) | Background jobs — Redis Streams + scheduler, periodic firings, reclaim, in-memory backend. |
+
+### AI (Agenkit)
+
+| Crate | What it does |
+|---|---|
+| [`pocopine-agenkit`](./crates/pocopine-agenkit) | Typed AI flows and tools — `#[ai_flow]` / `#[ai_tool]`, structured output validated against your own types, agent threads, and one trace tree per run. |
+| [`pocopine-agenkit-core`](./crates/pocopine-agenkit-core) | Provider-neutral contracts: messages, tools, traces, usage, and the model catalog. |
+| Providers | [`-anthropic`](./crates/pocopine-agenkit-anthropic) (native Messages API), [`-oai`](./crates/pocopine-agenkit-oai) (any OpenAI-compatible endpoint), [`-qwen`](./crates/pocopine-agenkit-qwen) (Qwen/DashScope). |
+| [`agenkitty`](./crates/agenkitty) | Agent runtime built on Agenkit: reusable specs, policy, events, and a tool family (fs, net, process, memory, MCP, skills). |
 
 ### Observability
 
