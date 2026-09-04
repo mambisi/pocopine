@@ -65,6 +65,7 @@ pages = [
   { title = "Compilation",   path = "guides/poco/02-compilation.md" },
   { title = "Scoped styles", path = "guides/poco/03-scoped-styles.md" },
   { title = "Expressions",   path = "guides/poco/04-expressions.md" },
+  { title = "Control flow",  path = "guides/poco/05-control-flow.md" },
 ]
 
 [[group]]
@@ -74,6 +75,15 @@ pages = [
   { title = "Pine Stylekit", path = "guides/styling/stylekit.md" },
   { title = "Animation",     path = "guides/styling/animation.md" },
   { title = "Icons",         path = "guides/styling/icons.md" },
+]
+
+[[group]]
+section = "Docs"
+title = "Layout"
+pages = [
+  { title = "Overview",  path = "guides/layout/README.md" },
+  { title = "AppShell",  path = "guides/layout/app-shell.md" },
+  { title = "Workspace", path = "guides/layout/workspace.md" },
 ]
 
 [[group]]
@@ -149,6 +159,7 @@ pages = [
   { title = "Parallel & cancellation",   path = "guides/agenkit/parallel.md" },
   { title = "Agent threads",             path = "guides/agenkit/threads.md" },
   { title = "Delegation & subagents",    path = "guides/agenkit/delegation.md" },
+  { title = "Provider credentials",      path = "guides/agenkit/credentials.md" },
 ]
 
 [[group]]
