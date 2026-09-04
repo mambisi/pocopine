@@ -112,7 +112,7 @@ exclude = [
 cli = ["pocopine-cli", "gen-model-catalog", "agenkitty"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mambisi/pocopine"
@@ -122,57 +122,57 @@ repository = "https://github.com/mambisi/pocopine"
 # `default-features = false` opt-outs actually take effect. Users
 # of `pocopine` get devtools on by default via its own `default`
 # feature, which forwards `pocopine-core/devtools`.
-pocopine-agenkit = { path = "crates/pocopine-agenkit", version = "0.1.0" }
-pocopine-agenkit-core = { path = "crates/pocopine-agenkit-core", version = "0.1.0" }
-agenkitty-core = { path = "crates/agenkitty-core", version = "0.1.1" }
-agenkitty-skills = { path = "crates/agenkitty-skills", version = "0.1.1" }
-pocopine-agenkit-anthropic = { path = "crates/pocopine-agenkit-anthropic", version = "0.1.0" }
-pocopine-agenkit-macros = { path = "crates/pocopine-agenkit-macros", version = "0.1.0" }
-pocopine-agenkit-oai = { path = "crates/pocopine-agenkit-oai", version = "0.1.0" }
-pocopine-agenkit-qwen = { path = "crates/pocopine-agenkit-qwen", version = "0.1.0" }
-pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
-pocopine-assets = { path = "crates/pocopine-assets", version = "0.1.0" }
-pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
-pocopine-auth-client = { path = "crates/pocopine-auth-client", version = "0.1.0" }
-pocopine-auth-credentials = { path = "crates/pocopine-auth-credentials", version = "0.1.0" }
-pocopine-auth-jwt = { path = "crates/pocopine-auth-jwt", version = "0.1.0" }
-pocopine-auth-oauth = { path = "crates/pocopine-auth-oauth", version = "0.1.0" }
-pocopine-client-codegen = { path = "crates/pocopine-client-codegen", version = "0.1.0" }
-pocopine-codec = { path = "crates/pocopine-codec", version = "0.1.0" }
-pocopine-collab = { path = "crates/pocopine-collab", version = "0.1.0" }
+pocopine-agenkit = { path = "crates/pocopine-agenkit", version = "0.2.0" }
+pocopine-agenkit-core = { path = "crates/pocopine-agenkit-core", version = "0.2.0" }
+agenkitty-core = { path = "crates/agenkitty-core", version = "0.2.0" }
+agenkitty-skills = { path = "crates/agenkitty-skills", version = "0.2.0" }
+pocopine-agenkit-anthropic = { path = "crates/pocopine-agenkit-anthropic", version = "0.2.0" }
+pocopine-agenkit-macros = { path = "crates/pocopine-agenkit-macros", version = "0.2.0" }
+pocopine-agenkit-oai = { path = "crates/pocopine-agenkit-oai", version = "0.2.0" }
+pocopine-agenkit-qwen = { path = "crates/pocopine-agenkit-qwen", version = "0.2.0" }
+pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.2.0" }
+pocopine-assets = { path = "crates/pocopine-assets", version = "0.2.0" }
+pocopine-auth = { path = "crates/pocopine-auth", version = "0.2.0" }
+pocopine-auth-client = { path = "crates/pocopine-auth-client", version = "0.2.0" }
+pocopine-auth-credentials = { path = "crates/pocopine-auth-credentials", version = "0.2.0" }
+pocopine-auth-jwt = { path = "crates/pocopine-auth-jwt", version = "0.2.0" }
+pocopine-auth-oauth = { path = "crates/pocopine-auth-oauth", version = "0.2.0" }
+pocopine-client-codegen = { path = "crates/pocopine-client-codegen", version = "0.2.0" }
+pocopine-codec = { path = "crates/pocopine-codec", version = "0.2.0" }
+pocopine-collab = { path = "crates/pocopine-collab", version = "0.2.0" }
 pocopine-core = { path = "crates/pocopine-core", version = "0.2.0", default-features = false }
-pocopine-crypto = { path = "crates/pocopine-crypto", version = "0.1.0" }
-pocopine-deploy = { path = "crates/pocopine-deploy", version = "0.1.0" }
-pocopine-deploy-cloudflare-pages = { path = "crates/pocopine-deploy-cloudflare-pages", version = "0.1.0" }
-pocopine-deploy-railway = { path = "crates/pocopine-deploy-railway", version = "0.1.0" }
-pocopine-deploy-render = { path = "crates/pocopine-deploy-render", version = "0.1.0" }
-pocopine-events = { path = "crates/pocopine-events", version = "0.1.0" }
-pocopine-directives = { path = "crates/pocopine-directives", version = "0.1.0" }
-pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
-pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.1.0" }
-pocopine-live = { path = "crates/pocopine-live", version = "0.1.0" }
-pocopine-logging = { path = "crates/pocopine-logging", version = "0.1.0" }
-pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
-pocopine-observe = { path = "crates/pocopine-observe", version = "0.1.0" }
-pocopine-realtime = { path = "crates/pocopine-realtime", version = "0.1.0" }
-pocopine-server = { path = "crates/pocopine-server", version = "0.1.0" }
-pocopine-storage = { path = "crates/pocopine-storage", version = "0.1.0" }
-pocopine-storage-azure = { path = "crates/pocopine-storage-azure", version = "0.1.0" }
-pocopine-storage-gcs = { path = "crates/pocopine-storage-gcs", version = "0.1.0" }
-pocopine-storage-s3 = { path = "crates/pocopine-storage-s3", version = "0.1.0" }
-pocopine-stylekit = { path = "crates/pocopine-stylekit", version = "0.1.0" }
-pocopine-sync = { path = "crates/pocopine-sync", version = "0.1.0" }
-pocopine-sync-indexdb = { path = "crates/pocopine-sync-indexdb", version = "0.1.0" }
-pocopine-sync-query = { path = "crates/pocopine-sync-query", version = "0.1.0" }
-pocopine-sync-query-macros = { path = "crates/pocopine-sync-query-macros", version = "0.1.0" }
-pocopine-sync-sqlite = { path = "crates/pocopine-sync-sqlite", version = "0.1.0" }
-pocopine-template-parser = { path = "crates/pocopine-template-parser", version = "0.1.0" }
+pocopine-crypto = { path = "crates/pocopine-crypto", version = "0.2.0" }
+pocopine-deploy = { path = "crates/pocopine-deploy", version = "0.2.0" }
+pocopine-deploy-cloudflare-pages = { path = "crates/pocopine-deploy-cloudflare-pages", version = "0.2.0" }
+pocopine-deploy-railway = { path = "crates/pocopine-deploy-railway", version = "0.2.0" }
+pocopine-deploy-render = { path = "crates/pocopine-deploy-render", version = "0.2.0" }
+pocopine-events = { path = "crates/pocopine-events", version = "0.2.0" }
+pocopine-directives = { path = "crates/pocopine-directives", version = "0.2.0" }
+pocopine-expr = { path = "crates/pocopine-expr", version = "0.2.0" }
+pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.2.0" }
+pocopine-live = { path = "crates/pocopine-live", version = "0.2.0" }
+pocopine-logging = { path = "crates/pocopine-logging", version = "0.2.0" }
+pocopine-macros = { path = "crates/pocopine-macros", version = "0.2.0" }
+pocopine-observe = { path = "crates/pocopine-observe", version = "0.2.0" }
+pocopine-realtime = { path = "crates/pocopine-realtime", version = "0.2.0" }
+pocopine-server = { path = "crates/pocopine-server", version = "0.2.0" }
+pocopine-storage = { path = "crates/pocopine-storage", version = "0.2.0" }
+pocopine-storage-azure = { path = "crates/pocopine-storage-azure", version = "0.2.0" }
+pocopine-storage-gcs = { path = "crates/pocopine-storage-gcs", version = "0.2.0" }
+pocopine-storage-s3 = { path = "crates/pocopine-storage-s3", version = "0.2.0" }
+pocopine-stylekit = { path = "crates/pocopine-stylekit", version = "0.2.0" }
+pocopine-sync = { path = "crates/pocopine-sync", version = "0.2.0" }
+pocopine-sync-indexdb = { path = "crates/pocopine-sync-indexdb", version = "0.2.0" }
+pocopine-sync-query = { path = "crates/pocopine-sync-query", version = "0.2.0" }
+pocopine-sync-query-macros = { path = "crates/pocopine-sync-query-macros", version = "0.2.0" }
+pocopine-sync-sqlite = { path = "crates/pocopine-sync-sqlite", version = "0.2.0" }
+pocopine-template-parser = { path = "crates/pocopine-template-parser", version = "0.2.0" }
 html5ever = "0.27"
-pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.1.0" }
-pine-richtext = { path = "crates/pine-richtext", version = "0.1.0" }
-pine-richtext-collab = { path = "crates/pine-richtext-collab", version = "0.1.0" }
-pine-richtext-extensions = { path = "crates/pine-richtext-extensions", version = "0.1.0" }
-pine-richtext-macros = { path = "crates/pine-richtext-macros", version = "0.1.0" }
+pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.2.0" }
+pine-richtext = { path = "crates/pine-richtext", version = "0.2.0" }
+pine-richtext-collab = { path = "crates/pine-richtext-collab", version = "0.2.0" }
+pine-richtext-extensions = { path = "crates/pine-richtext-extensions", version = "0.2.0" }
+pine-richtext-macros = { path = "crates/pine-richtext-macros", version = "0.2.0" }
 # RFC-098 — insertion-ordered subscriber/queue sets (H4 determinism)
 # and the generational effect slab (H2). indexmap keeps its `std`
 # default (the `RandomState` hasher + `IndexSet::new()`); iteration is

@@ -33,7 +33,7 @@ uuid-impl = ["uuid"]
 name = "pocopine_ts_rs"
 
 [dependencies]
-pocopine-ts-rs-macros = { path = "../pocopine-ts-rs-macros", version = "0.1.0" }
+pocopine-ts-rs-macros = { path = "../pocopine-ts-rs-macros", version = "0.2.0" }
 thiserror = "2"
 
 arrayvec = { version = ">= 0.6, < 0.8", optional = true }
