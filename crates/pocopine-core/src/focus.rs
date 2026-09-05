@@ -150,8 +150,14 @@ pub fn trap(container: &Element) -> TrapHandle {
             focus_no_scroll(&focusables[next_idx]);
         }) as Box<dyn FnMut(KeyboardEvent)>);
 
+    // `dyn Fn`, not `dyn FnMut`: the corrective `focus()` below dispatches
+    // the next `focusin` synchronously, before this listener has returned,
+    // so the listener re-enters itself. wasm-bindgen refuses re-entry into
+    // an `FnMut` closure ("closure invoked recursively or after being
+    // dropped") and the nested dispatch became an uncaught error on every
+    // correction. The body only reads `container`, so nothing needs `&mut`.
     let container_for_in = container.clone();
-    let focusin: Closure<dyn FnMut(FocusEvent)> = Closure::wrap(Box::new(move |ev: FocusEvent| {
+    let focusin: Closure<dyn Fn(FocusEvent)> = Closure::wrap(Box::new(move |ev: FocusEvent| {
         let container = &container_for_in;
         let node: &Node = container.as_ref();
         if !node.is_connected() {
@@ -168,8 +174,7 @@ pub fn trap(container: &Element) -> TrapHandle {
         if let Some(first) = focusables.first() {
             focus_no_scroll(first);
         }
-    })
-        as Box<dyn FnMut(FocusEvent)>);
+    }) as Box<dyn Fn(FocusEvent)>);
 
     let target: &web_sys::EventTarget = doc.as_ref();
     let _ = target.add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref());
@@ -193,7 +198,7 @@ pub struct TrapHandle {
 struct TrapInner {
     doc: web_sys::Document,
     keydown: Closure<dyn FnMut(KeyboardEvent)>,
-    focusin: Closure<dyn FnMut(FocusEvent)>,
+    focusin: Closure<dyn Fn(FocusEvent)>,
 }
 
 impl TrapHandle {
