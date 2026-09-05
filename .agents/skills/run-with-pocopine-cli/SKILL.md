@@ -32,7 +32,10 @@ To run / serve / preview / build a pocopine app or example, use:
 
 `--path` defaults to the current dir, so `cd <dir> && pocopine run` works too.
 Other flags: `--port <n>` (override the bin's `PORT`), `--release`,
-`--no-stylekit` (the Pine Stylekit CSS stage runs by default, RFC 092).
+`--no-stylekit` (the Pine Stylekit CSS stage runs by default, RFC 092),
+and for `build` only, `--no-bins` (browser artefacts only; the caller
+compiles the configured server/worker bins itself, e.g. a Dockerfile
+that builds them under its own cargo profile).
 
 ```sh
 # Run an example:

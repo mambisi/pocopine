@@ -186,7 +186,9 @@ fn run_build(args: args::BuildArgs) -> Result<()> {
     inline_lint::check_project(&project)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
-    build::configured_bins(&args.path, &cfg, args.release)?;
+    if !args.no_bins {
+        build::configured_bins(&args.path, &cfg, args.release)?;
+    }
     if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
     }
