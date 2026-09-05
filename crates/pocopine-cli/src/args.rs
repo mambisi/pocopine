@@ -133,6 +133,13 @@ pub struct BuildArgs {
     /// Skip the Pine Stylekit CSS stage (it runs by default, RFC 092).
     #[arg(long = "no-stylekit", conflicts_with = "stylekit")]
     pub no_stylekit: bool,
+    /// Build only the browser artefacts (wasm bundle, hashed
+    /// `pkg/index.html`, client modules, CSS) and skip the configured
+    /// server/worker bins. For a container build that compiles the
+    /// bins itself under its own cargo profile: without this the bins
+    /// are built twice, once here under `release` and once there.
+    #[arg(long = "no-bins")]
+    pub no_bins: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -443,4 +450,23 @@ pub enum JsCmd {
         /// Package names and optional version ranges.
         packages: Vec<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_no_bins_is_off_unless_asked() {
+        let Cmd::Build(args) = Cli::parse_from(["pocopine", "build"]).cmd else {
+            panic!("expected the build subcommand");
+        };
+        assert!(!args.no_bins);
+
+        let Cmd::Build(args) = Cli::parse_from(["pocopine", "build", "--release", "--no-bins"]).cmd
+        else {
+            panic!("expected the build subcommand");
+        };
+        assert!(args.no_bins && args.release);
+    }
 }
