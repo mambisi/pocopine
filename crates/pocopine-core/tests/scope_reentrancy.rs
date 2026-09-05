@@ -171,3 +171,63 @@ fn nested_cross_scope_handlers_share_one_outer_fifo_safe_point() {
     Scope::remove(inner.id);
     Scope::remove(outer.id);
 }
+
+/// The trap's `focusin` listener pulls focus back into its container by
+/// calling `focus()` — which dispatches the next `focusin` synchronously,
+/// while the listener is still running. A `dyn FnMut` closure is refused
+/// re-entry by wasm-bindgen ("closure invoked recursively or after being
+/// dropped"): the nested dispatch became an uncaught error on `window`
+/// every time a trap corrected focus.
+#[wasm_bindgen_test]
+fn focus_trap_correction_does_not_reenter_its_own_listener() {
+    let window = web_sys::window().expect("browser window");
+    let document = window.document().expect("browser document");
+    let body = document.body().expect("document body");
+
+    let container = document.create_element("div").expect("create container");
+    let inside = document.create_element("button").expect("create button");
+    container.append_child(&inside).expect("attach button");
+    body.append_child(&container).expect("attach container");
+    let outside = document.create_element("input").expect("create input");
+    body.append_child(&outside).expect("attach input");
+
+    let errors = Rc::new(Cell::new(0u32));
+    let errors_seen = errors.clone();
+    let on_error = wasm_bindgen::closure::Closure::<dyn Fn(web_sys::ErrorEvent)>::new(
+        move |event: web_sys::ErrorEvent| {
+            errors_seen.set(errors_seen.get() + 1);
+            event.prevent_default();
+        },
+    );
+    window
+        .add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref())
+        .expect("listen for uncaught errors");
+
+    let trap = pocopine_core::focus::trap(&container);
+    outside
+        .clone()
+        .unchecked_into::<HtmlElement>()
+        .focus()
+        .expect("focus the input outside the trap");
+
+    let active = document.active_element().expect("something is focused");
+    let uncaught = errors.get();
+
+    // Tear down before asserting: a trap left behind by a failed run would
+    // hijack every later focus in this suite. Blur first — removing the
+    // focused element leaves Firefox without a focus target, and the next
+    // `focus()` in the suite then dispatches no event.
+    trap.release();
+    let _ = inside.clone().unchecked_into::<HtmlElement>().blur();
+    window
+        .remove_event_listener_with_callback("error", on_error.as_ref().unchecked_ref())
+        .expect("stop listening");
+    container.remove();
+    outside.remove();
+
+    assert_eq!(active, inside, "the trap pulled focus back inside");
+    assert_eq!(
+        uncaught, 0,
+        "the corrective focus re-entered the trap's focusin listener",
+    );
+}
