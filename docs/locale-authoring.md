@@ -267,3 +267,9 @@ French ICU month text in the English-only strict bundle. Configured locale
 metadata and plural code are small but not literally free. These numbers are
 whole-fixture measurements, not a claim that the entire application cost comes
 from locale support; compiler optimization can make raw sizes non-monotonic.
+
+
+The CLI static server treats `locales/` as source catalogs and
+`target/pocopine/locale/` as private build artifacts. It serves generated browser
+catalogs from `pkg/locales/`. Directory and file aliases do not make private
+catalogs public, and clearing the build cache does not expose source catalogs.
