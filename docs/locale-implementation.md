@@ -14,7 +14,7 @@ in the generated signature's alphabetical argument-name order. There is no
 `pp-t` or `pp-t:*` directive. A direct `$t` binding in `pp-text` preserves rich
 message child elements. This clarification supersedes the original directive
 examples. Compiled template support and CLI/build delivery are verified below;
-routing and authoring tools remain in progress.
+authoring tools are verified below; routing remains in progress.
 
 ## Shared runtime and catalogs
 
@@ -80,9 +80,9 @@ routing and authoring tools remain in progress.
 
 ## Tooling and verification
 
-- [ ] `pocopine locale` (`i18n` alias): check, extract, merge, stats, XLIFF 2.0
+- [x] `pocopine locale` (`i18n` alias): check, extract, merge, stats, XLIFF 2.0
   import/export; deterministic sorted files and diagnostics.
-- [ ] LSP translation-key completion and default-locale hover.
+- [x] LSP translation-key completion and default-locale hover.
 - [x] Runnable example exercising browser, server errors, locale switching,
   plurals, attributes, and recipient messages; run through the Pocopine CLI.
 - [ ] Parser failure cases, CLDR oracle, catalog compatibility, compile-fail
@@ -382,3 +382,22 @@ application messages; the framework adapter handles pre-handler rejections.
   A disk-full lint attempt was environmental: only this worktree's derived
   debug caches were removed, recovering about 30 GB. Subsequent checks disable
   incremental compilation and debug symbols to keep artifacts bounded.
+
+2026-09-06, catalog-authoring checkpoint:
+
+- Added `locale` commands (alias `i18n`) for check, extract, merge, stats, and
+  XLIFF 2.0 import/export. Extraction creates sorted empty skeletons without
+  replacing authored text; source-location notes live in a separate sidecar.
+  Updates validate all message contracts before atomic writes. XLIFF import
+  rejects stale source copy, changed argument contracts and unsupported inline
+  structures; the documented complete-message exchange profile preserves ICU
+  syntax, Unicode, whitespace and carriage returns.
+- LSP completion and hover use the default catalog, including unsaved editor
+  text. Argument-bearing keys insert positional call snippets in alphabetical
+  argument order; text edits replace the complete key and respect UTF-16 ranges.
+- All 43 locale unit tests and all 149 CLI unit tests pass. Strict host lint,
+  leaf wasm lint, formatter fixed-point and diff whitespace checks pass. A real
+  temporary-project CLI run exercised extraction, strict checking, valid and
+  rejected merges, coverage and XLIFF round trips. A stdio language-server run
+  verified completion edits and hover after an unsaved catalog change.
+- See [Locale authoring](locale-authoring.md) for setup and command examples.

@@ -17,6 +17,11 @@ use serde::Deserialize;
 use super::Prepared;
 use crate::tools::ProjectTools;
 
+mod commands;
+pub use commands::run;
+mod editor;
+pub use editor::{editor_completions, editor_hover};
+
 const BUILD_INFO: &str = "target/pocopine/locale/build.json";
 
 pub(super) fn shell_payload(prepared: &Prepared) -> Result<serde_json::Value> {
@@ -271,6 +276,26 @@ fn report(discovery: &ProjectDiscovery, diagnostics: &[pocopine_locale::server::
     for diagnostic in diagnostics {
         eprint!("{}", pocopine_stylekit::render(diagnostic, &files));
     }
+}
+
+fn inspect(
+    project: &Path,
+    release: bool,
+    allow_missing_catalogs: bool,
+) -> Result<ProjectDiscovery> {
+    let project = project.canonicalize()?;
+    let config = config(&project)?.context("pocopine.toml requires a [locale] section")?;
+    let tools = ProjectTools::load(&project)?;
+    let package = package(&project, &tools)?;
+    let (_, features) = runtime(&package, &config)?;
+    let roots = targets(&project, &tools, &package, release, &features)?;
+    Ok(pocopine_locale::server::discover_project_with_options(
+        &project,
+        &roots,
+        pocopine_locale::server::DiscoveryOptions {
+            allow_missing_catalogs,
+        },
+    ))
 }
 
 pub fn prepare(project: &Path, release: bool) -> Result<Option<Prepared>> {

@@ -14,7 +14,7 @@ mod client;
 #[cfg(target_arch = "wasm32")]
 use client as platform;
 
-pub use platform::{load, prepare, publish};
+pub use platform::{editor_completions, editor_hover, load, prepare, publish, run};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Prepared {

@@ -11,6 +11,7 @@ mod extract_template;
 mod preload;
 mod project;
 mod source;
+mod xliff;
 
 pub use catalogs::ServerCatalogs;
 pub use cfg::CfgSet;
@@ -25,5 +26,9 @@ pub use extract_rust::{
 pub use extract_template::{Extraction, SourceContext, extract_template};
 pub use pocopine_stylekit::{Diagnostic, Severity, Span};
 pub use preload::{locale_directions, preload_fallbacks};
-pub use project::{ProjectDiscovery, SourceFile, SourceTarget, discover_project};
+pub use project::{
+    DiscoveryOptions, ProjectDiscovery, SourceFile, SourceTarget, discover_project,
+    discover_project_with_options,
+};
 pub use source::{SourceMessage, SourceMessages, parse_messages};
+pub use xliff::{XliffDocument, XliffUnit, export_xliff, import_xliff};

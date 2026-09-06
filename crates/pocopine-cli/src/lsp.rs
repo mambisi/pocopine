@@ -141,6 +141,13 @@ impl Backend {
     async fn completions(&self, uri: &Url, text: &str, pos: Position) -> Vec<CompletionItem> {
         let line_index = LineIndex::new(text);
         let offset = line_index.offset_at(pos);
+        if let Ok(path) = uri.to_file_path()
+            && let Some(root) = find_project_root(&path)
+            && let Some(items) =
+                crate::locale::editor_completions(&root, text, offset, &*self.docs.lock().await)
+        {
+            return items;
+        }
         let before = &text[..offset];
         let ctx = detect_context(before);
         if matches!(ctx, CompletionCtx::None) {
@@ -171,6 +178,17 @@ impl Backend {
 
     async fn hover_at(&self, uri: &Url, text: &str, pos: Position) -> Option<Hover> {
         let line_index = LineIndex::new(text);
+        if let Ok(path) = uri.to_file_path()
+            && let Some(root) = find_project_root(&path)
+            && let Some(hover) = crate::locale::editor_hover(
+                &root,
+                text,
+                line_index.offset_at(pos),
+                &*self.docs.lock().await,
+            )
+        {
+            return Some(hover);
+        }
         let (token, _) = token_at(line_index.line_text(pos.line), pos.character as usize)?;
 
         // 1. A directive attribute name → its registry doc.
@@ -776,7 +794,7 @@ fn attr_name_range(
 /// server's `MAGIC_VARIABLES`.
 const MAGIC_VARS: &[&str] = &[
     "index", "first", "last", "event", "el", "store", "route", "dispatch", "watch", "emit",
-    "inject", "provide",
+    "inject", "provide", "t",
 ];
 
 fn collect_loop_vars(ast: &pocopine_template_parser::TemplateAst, out: &mut HashSet<String>) {
@@ -1694,13 +1712,13 @@ fn find_seq(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 /// Byte-offset → LSP [`Position`] converter. LSP positions are zero-based
 /// line + UTF-16 code-unit column, so we precompute line starts once and count
 /// UTF-16 units from the line start to the offset.
-struct LineIndex<'a> {
+pub(crate) struct LineIndex<'a> {
     src: &'a str,
     line_starts: Vec<usize>,
 }
 
 impl<'a> LineIndex<'a> {
-    fn new(src: &'a str) -> Self {
+    pub(crate) fn new(src: &'a str) -> Self {
         let mut line_starts = vec![0usize];
         for (i, b) in src.bytes().enumerate() {
             if b == b'\n' {
@@ -1721,7 +1739,7 @@ impl<'a> LineIndex<'a> {
         Position::new(line as u32, character)
     }
 
-    fn range(&self, range: &ByteRange<usize>) -> LspRange {
+    pub(crate) fn range(&self, range: &ByteRange<usize>) -> LspRange {
         LspRange::new(self.position(range.start), self.position(range.end))
     }
 

@@ -59,6 +59,58 @@ pub enum Cmd {
     /// Keep templates in canonical form (RFC-117): small ones inline as
     /// `poco! { … }`, large ones in their own `.poco` file.
     Fmt(FmtArgs),
+    /// Validate and exchange application translation catalogs.
+    #[command(alias = "i18n")]
+    Locale(LocaleArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct LocaleArgs {
+    #[arg(long, default_value = ".", global = true)]
+    pub path: PathBuf,
+    /// Discover the release configuration and its active translation keys.
+    #[arg(long, global = true)]
+    pub release: bool,
+    #[command(subcommand)]
+    pub cmd: LocaleCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum LocaleCmd {
+    /// Check missing/orphaned keys, ICU syntax, and argument contracts.
+    Check {
+        /// Treat warnings (including missing translations) as CI failures.
+        #[arg(long)]
+        deny_warnings: bool,
+    },
+    /// Add new keys to the default catalog and write source-location notes.
+    Extract,
+    /// Merge a flat JSON update into a locale after validating its contracts.
+    Merge {
+        #[arg(long)]
+        locale: String,
+        #[arg(long)]
+        input: PathBuf,
+    },
+    /// Report per-locale direct coverage, fallback, and orphaned keys.
+    Stats {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export complete MF1 messages for a TMS round trip.
+    Export {
+        #[arg(long)]
+        locale: String,
+        #[arg(long, required = true)]
+        xliff: bool,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Import XLIFF 2.0, rejecting changed source copy and invalid translations.
+    Import {
+        #[arg(long)]
+        input: PathBuf,
+    },
 }
 
 #[derive(Parser, Debug, Clone)]
