@@ -1,6 +1,7 @@
 # Generated locale API contract
 
-Run `python3 tools/check-locale-codegen.py` from the repository root. This is an
+Run `python3 tools/check-locale-codegen.py` from the repository root with
+Chrome and a compatible chromedriver available (`CHROMEDRIVER` may name it). This is an
 isolated Rust library fixture, so its intentional compile-fail features do not
 participate in ordinary workspace builds. The verifier seeds its ignored lock
 file from the workspace lock and uses the workspace target directory.
@@ -30,3 +31,17 @@ generated catalogs, application messages stay intact, and concurrent SSE
 responses keep separate locales. No listener or message delivery is started.
 Browser UI, outgoing RPC metadata and application build wiring have separate
 acceptance checks in `docs/locale-implementation.md`.
+
+`template-integration` compiles a real component against the generated API. Its
+headless Chrome test covers `$t` paths and calls in text, attributes,
+interpolation, conditionals and keyed rows; variables, plurals and safe text
+insertion; recovery after catalog activation; and rich element reordering and
+reparenting with focus, refs, listener identity and teardown preserved. It runs
+with the default Intl and optional strict-parity formatting backends.
+
+The template compile-fail features reject unknown/dynamic keys, incorrect
+arity, rich attribute messages and the removed `pp-t` directive. A separate
+release export mounts the component, keeping its installers reachable while the
+verifier audits key/message elimination, including source HTML left in lifted
+bodies. That fixture includes core/component code, so its whole-binary size is
+reported separately from the leaf generated-API fixture.

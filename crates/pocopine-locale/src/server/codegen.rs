@@ -83,6 +83,7 @@ pub fn generate_rust(
             client_state(&mut source);
         }
         writeln!(source, "}}\npub use self::{state_module}::*;").unwrap();
+        template_macro(&mut source, compilation, audience, &runtime_path, build_id);
         let mut tree = Module::default();
         for (key, signature) in &compilation.messages {
             if (audience == CatalogAudience::Host || signature.browser)
@@ -98,9 +99,30 @@ pub fn generate_rust(
         tree.emit(&mut source, 0, &runtime_path)?;
         source.push_str("}\n");
     }
-    source.push_str("pub use __platform::*;\n}\n");
+    source.push_str("pub use __platform::*;\n#[allow(unused_imports)] pub(crate) use __platform::__template;\n}\n");
     syn::parse_file(&source).map_err(|error| format!("invalid generated locale Rust: {error}"))?;
     Ok(source)
+}
+
+fn template_macro(
+    out: &mut String,
+    compilation: &Compilation,
+    audience: CatalogAudience,
+    runtime: &str,
+    build_id: &str,
+) {
+    out.push_str("#[allow(unused_macros)] macro_rules! __template {\n");
+    for (key, signature) in &compilation.messages {
+        if audience == CatalogAudience::Browser && !signature.browser {
+            continue;
+        }
+        writeln!(out, "({key}) => {{ {runtime}::CompiledMessage {{ build_id: {build_id:?}, id: {runtime}::MessageId({}), arguments: &[", signature.id.0).unwrap();
+        for (name, kind) in &signature.arguments {
+            writeln!(out, "({name:?}, {runtime}::ArgumentKind::{kind:?}),").unwrap();
+        }
+        writeln!(out, "], elements: &{:?}, debug_key: if cfg!(debug_assertions) {{ ::core::option::Option::Some({key:?}) }} else {{ ::core::option::Option::None }} }} }};", signature.elements.iter().collect::<Vec<_>>()).unwrap();
+    }
+    out.push_str("($($unknown:tt)*) => { compile_error!(concat!(\"unknown or unavailable translation key: \", stringify!($($unknown)*))) };\n}\n#[allow(unused_imports)] pub(crate) use __template;\n");
 }
 
 fn host_state(

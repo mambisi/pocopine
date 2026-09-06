@@ -39,6 +39,9 @@ impl ClientCatalogs {
     pub fn locales(&self) -> &Locales {
         &self.0.locales
     }
+    pub fn build_id(&self) -> &str {
+        &self.0.build_id
+    }
     /// Clones share one cache, so generated Rust calls and reactive template
     /// bindings observe the same validated installation.
     pub fn install(&self, locale: Locale, bytes: &[u8]) -> Result<(), TranslationError> {

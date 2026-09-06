@@ -488,7 +488,7 @@ mod tests {
         write(
             root,
             "src/Form.poco",
-            r#"<button pp-t="auth.submit"></button>"#,
+            r#"<button pp-text="$t.auth.submit"></button>"#,
         );
         write(
             root,
@@ -505,7 +505,11 @@ mod tests {
             "src/unused.rs",
             "fn unused() { t::auth::orphan(locale); }",
         );
-        write(root, "src/Unused.poco", r#"<p pp-t="auth.orphan"></p>"#);
+        write(
+            root,
+            "src/Unused.poco",
+            r#"<p pp-text="$t.auth.orphan"></p>"#,
+        );
         let mut targets = vec![
             target("src/lib.rs", CatalogAudience::Browser),
             target("src/lib.rs", CatalogAudience::Host),

@@ -24,7 +24,7 @@ def cargo(command, *args, fail_contains=()):
             raise SystemExit(f"expected targeted compile failure {fail_contains!r}\n{result.stdout}\n{result.stderr}")
     elif result.returncode:
         raise SystemExit(f"{result.stdout}\n{result.stderr}")
-    elif result.stdout:
+    elif result.stdout and command != "tree":
         print(result.stdout.strip(), flush=True)
     return result.stdout
 
@@ -41,11 +41,28 @@ def main():
     cargo("check", "--features", "missing-key", fail_contains=("cannot find function `unused`",))
     cargo("test", "--target", "wasm32-unknown-unknown", "--lib")
     cargo("check", "--target", "wasm32-unknown-unknown", "--features", "host-key-in-browser", fail_contains=("could not find `auth` in `t`",))
+    cargo("test", "--features", "template-integration")
+    cargo("test", "--features", "template-integration", "--target", "wasm32-unknown-unknown", "--lib")
+    cargo("test", "--features", "template-integration,strict-parity", "--target", "wasm32-unknown-unknown", "--lib")
+    for feature, diagnostic in [
+        ("template-missing-key", "unknown or unavailable translation key"),
+        ("template-bad-arity", "$t argument count does not match"),
+        ("template-rich-attribute", "rich translation requires a direct $t binding"),
+        ("template-dynamic-key", "$t requires a literal message key"),
+        ("template-old-directive", "pp-t is not supported"),
+    ]:
+        cargo("check", "--features", feature, fail_contains=(diagnostic,))
     cargo("build", "--target", "wasm32-unknown-unknown", "--release")
     wasm = (TARGET / "wasm32-unknown-unknown/release/locale_typed_api_contract.wasm").read_bytes()
     for sentinel in [b"BROWSER_COPY_SENTINEL", b"HOST_COPY_SENTINEL", b"UNUSED_COPY_SENTINEL", b"cart.items", b"cart.title", b"auth.denied", b"common.bad_request", b"Invalid request.", b"Something went wrong."]:
         if sentinel in wasm:
             raise SystemExit(f"locale key/message bytes leaked into release wasm: {sentinel!r}")
+    cargo("build", "--target", "wasm32-unknown-unknown", "--release", "--features", "template-integration")
+    template_wasm = (TARGET / "wasm32-unknown-unknown/release/locale_typed_api_contract.wasm").read_bytes()
+    for sentinel in [b"BROWSER_COPY_SENTINEL", b"HOST_COPY_SENTINEL", b"UNUSED_COPY_SENTINEL", b"cart.items", b"cart.title", b"cart.terms", b"common.welcome", b"Hello {name}", b"I accept", b"Je lis"]:
+        if sentinel in template_wasm:
+            raise SystemExit(f"locale key/message bytes leaked from a reachable template: {sentinel!r}")
+    print(f"locale codegen: reachable template fixture {len(template_wasm)} bytes, gzip {len(gzip.compress(template_wasm, mtime=0))} bytes", flush=True)
     tree = cargo("tree", "--target", "wasm32-unknown-unknown", "--edges", "normal")
     if any(name in tree for name in ("icu_datetime", "icu_decimal", "icu_experimental", "jiff v")):
         raise SystemExit("default browser locale runtime acquired ICU formatting or timezone data")

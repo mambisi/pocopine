@@ -32,6 +32,7 @@ pub enum StaticLiteral {
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
 pub enum StaticBinOp {
+    Plus,
     And,
     Or,
     Eq,
@@ -48,6 +49,13 @@ pub enum StaticExpr {
     Literal(StaticLiteral),
     Path(&'static [&'static str]),
     Not(&'static StaticExpr),
+    Ternary(
+        &'static StaticExpr,
+        &'static StaticExpr,
+        &'static StaticExpr,
+    ),
+    #[cfg(feature = "locale")]
+    Translation(&'static crate::locale::template::TranslationPlan),
     BinOp {
         op: StaticBinOp,
         lhs: &'static StaticExpr,
@@ -71,7 +79,27 @@ impl StaticExpr {
             StaticExpr::Not(inner) => {
                 JsValue::from_bool(inner.evaluate_with(scope, root).is_falsy())
             }
+            StaticExpr::Ternary(condition, yes, no) => {
+                if condition.evaluate_with(scope, root).is_falsy() {
+                    no.evaluate_with(scope, root)
+                } else {
+                    yes.evaluate_with(scope, root)
+                }
+            }
+            #[cfg(feature = "locale")]
+            StaticExpr::Translation(plan) => crate::locale::template::value(plan, scope, root),
             StaticExpr::BinOp { op, lhs, rhs } => match op {
+                StaticBinOp::Plus => {
+                    let l = lhs.evaluate_with(scope, root);
+                    let r = rhs.evaluate_with(scope, root);
+                    if l.as_string().is_some() || r.as_string().is_some() {
+                        JsValue::from_str(&format!("{}{}", js_to_string(&l), js_to_string(&r)))
+                    } else if let (Some(a), Some(b)) = (l.as_f64(), r.as_f64()) {
+                        JsValue::from_f64(a + b)
+                    } else {
+                        JsValue::from_str("")
+                    }
+                }
                 StaticBinOp::And => {
                     let l = lhs.evaluate_with(scope, root);
                     if l.is_falsy() {

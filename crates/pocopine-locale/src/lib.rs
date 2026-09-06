@@ -6,6 +6,7 @@
 //! text uses Intl unless strict-parity explicitly opts into ICU4X.
 
 mod catalog;
+mod compiled;
 mod config;
 mod generated;
 mod locale;
@@ -31,6 +32,7 @@ pub use catalog::{
     CATALOG_FORMAT_VERSION, Catalog, CatalogArtifact, CatalogAudience, CatalogEntry, CatalogError,
     CatalogIdentity, CatalogMessage, MessageId,
 };
+pub use compiled::CompiledMessage;
 pub use config::{LocaleConfig, RoutingMode};
 pub use locale::{InvalidLocale, Locale, Locales};
 pub use message::{
