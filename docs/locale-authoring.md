@@ -74,6 +74,69 @@ workers pass the recipient's saved locale. See the complete
 [browser/server example](../examples/locale/README.md) and the framework error
 and worker contracts in [RFC-120](../rfcs/rfc-120-i18n.md#55-server-errors-and-messages-to-users).
 
+## URLs and saved preferences
+
+`prefix-except-default` gives English `/pricing` and French `/fr/pricing` when
+English is the default. `prefix-all` also prefixes the default (`/en/pricing`).
+`none` leaves page URLs unchanged. Only exact configured tags are stripped before
+route matching; `/de/pricing` stays an application path if German is not configured.
+
+The first visit to the bare root `/` can redirect using a saved picker preference
+or detected language. Other unprefixed pages always mean the default language.
+A session marker prevents detection from repeatedly redirecting the root. This
+keeps an explicit default-language link reachable even after choosing French.
+
+`ui.set_locale(locale).await` is the explicit picker: catalog validation precedes
+its history entry, `lang`/`dir`, reactive publication and persistent cookie.
+History navigation changes the displayed language without overwriting that
+preference. The browser also keeps a session-storage fallback when cookies are
+unavailable. If storage is unavailable, selection still works for the current
+page. Failed or superseded loads do not change the committed selection.
+
+Generate links with `ui.href("/pricing?plan=team#details")?`; it tracks the current
+locale, replaces an existing prefix, and preserves the query and fragment.
+For a component binding, expose it as a computed property:
+
+```rust,ignore
+#[computed]
+fn pricing_href() -> String {
+    pocopine::locale::client::active().expect("locale boot")
+        .href("/pricing").expect("page URL")
+}
+```
+
+```html
+<a pp-route :href="pricing_href" pp-text="$t.common.pricing"></a>
+```
+
+Named route targets also use the active locale. Literal URL targets retain their
+meaning: `router::push("/pricing")` selects the default-language page. Router
+matching strips the locale prefix; `$route.path` and loader/guard context paths
+retain the actual visible URL. Guards and loaders wait for the destination's
+catalog. Cross-language loader prefetch is skipped, and changing language clears
+prefetched loader results. Already displayed server messages remain verbatim
+until the application requests new data. A failed route load restores the prior
+URL and emits `pocopine:locale-error` on `window`; the current UI stays available.
+
+On the server, use the generated configuration and wrap only page routes:
+
+```rust,ignore
+let locale = ServerLocale::new(t::locales(), messages)
+    .with_routing(t::config().routing);
+let pages = locale.page_router(page_router)?;
+let router = Router::new()
+    .nest_service("/pkg", static_files("pkg"))
+    .fallback_service(pages);
+Server::new(router).with_locale(locale).serve(address).await?;
+```
+
+Keep RPC, asset and health services outside the page adapter. It rewrites the
+path before the inner page router matches, installs the typed locale before page
+handlers/guards, and redirects only GET/HEAD. Browser document headers let the
+outer locale middleware select the URL language before global auth rejections.
+The explicit RPC locale header continues to control RPC presentation; those
+requests never take the page redirect path.
+
 ## Rich messages
 
 Catalogs can reorder existing elements with positional placeholders:
@@ -164,5 +227,4 @@ Hover shows the default message, argument types, and any rich element count.
 Open catalog text takes precedence over disk when the editor sends it to the
 server; otherwise the catalog is read fresh for each request.
 
-Locale-prefixed navigation, persistence, configured ICU data slicing, and SSR
-integration are still tracked in the [implementation checklist](locale-implementation.md).
+Configured ICU data slicing and SSR integration are still tracked in the [implementation checklist](locale-implementation.md).

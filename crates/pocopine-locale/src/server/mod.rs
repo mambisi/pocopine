@@ -15,7 +15,7 @@ mod xliff;
 
 pub use catalogs::ServerCatalogs;
 pub use cfg::CfgSet;
-pub use codegen::generate_rust;
+pub use codegen::{generate_rust, generate_rust_with_config};
 pub use compile::{
     CatalogSource, Compilation, CompiledCatalog, MessageReference, MessageSignature, ReferenceKind,
     compile_catalogs,

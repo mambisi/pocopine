@@ -14,7 +14,7 @@ in the generated signature's alphabetical argument-name order. There is no
 `pp-t` or `pp-t:*` directive. A direct `$t` binding in `pp-text` preserves rich
 message child elements. This clarification supersedes the original directive
 examples. Compiled template support and CLI/build delivery are verified below;
-authoring tools are verified below; routing remains in progress.
+authoring tools and routing are verified below.
 
 ## Shared runtime and catalogs
 
@@ -56,7 +56,7 @@ authoring tools are verified below; routing remains in progress.
   cancellation-safe atomic selection after catalog validation.
 - [x] Reactive template text/attribute translation; cleanup on unmount;
   locale/argument updates preserve native placeholder identity without remounting.
-- [ ] Locale routing modes, precedence, explicit picker, persistence,
+- [x] Locale routing modes, precedence, explicit picker, persistence,
   `lang`/`dir`, and locale-aware links.
 
 ## Server and workers
@@ -401,3 +401,37 @@ application messages; the framework adapter handles pre-handler rejections.
   rejected merges, coverage and XLIFF round trips. A stdio language-server run
   verified completion edits and hover after an unsaved catalog change.
 - See [Locale authoring](locale-authoring.md) for setup and command examples.
+
+2026-09-06, routing and persistence checkpoint:
+
+- Added one shared URL policy for all three routing modes. Exact configured
+  prefixes are stripped before matching; canonical links retain query/fragment
+  bytes. Only the first bare-root visit uses language detection. Other
+  unprefixed pages select the default, preserving URL authority over cookies.
+- The explicit picker validates before publishing history/document/locale and
+  a persistent preference. A separate session marker prevents repeated root
+  detection; session storage backs up browser cookies. Back/forward navigation
+  never overwrites the picker preference. Failed route loads restore the last
+  committed URL and emit a diagnostic event; superseded responses cannot commit.
+- Browser routing waits for catalog readiness before guards/loaders. Named
+  route targets and the reactive `LocaleController::href` localize links.
+  Language changes discard prefetched loader results. Existing server payloads
+  remain verbatim until refreshed by the app. The generated `t::config()` lets
+  host routing use the same configuration as the matching browser manifest.
+- The opt-in server page adapter resolves language before inner route matching,
+  installs page locale/messages before handlers, and redirects only GET/HEAD.
+  RPC/assets/health stay outside it. Document requests resolve URL language
+  before outer auth rejections; explicit RPC metadata retains its own policy.
+- The real example passes HTTP and isolated Chrome checks for root redirects,
+  explicit default URLs despite stored preferences, localized links, preserved
+  input, history, racing/failed catalog loads, retry, reload and Arabic direction.
+  A stale `$route.path` exposed an existing projection invalidation omission;
+  commit `23ab4d8b` fixes it with a path/parameter/query browser regression.
+- All 45 leaf units, two server routing tests, seven core locale/boot browser
+  tests, three nested-route tests and the new route-state test pass. The older
+  guard/loader binary passes all eleven cases when isolated; in one shared
+  browser, its helper navigates to an already-current URL (now a duplicate),
+  and its panic-hook test depends on order. These are tracked harness limits,
+  not a passing combined-suite claim. Stale shared core wasm artifacts also
+  produced duplicate JS type metadata once; rebuilding only core artifacts
+  resolved that compilation failure.

@@ -37,6 +37,7 @@ use crate::mount;
 use crate::reactive::{ScopeId, trigger_scope};
 use crate::scope::{ComponentState, Scope};
 
+pub(crate) mod locale;
 mod return_to;
 
 pub use return_to::ReturnTo;
@@ -511,6 +512,8 @@ pub enum PrefetchSkip {
     GuardRejected(RouteRejection),
     GuardRedirected(RouteTarget),
     LoaderDisabled,
+    /// Cross-locale loader prefetch waits until that language is committed.
+    LocaleNotCurrent,
     NoLoader,
     MissingWindow,
 }
@@ -1095,6 +1098,9 @@ pub fn prefetch(target: impl IntoRouteTarget) -> PrefetchResult {
     let Some(_win) = web_sys::window() else {
         return PrefetchResult::Skipped(PrefetchSkip::MissingWindow);
     };
+    if !locale::can_prefetch(target.as_str()) {
+        return PrefetchResult::Skipped(PrefetchSkip::LocaleNotCurrent);
+    }
     let location = location_for_url(target.as_str());
     let Some(matched) = match_route(&location.path, true) else {
         return PrefetchResult::Skipped(PrefetchSkip::NotFound);
@@ -1221,7 +1227,7 @@ pub(crate) fn target_for_name(
         found = Some(Ok(path));
     });
     let path = found.unwrap_or_else(|| Err(RouteTargetError::UnknownRouteName(name.as_str())))?;
-    RouteTarget::new(path)
+    RouteTarget::new(locale::href(path))
 }
 
 fn location_for_url(url: &str) -> RouteLocation {
@@ -1491,6 +1497,9 @@ fn mount_current() -> Option<NavigationFailure> {
     // fetches on the wire; this token bump is the residual stale-result
     // fence for any previous loader that still resolves.
     let nav_token = bump_route_token();
+    if !locale::ready() {
+        return None;
+    }
 
     let has_route_hooks = crate::plugin::has_route_navigation_hooks();
     let start_ms = has_route_hooks.then(js_sys::Date::now);
@@ -2103,11 +2112,12 @@ fn dispatch_route_rejection(
 /// catch-alls remain fallbacks, and a matching descendant outranks its own
 /// layout parent (which is how an index child wins at the same URL).
 fn match_route(path: &str, include_pattern: bool) -> Option<RouteMatch> {
+    let path = locale::app_path(path);
     ROUTES.with(|r| {
         let routes = r.borrow();
         let mut best: Option<(&Route, HashMap<String, String>)> = None;
         for route in routes.iter() {
-            let Some(params) = route.match_path(path) else {
+            let Some(params) = route.match_path(&path) else {
                 continue;
             };
             let replace = match best.as_ref() {

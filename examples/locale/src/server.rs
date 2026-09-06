@@ -20,20 +20,22 @@ pub async fn run() -> std::io::Result<()> {
         bad_request: t::common::bad_request,
         internal: t::common::internal,
     };
+    let locale = ServerLocale::new(t::locales(), messages).with_routing(t::config().routing);
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // Publish only built browser artifacts; source catalogs and generated host
     // Rust remain private even when a visitor guesses their filesystem paths.
+    let page =
+        pocopine_server::tower_http::services::ServeFile::new(pocopine_server::index_file(root));
+    let pages = Router::new().route_service("/pricing", page).route_service(
+        "/",
+        pocopine_server::tower_http::services::ServeFile::new(pocopine_server::index_file(root)),
+    );
     let router = Router::new()
         .nest_service("/pkg", static_files(root.join("pkg")))
-        .route_service(
-            "/",
-            pocopine_server::tower_http::services::ServeFile::new(pocopine_server::index_file(
-                root,
-            )),
-        );
+        .fallback_service(locale.page_router(pages).map_err(std::io::Error::other)?);
     let port = std::env::var("PORT").unwrap_or_else(|_| "3088".into());
     Server::new(router)
-        .with_locale(ServerLocale::new(t::locales(), messages))
+        .with_locale(locale)
         .serve(&format!("127.0.0.1:{port}"))
         .await
 }

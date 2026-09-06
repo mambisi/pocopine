@@ -1,4 +1,4 @@
-use pocopine_locale::{LocaleManifest, LocalePreferences, TranslationError};
+use pocopine_locale::{LocaleManifest, LocaleRoutes, TranslationError};
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -10,7 +10,8 @@ export function locale_boot_snapshot() {
   const boot = window.__pocopineLocale;
   if (!boot) throw new Error('locale HTML shell is missing; rebuild with the Pocopine CLI');
   return JSON.stringify({manifest: boot.manifest, route: boot.route,
-    cookie: boot.cookie, accepted: boot.accepted});
+    cookie: boot.cookie, accepted: boot.accepted, visited: boot.visited || false,
+    url: boot.url || (location.pathname + location.search + location.hash)});
 }
 export function locale_catalog_load(url) {
   const boot = window.__pocopineLocale;
@@ -34,7 +35,8 @@ extern "C" {
 #[derive(Deserialize)]
 struct BootSnapshot {
     manifest: LocaleManifest,
-    route: Option<String>,
+    url: String,
+    visited: bool,
     cookie: Option<String>,
     accepted: String,
 }
@@ -60,20 +62,25 @@ async fn initialize(catalogs: ClientCatalogs) -> Result<LocaleController, Transl
         catalogs.build_id(),
         catalogs.message_count(),
     )?;
-    let selected = catalogs
-        .locales()
-        .negotiate(LocalePreferences {
-            route: snapshot.route.as_deref(),
-            cookie: snapshot.cookie.as_deref(),
-            accepted: &snapshot.accepted,
-            ..Default::default()
-        })
-        .locale;
+    let route = LocaleRoutes::new(catalogs.locales().clone(), snapshot.manifest.config.routing)
+        .resolve(
+            &snapshot.url,
+            snapshot.cookie.as_deref(),
+            &snapshot.accepted,
+            snapshot.visited,
+        )?;
+    let selected = route.locale;
     let url = &snapshot.manifest.catalogs[&selected];
     let bytes = load_catalog(url).await?;
     catalogs.install(selected.clone(), &bytes)?;
     let controller = LocaleController::with_delivery(catalogs, selected, Some(snapshot.manifest))?;
+    if let Some(url) = route.redirect {
+        super::navigation::history(&url, false)?;
+    }
+    super::navigation::remember(None);
+    *controller.0.committed_url.borrow_mut() = Some(super::navigation::current_url());
     controller.activate()?;
+    super::navigation::listen()?;
     controller.update_document(&controller.snapshot())?;
     locale_boot_ready();
     Ok(controller)

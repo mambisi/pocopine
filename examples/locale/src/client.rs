@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
         <button @click="language('fr')" lang="fr">Français</button>
         <button @click="language('ar')" lang="ar">العربية</button>
       </nav>
+      <nav aria-label="Pages">
+        <a pp-route :href="home_href" pp-text="$t.common.home"></a>
+        <a pp-route :href="pricing_href" pp-text="$t.common.pricing"></a>
+      </nav>
       <h1 pp-text="$t('common.welcome', name)"></h1>
       <label>
         <span pp-text="$t.common.name"></span>
@@ -20,6 +24,7 @@ use serde::{Deserialize, Serialize};
       <button @click="reject" pp-text="$t.common.error"></button>
       <p role="status" pp-text="status"></p>
       <p pp-text="$t.common.more"><a href="https://pocopine.dev"></a></p>
+      <pp-outlet></pp-outlet>
     </section>
 })]
 struct LocaleDemo {
@@ -30,6 +35,20 @@ struct LocaleDemo {
 
 #[handlers]
 impl LocaleDemo {
+    #[computed]
+    fn home_href() -> String {
+        pocopine::locale::client::active()
+            .expect("locale boot")
+            .href("/")
+            .expect("page URL")
+    }
+    #[computed]
+    fn pricing_href() -> String {
+        pocopine::locale::client::active()
+            .expect("locale boot")
+            .href("/pricing")
+            .expect("page URL")
+    }
     fn on_mount(&mut self) {
         self.name = "Amina".into();
         self.count = 1;
@@ -83,6 +102,15 @@ impl LocaleDemo {
     }
 }
 
+#[derive(Default, Serialize, Deserialize, RouteComponent)]
+#[component(name = "locale-page", template = poco! {
+    <p id="route-page" pp-text="$route.path"></p>
+})]
+struct LocalePage {}
+
+#[handlers]
+impl LocalePage {}
+
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub async fn main() {
     if let Err(error) = bootstrap().await {
@@ -97,6 +125,10 @@ async fn bootstrap() -> Result<(), String> {
     pocopine::locale::client::boot(crate::t::catalogs().map_err(|e| e.to_string())?)
         .await
         .map_err(|e| e.to_string())?;
-    App::new().register::<LocaleDemo>().run();
+    App::new()
+        .register::<LocaleDemo>()
+        .route::<LocalePage>("/")
+        .route::<LocalePage>("/pricing")
+        .run();
     Ok(())
 }

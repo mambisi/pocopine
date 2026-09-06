@@ -727,7 +727,13 @@ fn runtime_api(parts: &[String]) -> bool {
     parts.len() == 1
         && matches!(
             parts[0].as_str(),
-            "initialize" | "locales" | "catalogs" | "install" | "BUILD_ID" | "MESSAGE_COUNT"
+            "initialize"
+                | "locales"
+                | "config"
+                | "catalogs"
+                | "install"
+                | "BUILD_ID"
+                | "MESSAGE_COUNT"
         )
 }
 
@@ -753,7 +759,7 @@ mod tests {
             fn boot() {
                 start(locales());
                 t::install(lang, bytes);
-                let _ = (t::catalogs(), BUILD_ID, t::MESSAGE_COUNT);
+                let _ = (t::catalogs(), t::config(), BUILD_ID, t::MESSAGE_COUNT);
                 t::common::welcome(lang, "Amina");
             }
         "#,

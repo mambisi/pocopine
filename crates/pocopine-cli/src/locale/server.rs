@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use pocopine_locale::{
     CATALOG_FORMAT_VERSION, CatalogAudience, LocaleConfig, LocaleManifest,
-    server::{CfgSet, ProjectDiscovery, SourceTarget, discover_project, generate_rust},
+    server::{CfgSet, ProjectDiscovery, SourceTarget, discover_project, generate_rust_with_config},
 };
 use serde::Deserialize;
 
@@ -330,7 +330,7 @@ pub fn prepare(project: &Path, release: bool) -> Result<Option<Prepared>> {
             );
         }
     }
-    let code = generate_rust(&compiled, &config.validate()?, &runtime).map_err(|e| anyhow!(e))?;
+    let code = generate_rust_with_config(&compiled, &config, &runtime).map_err(|e| anyhow!(e))?;
     write(&rust, code.as_bytes())?;
     let prepared = Prepared {
         rust,

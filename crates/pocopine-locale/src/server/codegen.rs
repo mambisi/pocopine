@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt::Write};
 
 use super::{Compilation, MessageSignature};
-use crate::{ArgumentKind, CatalogAudience, Locales};
+use crate::{ArgumentKind, CatalogAudience, LocaleConfig, Locales};
 
 /// Generated source for OUT_DIR/pocopine_locale.rs. Include once at crate root;
 /// it exposes `t::module::message(locale, arguments...)`. Host catalog bytes are
@@ -11,6 +11,26 @@ pub fn generate_rust(
     locales: &Locales,
     runtime_path: &str,
 ) -> Result<String, String> {
+    generate_rust_with_config(
+        compilation,
+        &LocaleConfig {
+            default: locales.default_locale().clone(),
+            locales: locales.supported().cloned().collect(),
+            routing: Default::default(),
+            strict_parity: false,
+        },
+        runtime_path,
+    )
+}
+
+/// Generate the API with the application's complete build configuration, so
+/// host page routing can use exactly the same mode as the browser manifest.
+pub fn generate_rust_with_config(
+    compilation: &Compilation,
+    config: &LocaleConfig,
+    runtime_path: &str,
+) -> Result<String, String> {
+    let locales = &config.validate().map_err(|e| e.to_string())?;
     if compilation.has_errors() {
         return Err("cannot generate Rust from a failed catalog compilation".into());
     }
@@ -78,6 +98,7 @@ pub fn generate_rust(
         .unwrap();
         writeln!(source,"mod {state_module} {{\nuse {runtime_path} as __runtime;\npub const BUILD_ID: &str = {build_id:?};\npub const MESSAGE_COUNT: usize = {};",compilation.messages.len()).unwrap();
         configured_locales(&mut source, locales);
+        writeln!(source, "/// The exact configuration selected by this application build.\npub fn config() -> __runtime::LocaleConfig {{ let locales = locales(); __runtime::LocaleConfig {{ default: locales.default_locale().clone(), locales: locales.supported().cloned().collect(), routing: __runtime::RoutingMode::{:?}, strict_parity: {} }} }}", config.routing, config.strict_parity).unwrap();
         if audience == CatalogAudience::Host {
             host_state(&mut source, compilation, locales)?;
         } else {

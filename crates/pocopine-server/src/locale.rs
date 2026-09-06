@@ -1,7 +1,7 @@
 //! Explicit request locale and catalog-backed framework rejection messages.
 //! Enable the server's `locale` feature and initialize generated host catalogs
 //! before constructing [`ServerLocale`]. Locale negotiation never redirects an
-//! RPC request. URL routing and browser persistence are separate integrations.
+//! RPC request. Opt-in page routing wraps only the application page router.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -14,6 +14,8 @@ use axum::{
 use pocopine_core::ServerError;
 use pocopine_locale::{LOCALE_COOKIE, LOCALE_HEADER, LocalePreferences};
 pub use pocopine_locale::{Locale, Locales};
+
+mod routing;
 
 /// Bind the four framework rejection classes to generated, argument-free
 /// translation functions. Application errors returned by the handler keep their
@@ -40,8 +42,10 @@ struct RequestMessages(Arc<PublicMessages>);
 /// A configured locale set and prepared public rejection text. Construction
 /// calls the supplied generated functions for every configured locale, before
 /// any request is accepted. It stores no current language.
+#[derive(Clone)]
 pub struct ServerLocale {
     locales: Locales,
+    routes: Option<pocopine_locale::LocaleRoutes>,
     messages: BTreeMap<Locale, Arc<PublicMessages>>,
 }
 
@@ -66,6 +70,7 @@ impl ServerLocale {
             .collect();
         Self {
             locales,
+            routes: None,
             messages: prepared,
         }
     }
@@ -89,11 +94,31 @@ pub(crate) async fn middleware(
         // Conflicting duplicate metadata is not an explicit user preference.
         if values.next().is_none() { first } else { None }
     };
+    // Browser document requests resolve their URL before outer auth layers.
+    // Explicit RPC metadata is handled by the ordinary RPC negotiation path.
+    let page = service
+        .routes
+        .as_ref()
+        .filter(|_| routing::is_document(&request))
+        .and_then(|routes| {
+            routes
+                .resolve(
+                    request
+                        .uri()
+                        .path_and_query()
+                        .map(|v| v.as_str())
+                        .unwrap_or("/"),
+                    cookie(&cookies),
+                    &accepted,
+                    routing::visited(&cookies),
+                )
+                .ok()
+        });
     let selection = service.locales.negotiate(LocalePreferences {
+        route: page.as_ref().map(|page| page.locale.as_str()),
         explicit,
         cookie: cookie(&cookies),
         accepted: &accepted,
-        ..Default::default()
     });
     let locale = selection.locale.clone();
     request

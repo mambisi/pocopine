@@ -16,6 +16,7 @@ use pocopine_locale::{Locale, Locales, MessageId, RenderedPart, TranslationError
 use crate::{ServerError, Setter, Signal, signal};
 
 mod boot;
+pub(crate) mod navigation;
 pub use boot::boot;
 
 thread_local! {
@@ -34,6 +35,7 @@ struct State {
     set_selected: Setter<Locale>,
     pending: RefCell<Option<Weak<()>>>,
     delivery: Option<pocopine_locale::LocaleManifest>,
+    committed_url: RefCell<Option<String>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +65,7 @@ impl LocaleController {
             set_selected,
             pending: RefCell::new(None),
             delivery,
+            committed_url: RefCell::new(None),
         })))
     }
 
@@ -170,7 +173,48 @@ impl LocaleController {
         let url = manifest.catalogs.get(&target).ok_or_else(|| {
             TranslationError::Initialization(format!("unsupported UI locale {target}"))
         })?;
-        self.switch_with(target, |_| boot::load_catalog(url)).await
+        let ticket = self.begin_switch(target)?;
+        let bytes = if ticket.needs_catalog() {
+            let bytes = boot::load_catalog(url).await;
+            if !ticket.is_current() {
+                return Ok(SwitchOutcome::Superseded);
+            }
+            Some(bytes?)
+        } else {
+            None
+        };
+        let target = ticket.target().clone();
+        let url = self
+            .routes()
+            .expect("delivery manifest")
+            .href(&target, &navigation::current_url())?;
+        let changed = target != self.snapshot();
+        let result = ticket.commit_before(bytes.as_deref(), || {
+            navigation::history(&url, true)?;
+            navigation::remember(Some(&target));
+            *self.0.committed_url.borrow_mut() = Some(url);
+            Ok(())
+        })?;
+        if result == SwitchOutcome::Committed {
+            crate::router::locale::changed(changed);
+        }
+        Ok(result)
+    }
+
+    /// Reactive locale-aware link. The input is a root-relative page URL; any
+    /// existing configured locale prefix is replaced, preserving query/hash.
+    pub fn href(&self, url: &str) -> Result<String, TranslationError> {
+        self.routes()
+            .ok_or_else(|| {
+                TranslationError::Initialization("controller has no routing configuration".into())
+            })?
+            .href(&self.locale(), url)
+    }
+
+    pub(crate) fn routes(&self) -> Option<pocopine_locale::LocaleRoutes> {
+        self.0.delivery.as_ref().map(|manifest| {
+            pocopine_locale::LocaleRoutes::new(self.locales().clone(), manifest.config.routing)
+        })
     }
 
     /// Fetch on a cache miss and atomically commit only the newest selection.
@@ -228,6 +272,14 @@ impl LocaleSwitch {
     /// the catalog must already be cached. Validation failures publish nothing.
     /// No callback or await occurs between validation and selection update.
     pub fn commit(self, bytes: Option<&[u8]>) -> Result<SwitchOutcome, TranslationError> {
+        self.commit_before(bytes, || Ok(()))
+    }
+
+    fn commit_before(
+        self,
+        bytes: Option<&[u8]>,
+        before: impl FnOnce() -> Result<(), TranslationError>,
+    ) -> Result<SwitchOutcome, TranslationError> {
         if !self.is_current() {
             return Ok(SwitchOutcome::Superseded);
         }
@@ -238,11 +290,14 @@ impl LocaleSwitch {
                 .install(self.target.clone(), bytes)?;
         }
         self.controller.0.catalogs.catalog(&self.target)?;
+        before()?;
         self.controller.update_document(&self.target)?;
         // Release borrows and retire this ticket before notifying effects:
         // custom synchronous schedulers may begin another switch reentrantly.
         self.controller.0.pending.borrow_mut().take();
-        self.controller.0.set_selected.set(self.target.clone());
+        if self.controller.snapshot() != self.target {
+            self.controller.0.set_selected.set(self.target.clone());
+        }
         Ok(SwitchOutcome::Committed)
     }
 }
