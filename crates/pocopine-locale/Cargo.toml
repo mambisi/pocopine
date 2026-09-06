@@ -26,6 +26,8 @@ pocopine-expr = { workspace = true }
 syn = { workspace = true, features = ["visit"] }
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 toml = "0.8"
+quick-xml = "0.38"
+roxmltree = "=0.21.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 icu_plurals = { version = "=2.3.0", default-features = false, features = ["datagen"] }

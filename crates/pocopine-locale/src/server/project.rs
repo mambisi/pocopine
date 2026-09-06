@@ -25,6 +25,13 @@ pub struct SourceTarget {
     pub audience: CatalogAudience,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DiscoveryOptions {
+    /// Authoring extraction can discover keys before catalog files exist.
+    /// Build/check use the default and still reject missing configured files.
+    pub allow_missing_catalogs: bool,
+}
+
 #[derive(Debug)]
 pub struct SourceFile {
     pub path: PathBuf,
@@ -88,6 +95,14 @@ impl ProjectDiscovery {
 /// and .poco files, tests behind cfg(test), and disabled components contribute
 /// no references. This is the IO boundary; compile_catalogs remains pure.
 pub fn discover_project(root: &Path, targets: &[SourceTarget]) -> ProjectDiscovery {
+    discover_project_with_options(root, targets, DiscoveryOptions::default())
+}
+
+pub fn discover_project_with_options(
+    root: &Path,
+    targets: &[SourceTarget],
+    options: DiscoveryOptions,
+) -> ProjectDiscovery {
     let root = match root.canonicalize() {
         Ok(root) => root,
         Err(error) => {
@@ -108,6 +123,7 @@ pub fn discover_project(root: &Path, targets: &[SourceTarget]) -> ProjectDiscove
         by_path: BTreeMap::new(),
         active: Vec::new(),
         out: ProjectDiscovery::default(),
+        options,
     };
     walker.config();
     // Sort the supplied roots too: the result must not depend on Cargo's order.
@@ -137,6 +153,7 @@ struct ProjectWalker {
     by_path: BTreeMap<PathBuf, u32>,
     active: Vec<PathBuf>,
     out: ProjectDiscovery,
+    options: DiscoveryOptions,
 }
 
 impl ProjectWalker {
@@ -221,6 +238,9 @@ impl ProjectWalker {
         }
         for locale in &config.locales {
             let path = self.root.join("locales").join(format!("{locale}.json"));
+            if self.options.allow_missing_catalogs && !path.exists() {
+                continue;
+            }
             if let Some(file) = self.read(&path, location) {
                 self.out.catalogs.push(CatalogSource {
                     locale: locale.clone(),

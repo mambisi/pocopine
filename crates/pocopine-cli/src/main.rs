@@ -87,6 +87,7 @@ fn main() -> Result<()> {
         }
         Cmd::Lsp(args) => lsp::run(args),
         Cmd::Fmt(args) => fmt::run(&args),
+        Cmd::Locale(args) => locale::run(&args),
     }
 }
 
