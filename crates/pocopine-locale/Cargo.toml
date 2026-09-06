@@ -1,0 +1,18 @@
+[package]
+name = "pocopine-locale"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Compiled translation catalogs, explicit locales, and shared CLDR message selection for Pocopine."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-crypto = { workspace = true }
+pocopine-stylekit = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+icu_plurals = { version = "=2.3.0", default-features = false, features = ["datagen"] }

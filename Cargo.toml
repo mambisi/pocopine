@@ -44,6 +44,7 @@ members = [
     "crates/pocopine-jobs",
     "crates/pocopine-launcher",
     "crates/pocopine-live",
+    "crates/pocopine-locale",
     "crates/pocopine-logging",
     "crates/pocopine-macros",
     "crates/pocopine-native",
@@ -151,6 +152,7 @@ pocopine-directives = { path = "crates/pocopine-directives", version = "0.2.0" }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.2.0" }
 pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.2.0" }
 pocopine-live = { path = "crates/pocopine-live", version = "0.2.0" }
+pocopine-locale = { path = "crates/pocopine-locale", version = "0.2.0" }
 pocopine-logging = { path = "crates/pocopine-logging", version = "0.2.0" }
 pocopine-macros = { path = "crates/pocopine-macros", version = "0.2.0" }
 pocopine-observe = { path = "crates/pocopine-observe", version = "0.2.0" }
