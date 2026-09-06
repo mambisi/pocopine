@@ -709,7 +709,7 @@ fn cache_control_header(value: &str) -> tiny_http::Header {
 /// session. Production keeps the header off here because after
 /// `pocopine build` every mutable artefact is hash-named anyway.
 fn cache_control_for(file_name: &str) -> Option<&'static str> {
-    if is_hashed_bundle_name(file_name) {
+    if is_hashed_bundle_name(file_name) || pocopine_assets::is_hashed_catalog_name(file_name) {
         return Some(ASSET_CACHE_CONTROL);
     }
     Some(CACHE_NO_CACHE)

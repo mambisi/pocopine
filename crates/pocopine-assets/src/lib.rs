@@ -88,6 +88,25 @@ pub fn is_hashed_bundle_name(file_name: &str) -> bool {
         .is_some_and(|(_, hash)| is_asset_hash(hash))
 }
 
+/// Fingerprinted browser translation catalogs emitted by the locale compiler.
+/// Host catalogs have a different audience and are never public assets.
+pub fn is_hashed_catalog_name(file_name: &str) -> bool {
+    let Some(stem) = file_name.strip_suffix(".json") else {
+        return false;
+    };
+    let Some((locale, hash)) = stem.split_once(".browser.") else {
+        return false;
+    };
+    !locale.is_empty()
+        && locale
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && hash.len() == 64
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Connection settings for an [`AssetStore`].
 ///
 /// The CLI fills this from `[package.metadata.pocopine.assets]` +
@@ -373,6 +392,21 @@ impl AssetStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn immutable_catalog_names_require_the_browser_audience_and_full_fingerprint() {
+        let hash = "a".repeat(64);
+        assert!(super::is_hashed_catalog_name(&format!(
+            "fr-CA.browser.{hash}.json"
+        )));
+        for name in [
+            format!("en.host.{hash}.json"),
+            "manifest.json".into(),
+            "en.browser.abcd1234.json".into(),
+            format!("../en.browser.{hash}.json"),
+        ] {
+            assert!(!super::is_hashed_catalog_name(&name));
+        }
+    }
     use super::*;
 
     #[test]

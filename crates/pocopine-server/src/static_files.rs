@@ -38,7 +38,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use axum::http::{HeaderValue, Request, Response, Uri, header};
-use pocopine_assets::{ASSET_CACHE_CONTROL, is_hashed_bundle_name};
+use pocopine_assets::{ASSET_CACHE_CONTROL, is_hashed_bundle_name, is_hashed_catalog_name};
 use tower::Service;
 use tower_http::services::ServeDir;
 use tower_http::services::fs::{DefaultServeDirFallback, ServeFileSystemResponseBody};
@@ -214,7 +214,7 @@ fn apply_vary(res: &mut Response<ServeFileSystemResponseBody>) {
 /// so the dev server and this production path can never disagree.
 fn is_content_hashed_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    is_hashed_bundle_name(name)
+    is_hashed_bundle_name(name) || is_hashed_catalog_name(name)
 }
 
 #[cfg(test)]

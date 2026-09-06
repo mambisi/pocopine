@@ -77,6 +77,7 @@ pub fn generate_rust(
         )
         .unwrap();
         writeln!(source,"mod {state_module} {{\nuse {runtime_path} as __runtime;\npub const BUILD_ID: &str = {build_id:?};\npub const MESSAGE_COUNT: usize = {};",compilation.messages.len()).unwrap();
+        configured_locales(&mut source, locales);
         if audience == CatalogAudience::Host {
             host_state(&mut source, compilation, locales)?;
         } else {
@@ -102,6 +103,19 @@ pub fn generate_rust(
     source.push_str("pub use __platform::*;\n#[allow(unused_imports)] pub(crate) use __platform::__template;\n}\n");
     syn::parse_file(&source).map_err(|error| format!("invalid generated locale Rust: {error}"))?;
     Ok(source)
+}
+
+fn configured_locales(out: &mut String, locales: &Locales) {
+    writeln!(out, "/// The validated locale set used by this build.\npub fn locales() -> __runtime::Locales {{ __runtime::Locales::new(__runtime::Locale::parse({:?}).expect(\"generated locale\"), [", locales.default_locale().as_str()).unwrap();
+    for locale in locales.supported() {
+        writeln!(
+            out,
+            "__runtime::Locale::parse({:?}).expect(\"generated locale\"),",
+            locale.as_str()
+        )
+        .unwrap();
+    }
+    out.push_str("]).expect(\"generated locale set\") }\n");
 }
 
 fn template_macro(

@@ -10,6 +10,7 @@ mod compiled;
 mod config;
 mod generated;
 mod locale;
+mod manifest;
 mod message;
 mod negotiate;
 mod plural;
@@ -35,6 +36,7 @@ pub use catalog::{
 pub use compiled::CompiledMessage;
 pub use config::{LocaleConfig, RoutingMode};
 pub use locale::{InvalidLocale, Locale, Locales};
+pub use manifest::{LocaleManifest, TextDirection};
 pub use message::{
     ArgumentKind, DateTimeStyle, FormatError, Message, MessageError, MessagePart, NumberStyle,
     StyleLength, Value,
@@ -48,3 +50,16 @@ pub use render::{DateTimeArg, MessageFormatter, RenderError, RenderedPart, TimeZ
 
 /// The vendored CLDR JSON distribution used to generate the rule tables.
 pub const CLDR_VERSION: &str = "48.2.0";
+
+/// Include this application's generated `t` module at the crate root.
+/// `pocopine build`, `run`, and `dev` supply the matching generated file.
+/// Standalone compiler clients may instead include their own generated file.
+#[macro_export]
+macro_rules! include_translations {
+    () => {
+        ::core::include!(::core::env!(
+            "POCOPINE_LOCALE_RS",
+            "translation code must be generated first; build this application with pocopine build, run, or dev"
+        ));
+    };
+}

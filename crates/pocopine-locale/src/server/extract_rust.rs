@@ -122,6 +122,9 @@ impl Walker<'_> {
     }
 
     fn reference(&mut self, parts: &[String], span: proc_macro2::Span) {
+        if runtime_api(parts) {
+            return;
+        }
         if parts.len() < 2 {
             self.error(
                 "Rust translation references require a complete t::module::message path",
@@ -201,6 +204,9 @@ impl Walker<'_> {
     }
 
     fn import_reference(&mut self, parts: &[String], span: proc_macro2::Span) {
+        if runtime_api(parts) {
+            return;
+        }
         self.out.extracted.references.push(MessageReference {
             key: parts.join("."),
             module: self.context.namespace().to_owned(),
@@ -717,6 +723,14 @@ fn conditional_tokens(stream: TokenStream) -> bool {
 
 /// Platform modules preserve a feature's message namespace. Crate-root
 /// references use `app.*`; real feature modules append their Rust names.
+fn runtime_api(parts: &[String]) -> bool {
+    parts.len() == 1
+        && matches!(
+            parts[0].as_str(),
+            "initialize" | "locales" | "catalogs" | "install" | "BUILD_ID" | "MESSAGE_COUNT"
+        )
+}
+
 pub(crate) fn module_namespace(parent: &str, child: &str) -> String {
     if matches!(child, "client" | "server") {
         parent.to_owned()
@@ -730,6 +744,25 @@ pub(crate) fn module_namespace(parent: &str, child: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_runtime_api_and_aliases_are_not_message_references() {
+        let result = extract(
+            r#"
+            use crate::t::{initialize as start, locales, BUILD_ID};
+            fn boot() {
+                start(locales());
+                t::install(lang, bytes);
+                let _ = (t::catalogs(), BUILD_ID, t::MESSAGE_COUNT);
+                t::common::welcome(lang, "Amina");
+            }
+        "#,
+            CatalogAudience::Browser,
+        );
+        assert!(result.extracted.diagnostics.is_empty());
+        assert_eq!(result.extracted.references.len(), 1);
+        assert_eq!(result.extracted.references[0].key, "common.welcome");
+    }
 
     fn extract(source: &str, audience: CatalogAudience) -> RustExtraction {
         let target = if audience == CatalogAudience::Browser {

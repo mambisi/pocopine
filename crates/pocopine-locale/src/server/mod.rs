@@ -8,6 +8,7 @@ mod codegen;
 mod compile;
 mod extract_rust;
 mod extract_template;
+mod preload;
 mod project;
 mod source;
 
@@ -23,5 +24,6 @@ pub use extract_rust::{
 };
 pub use extract_template::{Extraction, SourceContext, extract_template};
 pub use pocopine_stylekit::{Diagnostic, Severity, Span};
+pub use preload::{locale_directions, preload_fallbacks};
 pub use project::{ProjectDiscovery, SourceFile, SourceTarget, discover_project};
 pub use source::{SourceMessage, SourceMessages, parse_messages};
