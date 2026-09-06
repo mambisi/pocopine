@@ -34,6 +34,7 @@ icu_calendar = { version = "=2.3.0", default-features = false, features = ["comp
 icu_plurals = { version = "=2.3.0", default-features = false, features = ["compiled_data", "datagen"] }
 icu_time = { version = "=2.3.0", default-features = false, features = ["compiled_data", "datagen"] }
 quote = { workspace = true }
+prettyplease = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 icu_plurals = { version = "=2.3.0", default-features = false, features = ["datagen"] }

@@ -79,6 +79,11 @@ def check_runtime(data):
              "configured_data", *flags], PROJECT / f"configured-{label}.log", env)
         print(f"configured runtime: {label} passed", flush=True)
 
+    run(["cargo", "clippy", "-p", "pocopine-locale", "--offline", "--target",
+         "wasm32-unknown-unknown", "--features", "strict-parity", "--all-targets",
+         "--", "-D", "warnings"], PROJECT / "configured-strict-clippy.log", env)
+    print("configured runtime: strict lint passed", flush=True)
+
 
 def main():
     PROJECT.mkdir(parents=True, exist_ok=True)
