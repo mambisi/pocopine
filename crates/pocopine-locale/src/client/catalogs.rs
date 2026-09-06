@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use crate::{
     Catalog, CatalogAudience, CatalogIdentity, Locale, Locales, MessageId, PreparedCatalog,
@@ -8,11 +8,14 @@ use crate::{
 /// Validated catalogs loaded by the application boot/locale-switch pipeline.
 /// Language selection belongs to the caller's reactive state; this cache has
 /// no current locale. A failed install leaves every previous catalog intact.
-pub struct ClientCatalogs {
+#[derive(Clone)]
+pub struct ClientCatalogs(Rc<CatalogCache>);
+
+struct CatalogCache {
     locales: Locales,
     build_id: String,
     message_count: usize,
-    catalogs: BTreeMap<Locale, Rc<PreparedCatalog>>,
+    catalogs: RefCell<BTreeMap<Locale, Rc<PreparedCatalog>>>,
 }
 impl ClientCatalogs {
     pub fn new(
@@ -26,18 +29,21 @@ impl ClientCatalogs {
             CatalogAudience::Browser,
             message_count,
         )?;
-        Ok(Self {
+        Ok(Self(Rc::new(CatalogCache {
             locales,
             build_id: build_id.into(),
             message_count,
-            catalogs: BTreeMap::new(),
-        })
+            catalogs: RefCell::new(BTreeMap::new()),
+        })))
     }
     pub fn locales(&self) -> &Locales {
-        &self.locales
+        &self.0.locales
     }
-    pub fn install(&mut self, locale: Locale, bytes: &[u8]) -> Result<(), TranslationError> {
+    /// Clones share one cache, so generated Rust calls and reactive template
+    /// bindings observe the same validated installation.
+    pub fn install(&self, locale: Locale, bytes: &[u8]) -> Result<(), TranslationError> {
         if !self
+            .0
             .locales
             .supported()
             .any(|configured| configured == &locale)
@@ -47,18 +53,23 @@ impl ClientCatalogs {
             )));
         }
         let identity = CatalogIdentity::new(
-            self.build_id.clone(),
+            self.0.build_id.clone(),
             locale.clone(),
             CatalogAudience::Browser,
-            self.message_count,
+            self.0.message_count,
         )?;
         let prepared = PreparedCatalog::new(Catalog::load(bytes, &identity)?)?;
-        self.catalogs.insert(locale, Rc::new(prepared));
+        self.0
+            .catalogs
+            .borrow_mut()
+            .insert(locale, Rc::new(prepared));
         Ok(())
     }
     pub fn catalog(&self, locale: &Locale) -> Result<Rc<PreparedCatalog>, TranslationError> {
-        let effective = self.locales.resolve(locale);
-        self.catalogs
+        let effective = self.0.locales.resolve(locale);
+        self.0
+            .catalogs
+            .borrow()
             .get(effective)
             .cloned()
             .ok_or_else(|| TranslationError::CatalogNotLoaded(effective.clone()))
@@ -84,7 +95,7 @@ mod tests {
             ["en", "fr"].map(|l| l.parse().unwrap()),
         )
         .unwrap();
-        let mut cache = ClientCatalogs::new(locales, &"a".repeat(64), 1).unwrap();
+        let cache = ClientCatalogs::new(locales, &"a".repeat(64), 1).unwrap();
         let mut artifact = CatalogArtifact {
             format_version: CATALOG_FORMAT_VERSION,
             build_id: "a".repeat(64),

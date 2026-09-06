@@ -145,12 +145,23 @@ mod browser_tests {
             include_bytes!(concat!(env!("OUT_DIR"), "/en.json")),
         )
         .unwrap();
-        t::install(
-            "fr".parse().unwrap(),
-            include_bytes!(concat!(env!("OUT_DIR"), "/fr.json")),
+        let ui = pocopine_core::locale::client::LocaleController::new(
+            t::catalogs().unwrap(),
+            "en".parse().unwrap(),
         )
         .unwrap();
+        ui.begin_switch("fr".parse().unwrap())
+            .unwrap()
+            .commit(Some(include_bytes!(concat!(env!("OUT_DIR"), "/fr.json"))))
+            .unwrap();
         assert_eq!(items("fr", 2), "2 articles");
         assert_eq!(title("en"), "BROWSER_COPY_SENTINEL");
+        assert_eq!(
+            ui.error_message(
+                &pocopine_core::ServerError::Network("private diagnostic".into()),
+                t::cart::title
+            ),
+            "Titre"
+        );
     }
 }

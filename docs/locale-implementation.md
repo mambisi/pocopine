@@ -41,8 +41,11 @@ replace or narrow the RFC.
   generated API before wasm/server compilation. Message text stays out of wasm.
 - [ ] HTML shell starts catalog loading alongside wasm; splash waits for both;
   load failures and stale build IDs fail visibly and recover deliberately.
-- [ ] Reactive text/attribute translation; cancellation-safe atomic locale
-  switching; cleanup on unmount; no remount needed.
+- [x] Shared generated-API/browser cache and read-only committed locale signal;
+  cancellation-safe atomic selection after catalog validation.
+- [ ] Reactive template text/attribute translation; cleanup on unmount;
+  no remount needed. The locale signal/effect contract is tested, but template
+  installation remains pending.
 - [ ] Locale routing modes, precedence, explicit picker, persistence,
   `lang`/`dir`, and locale-aware links.
 
@@ -52,12 +55,12 @@ replace or narrow the RFC.
   Accept-Language weights/exclusions and selection-source metadata.
 - [x] Negotiated typed request locale available before framework rejections;
   locale fixed for streaming calls, with incoming explicit RPC preference.
-- [ ] Outgoing RPC metadata propagation from committed UI locale.
+- [x] Outgoing buffered/replayed/streaming RPC metadata from committed UI locale.
 - [x] Catalog-backed guard/body/extractor rejection payloads, stable error
   variants, and public payload access without diagnostic Display prefixes.
-- [ ] Public error/validation text translated without changing classification;
-  internal diagnostics separated from public payload; network errors localized
-  on the client. Preserve existing wire compatibility.
+- [x] Generated public error/validation functions and a client display adapter
+  preserve classification and wire compatibility. Server payloads stay verbatim;
+  network diagnostics use an application-generated localized public message.
 - [x] Server/worker catalog initialization, standalone use, per-recipient locale
   snapshots, retries, stable semantic job inputs across catalog deployments.
 - [ ] SSR stamping and hydration claims, structural plural parity, metadata and
@@ -254,3 +257,41 @@ let server = pocopine_server::Server::new(router).with_locale(locale);
 Handlers extract `pocopine_server::Extension<pocopine_locale::Locale>` and pass
 the value to generated functions. Domain adapters choose translated public
 application messages; the framework adapter handles pre-handler rejections.
+
+2026-09-06, browser state and outgoing RPC checkpoint:
+
+- The opt-in core/umbrella `locale` feature exposes `locale::client::LocaleController`.
+  `t::catalogs()` shares the generated API's cache with it. Initialization
+  requires the exact selected catalog to be ready, and the public locale signal
+  is read-only. The `locale-strict-parity` feature forwards to the leaf backend;
+  project configuration/build selection still needs wiring.
+- Switch tickets publish only after validation. New selections supersede old
+  work, including selecting the currently displayed language. Dropped futures,
+  failed/stale catalogs, and late superseded failures leave the visible language
+  intact. Cached selections avoid the loader. This is the selection contract;
+  the actual HTML preloader, HTTP catalog transport, URL/cookie persistence and
+  document metadata are still pending.
+- Browser RPCs capture an untracked committed locale before awaiting transport.
+  Middleware replays retain that header and SSE requests carry one snapshot for
+  the stream lifetime. Applications without an active locale retain prior
+  behavior. Host requests continue to have explicit locale inputs.
+- `LocaleController::error_message` displays server-owned public payloads as-is
+  and formats network error copy with an application-generated arg-less function.
+  Diagnostic text and ServerError classification stay intact. The isolated
+  generated-API fixture exercises this function and shared cache installation.
+- Six headless Chrome tests pass with both default Intl and strict ICU backends: failed/stale
+  catalogs, racing/cancelled loads, cache hits, reactive updates/release,
+  untracked RPC snapshots, public error display, and actual browser Request
+  headers for buffered calls, middleware replays and an SSE response reader.
+  The network is intercepted at `window.fetch`; server negotiation is exercised
+  separately by the real HTTP fixture.
+- The full generated-API verifier passes, including host recipient and HTTP
+  tests, intentional compile failures, wasm execution and release byte audits.
+  The standalone fixture is 422,077 bytes raw / 106,741 gzip. Its normal browser
+  dependency tree still excludes ICU formatting and Jiff; core is a wasm test
+  dependency here, so this measurement does not measure the new controller or
+  its RPC integration. Full integration and growth gates remain open above.
+- Focused host and wasm `--all-targets -D warnings` Clippy checks pass for core,
+  the umbrella crate and locale; the core/umbrella strict-parity wasm check also
+  passes. Workspace formatting and diff whitespace checks pass. Full workspace
+  gates remain pending.

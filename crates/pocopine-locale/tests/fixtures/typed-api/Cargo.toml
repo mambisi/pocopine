@@ -39,6 +39,7 @@ tokio = { version = "1", features = ["macros", "rt", "time"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+pocopine-core = { path = "../../../../pocopine-core", features = ["locale"] }
 
 [profile.release]
 opt-level = "z"

@@ -36,6 +36,8 @@ pub mod focus;
 pub mod handle;
 pub mod handler;
 pub mod lifecycle;
+#[cfg(feature = "locale")]
+pub mod locale;
 pub mod loop_scope;
 pub mod magics;
 pub mod model_runtime;

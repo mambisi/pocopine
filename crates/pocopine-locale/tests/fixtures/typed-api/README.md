@@ -8,7 +8,11 @@ file from the workspace lock and uses the workspace target directory.
 The fixture builds the actual generated API for host and wasm. It checks typed
 arguments (including names that overlap Rust keywords), namespace collisions,
 missing keys, host-only function pruning, explicit catalog initialization and
-default browser dependencies. Release exports keep translation calls reachable
+default browser dependencies. Its wasm test also installs a catalog through the
+core locale controller and reads it through generated functions, then formats
+client network-error copy using a generated function. Core is a test dependency
+and does not contribute to this fixture's release binary.
+Release exports keep translation calls reachable
 while the verifier checks that catalog text and static keys stay out of wasm.
 The reported size is for the entire fixture, not the marginal locale cost.
 
