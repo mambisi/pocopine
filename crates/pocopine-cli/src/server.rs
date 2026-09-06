@@ -563,39 +563,32 @@ fn handle(root: &Path, request: tiny_http::Request) {
         root.join(rel)
     };
     let looks_like_asset = looks_like_asset_path(rel);
+    let private_candidate = canonical_static_file(&candidate).is_some()
+        && public_static_file(root, &candidate).is_none();
 
-    let canonical = candidate
-        .canonicalize()
-        .ok()
-        .filter(|p| p.starts_with(root));
-
-    // Serve the resolved path when it exists.
-    if let Some(canonical) = canonical {
-        let target = if canonical.is_dir() {
-            canonical.join("index.html")
-        } else {
-            canonical
-        };
-        if let Ok(body) = std::fs::read(&target) {
-            let mime = mime_of(&target);
-            let body = client_modules::inject_html_if_needed(root, &target, body);
-            let header =
-                tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap();
-            let mut response = tiny_http::Response::from_data(body).with_header(header);
-            let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if let Some(cache) = cache_control_for(name) {
-                response = response.with_header(cache_control_header(cache));
-            }
-            let _ = request.respond(response);
-            return;
+    // Resolve and check the final file, including directory index symlinks.
+    if let Some(target) = public_static_file(root, &candidate)
+        && let Ok(body) = std::fs::read(&target)
+    {
+        let mime = mime_of(&target);
+        let body = client_modules::inject_html_if_needed(root, &target, body);
+        let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap();
+        let mut response = tiny_http::Response::from_data(body).with_header(header);
+        let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if let Some(cache) = cache_control_for(name) {
+            response = response.with_header(cache_control_header(cache));
         }
+        let _ = request.respond(response);
+        return;
     }
 
     // Fall back to the root index for non-asset paths (SPA history
     // fallback). Asset-looking paths 404 so bad imports are not masked.
-    if !looks_like_asset {
-        let fallback = index_html(root);
-        if let Ok(body) = std::fs::read(&fallback) {
+    if !looks_like_asset && !private_candidate {
+        let fallback = public_static_file(root, &index_html(root));
+        if let Some(fallback) = fallback
+            && let Ok(body) = std::fs::read(&fallback)
+        {
             let body = client_modules::inject_html_if_needed(root, &fallback, body);
             let header = tiny_http::Header::from_bytes(
                 &b"Content-Type"[..],
@@ -612,6 +605,35 @@ fn handle(root: &Path, request: tiny_http::Request) {
     }
 
     let _ = request.respond(tiny_http::Response::from_string("not found").with_status_code(404));
+}
+
+/// Source catalogs can contain host-only copy. Only generated browser catalogs
+/// below `pkg/locales` are public. Canonical checks also cover asset aliases and
+/// directory-index symlinks into these private build/source directories.
+fn canonical_static_file(candidate: &Path) -> Option<std::path::PathBuf> {
+    if candidate.is_dir() {
+        candidate.join("index.html").canonicalize().ok()
+    } else {
+        candidate.canonicalize().ok()
+    }
+}
+
+fn public_static_file(root: &Path, candidate: &Path) -> Option<std::path::PathBuf> {
+    let canonical = canonical_static_file(candidate)?;
+    canonical.strip_prefix(root).ok()?;
+    // These are source/build directories, even after `cargo clean`. Compare
+    // physical directories so symlink aliases cannot expose their contents.
+    for directory in ["target/pocopine/locale", "locales"] {
+        if root
+            .join(directory)
+            .canonicalize()
+            .ok()
+            .is_some_and(|private| canonical.starts_with(private))
+        {
+            return None;
+        }
+    }
+    Some(canonical)
 }
 
 /// The index.html the server hands out for entry-point requests
@@ -652,10 +674,7 @@ fn asset_route_response(
     }
 
     let candidate = root.join("assets").join(path);
-    let canonical = candidate
-        .canonicalize()
-        .ok()
-        .filter(|p| p.starts_with(root))?;
+    let canonical = public_static_file(root, &candidate)?;
     let body = std::fs::read(&canonical).ok()?;
 
     let actual = asset_hash_prefix(&body);
@@ -759,6 +778,100 @@ mod tests {
         std::fs::create_dir(root.join("pkg")).unwrap();
         std::fs::write(root.join("pkg/index.html"), "generated").unwrap();
         assert_eq!(index_html(root), root.join("pkg/index.html"));
+    }
+
+    #[test]
+    fn static_server_keeps_locale_sources_and_generated_host_files_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for path in [
+            "target/pocopine/locale/build",
+            "locales",
+            "pkg/locales",
+            "assets",
+            "alias",
+            "pricing",
+        ] {
+            std::fs::create_dir_all(root.join(path)).unwrap();
+        }
+        for file in [
+            "target/pocopine/locale/build/host.json",
+            "target/pocopine/locale/build/pocopine_locale.rs",
+            "locales/en.json",
+        ] {
+            std::fs::write(root.join(file), "HOST_COPY_SENTINEL").unwrap();
+        }
+        std::fs::write(root.join("pkg/index.html"), "public shell").unwrap();
+        std::fs::write(root.join("pkg/locales/en.browser.json"), "browser copy").unwrap();
+        let mut cases = vec![
+            ("/target/pocopine/locale/build/host.json", 404, "not found"),
+            (
+                "/target/pocopine/locale/build/pocopine_locale.rs",
+                404,
+                "not found",
+            ),
+            ("/locales/en.json", 404, "not found"),
+            ("/pkg/locales/en.browser.json", 200, "browser copy"),
+            ("/pricing", 200, "public shell"),
+        ];
+        if cfg!(unix) {
+            // Kept behind a module-local target gate for Windows test builds.
+            cases.extend(static_locale_symlink_cases(&root));
+        }
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let count = cases.len();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..count {
+                let request = server
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap()
+                    .unwrap();
+                handle(&root, request);
+            }
+        });
+        for (path, status, body) in cases {
+            let response = reqwest::blocking::get(format!("http://{address}{path}")).unwrap();
+            assert_eq!(response.status().as_u16(), status, "{path}");
+            assert_eq!(response.text().unwrap(), body, "{path}");
+        }
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn source_catalogs_stay_private_without_a_build_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("locales")).unwrap();
+        let source = root.join("locales/en.json");
+        std::fs::write(&source, "HOST_COPY_SENTINEL").unwrap();
+        assert!(public_static_file(&root, &source).is_none());
+    }
+
+    #[cfg(unix)]
+    fn static_locale_symlink_cases(root: &Path) -> Vec<(&'static str, u16, &'static str)> {
+        use std::os::unix::fs::symlink;
+        let sources = root.join("assets/source-catalogs");
+        std::fs::rename(root.join("locales"), &sources).unwrap();
+        symlink(&sources, root.join("locales")).unwrap();
+        let build = root.join("assets/private-build");
+        std::fs::rename(root.join("target/pocopine/locale"), &build).unwrap();
+        symlink(&build, root.join("target/pocopine/locale")).unwrap();
+        let source = root.join("locales/en.json");
+        symlink(&source, root.join("assets/leak.json")).unwrap();
+        symlink(&source, root.join("alias/index.html")).unwrap();
+        vec![
+            ("/assets/source-catalogs/en.json", 404, "not found"),
+            ("/assets/private-build/build/host.json", 404, "not found"),
+            ("/assets/leak.json", 404, "not found"),
+            ("/assets/deadbeef/leak.json", 404, "not found"),
+            ("/alias/", 404, "not found"),
+        ]
+    }
+
+    #[cfg(not(unix))]
+    fn static_locale_symlink_cases(_: &Path) -> Vec<(&'static str, u16, &'static str)> {
+        Vec::new()
     }
 
     // RFC-100 — content-addressed asset route.
