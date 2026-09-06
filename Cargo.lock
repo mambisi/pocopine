@@ -7803,9 +7803,15 @@ version = "0.2.0"
 dependencies = [
  "icu_plurals",
  "pocopine-crypto",
+ "pocopine-expr",
  "pocopine-stylekit",
+ "pocopine-template-parser",
+ "proc-macro2",
  "serde",
  "serde_json",
+ "syn 2.0.118",
+ "tempfile",
+ "toml 0.8.23",
 ]
 
 [[package]]
