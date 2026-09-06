@@ -228,3 +228,42 @@ Open catalog text takes precedence over disk when the editor sends it to the
 server; otherwise the catalog is read fresh for each request.
 
 Configured ICU data slicing and SSR integration are still tracked in the [implementation checklist](locale-implementation.md).
+
+
+## Bundle size verification
+
+The CLI emits a fingerprinted private runtime-data directory alongside the
+private generated API. It contains only the configured CLDR plural predicates
+and the ICU payloads requested by the supported number/date/time formatters.
+Host rendering and `strict_parity = true` use that ICU pack. The default browser
+uses Intl and includes no ICU formatting dependencies. Message-only edits keep
+the runtime-data identity stable. Standalone Rust consumers without CLI-generated
+data keep the complete pinned data as a compatibility fallback.
+
+Run `python3 tools/check-locale-data.py` after building `pocopine-cli`. The audit
+builds an isolated copy of the example through the CLI, inspects release bundles
+and public catalogs, and runs the configured-data tests on host, default Wasm,
+and strict-parity Wasm. It retains logs, bundles and `results.json` beneath
+`target/locale-data-audit`. `POCOPINE_CLI` and `CARGO_TARGET_DIR` can override
+those paths; Wasm tests require `wasm-bindgen-test-runner` and Node.
+
+Measured on 2026-09-06 with the pinned toolchain, wasm-pack's release build and
+no wasm-opt (whole application fixture, bytes):
+
+| Backend | Locales | Wasm | Gzip | ICU pack |
+| --- | ---: | ---: | ---: | ---: |
+| Intl | 1 | 1,516,253 | 406,081 | absent |
+| Intl | 3 | 1,517,706 | 406,638 | absent |
+| Intl | 8 | 1,516,685 | 406,998 | absent |
+| Strict parity | 1 | 2,261,215 | 621,602 | 625 |
+| Strict parity | 3 | 2,262,212 | 622,490 | 1,642 |
+| Strict parity | 8 | 2,262,111 | 623,347 | 3,950 |
+
+Expanding a used message changed three public catalogs from 2,244 to 89,184
+bytes, while Wasm remained exactly 1,517,706 bytes. Adding 100 unused keys with
+large values changed neither the public catalog size nor the Wasm size. The
+auditor rejects message/key sentinels in Wasm, unused messages in assets, and
+French ICU month text in the English-only strict bundle. Configured locale
+metadata and plural code are small but not literally free. These numbers are
+whole-fixture measurements, not a claim that the entire application cost comes
+from locale support; compiler optimization can make raw sizes non-monotonic.

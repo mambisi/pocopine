@@ -32,3 +32,6 @@ pub use project::{
 };
 pub use source::{SourceMessage, SourceMessages, parse_messages};
 pub use xliff::{XliffDocument, XliffUnit, export_xliff, import_xliff};
+
+mod data;
+pub use data::{formatting_data, plural_data};

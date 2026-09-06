@@ -20,6 +20,7 @@ pub use platform::{editor_completions, editor_hover, load, prepare, publish, run
 pub struct Prepared {
     pub rust: PathBuf,
     pub directory: PathBuf,
+    pub runtime_data: PathBuf,
     pub features: Vec<String>,
     pub manifest: LocaleManifest,
 }
@@ -27,6 +28,7 @@ pub struct Prepared {
 impl Prepared {
     pub fn configure(&self, command: &mut Command) {
         command.env("POCOPINE_LOCALE_RS", &self.rust);
+        command.env("POCOPINE_LOCALE_DATA_DIR", &self.runtime_data);
         if !self.features.is_empty() {
             command.arg("--features").arg(self.features.join(","));
         }

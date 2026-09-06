@@ -8,7 +8,10 @@
 mod catalog;
 mod compiled;
 mod config;
-mod generated;
+#[allow(unused_parens, clippy::nonminimal_bool, clippy::manual_is_multiple_of)]
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/plural_rules.rs"));
+}
 mod locale;
 mod manifest;
 mod message;

@@ -87,6 +87,8 @@ impl PluralArg {
         self.negative
     }
 
+    // Some configured locale sets never use the CLDR trailing-zero operand.
+    #[allow(dead_code)]
     pub(crate) fn t(self) -> u64 {
         let mut fraction = self.f;
         while fraction != 0 && fraction.is_multiple_of(10) {
@@ -192,6 +194,10 @@ impl fmt::Display for PluralArg {
 pub struct CardinalRule(u8);
 
 impl CardinalRule {
+    pub(crate) fn id(self) -> u8 {
+        self.0
+    }
+
     pub fn for_locale(locale: &Locale) -> Self {
         // CLDR's plural component has its own (empty in this snapshot)
         // parent override table. Text fallback such as sr-Latn -> root or
@@ -207,7 +213,7 @@ impl CardinalRule {
     }
 
     pub fn category(self, value: PluralArg) -> PluralCategory {
-        crate::generated::category(self.0, value)
+        crate::generated::category(self.id(), value)
     }
 }
 

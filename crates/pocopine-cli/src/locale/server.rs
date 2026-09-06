@@ -320,6 +320,21 @@ pub fn prepare(project: &Path, release: bool) -> Result<Option<Prepared>> {
         .context("locale compilation produced no build identity")?;
     let directory = project.join("target/pocopine/locale").join(build_id);
     let rust = directory.join("pocopine_locale.rs");
+    let locales = config.validate()?;
+    let plural = pocopine_locale::server::plural_data(&locales).map_err(|e| anyhow!(e))?;
+    let data = pocopine_locale::server::formatting_data(&locales).map_err(|e| anyhow!(e))?;
+    let data_id = pocopine_crypto::sha256_hex(
+        &[
+            b"pocopine-locale-runtime-data-1\0".as_slice(),
+            plural.as_bytes(),
+            &data,
+        ]
+        .concat(),
+    );
+    let runtime_data = project.join("target/pocopine/locale/data").join(data_id);
+    write(&runtime_data.join("plural.rs"), plural.as_bytes())?;
+    write(&runtime_data.join("formatting.blob"), &data)?;
+
     let mut catalogs = BTreeMap::new();
     for catalog in &compiled.catalogs {
         if catalog.artifact.audience == CatalogAudience::Browser {
@@ -334,6 +349,7 @@ pub fn prepare(project: &Path, release: bool) -> Result<Option<Prepared>> {
     write(&rust, code.as_bytes())?;
     let prepared = Prepared {
         rust,
+        runtime_data,
         directory,
         features,
         manifest: LocaleManifest {
@@ -355,9 +371,9 @@ pub fn load(project: &Path) -> Result<Option<Prepared>> {
     let prepared = fs::read(project.join(BUILD_INFO)).context(
         "locale generation is missing; run the browser build before building configured binaries",
     )?;
-    Ok(Some(
-        serde_json::from_slice(&prepared).context("read prepared locale build")?,
-    ))
+    Ok(Some(serde_json::from_slice(&prepared).context(
+        "read prepared locale build; rebuild the application with the Pocopine CLI",
+    )?))
 }
 
 pub fn publish(project: &Path, prepared: &Prepared) -> Result<()> {
@@ -502,6 +518,7 @@ mod tests {
         write(&directory.join("pocopine_locale.rs"), b"host copy").unwrap();
         let prepared = Prepared {
             rust: directory.join("pocopine_locale.rs"),
+            runtime_data: directory.clone(),
             directory,
             features: vec![],
             manifest: LocaleManifest {
