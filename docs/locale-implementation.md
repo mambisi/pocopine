@@ -21,9 +21,11 @@ replace or narrow the RFC.
 
 ## Compiler and authoring
 
-- [ ] `[locale]` configuration; deterministic `.poco`, inline `poco!`, and Rust
-  extraction with source diagnostics and target reachability.
-- [ ] Static keys; module locality and `common.*`; duplicate/leaf-branch errors;
+- [x] `[locale]` configuration; deterministic `.poco`, inline `poco!`, and Rust
+  discovery from supplied target roots/cfg, with original source diagnostics.
+- [ ] Resolve Cargo browser/server/worker targets, features and build-script
+  cfg; wire discovery into the CLI and application build pipeline.
+- [x] Static keys; module locality and `common.*`; duplicate/leaf-branch errors;
   default-locale missing-key and argument/type validation; orphan reporting.
 - [ ] Typed generated Rust functions with explicit locale; completion metadata;
   host-only message retention and separation from browser assets.
@@ -113,3 +115,29 @@ Implementation and verification are in progress.
   regeneration fixed-point check, `git diff --check`, and workspace formatting
   pass. The wasm normal-dependency tree contains no ICU4X or host compiler.
   Full workspace host/wasm gates and browser verification remain pending.
+
+2026-09-06, source discovery checkpoint:
+
+- Added strict `[locale]` configuration and `server::discover_project`. The
+  caller supplies selected Rust roots with the actual target cfg/feature set.
+  Discovery follows active modules, literal includes, component template paths
+  and inline templates; unrelated source files do not contribute references.
+  Source tables, diagnostics and catalog outputs are deterministic.
+- Rust extraction handles nested `cfg`/`cfg_attr`, `#[server]` bodies, import
+  aliases and function re-exports. Namespace imports retain no unused messages.
+  `client`/`server` module wrappers preserve the feature namespace; crate-root
+  references use `app.*`. Rust module directories and `#[path]` resolution follow
+  the [Rust Reference](https://doc.rust-lang.org/reference/items/modules.html).
+- Conditional references inside opaque macros, components declared inside
+  opaque macros, translation glob imports and unresolved generated includes
+  produce diagnostics. The generated `OUT_DIR/pocopine_locale.rs` include is
+  reserved for the upcoming locale code generator. General macro expansion and
+  Cargo target/feature resolution are not claimed by this source-only API.
+- Shared interpolation parsing fixes multibyte text corruption in compiled
+  static segments. Inline literal decoding is shared with the real component
+  macro; extraction maps decoded text back to original Rust byte locations.
+- Verification: 31 locale unit tests, the 86,016-case ICU4X oracle, 56 shared
+  parser tests, 134 macro unit tests, and all 9 existing inline macro expansion
+  integration tests pass. Focused host strict Clippy, wasm locale strict Clippy
+  and build, workspace formatting and diff whitespace checks pass. Full workspace gates,
+  generated APIs, CLI/build wiring and runtime integration remain pending.

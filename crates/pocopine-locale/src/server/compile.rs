@@ -23,6 +23,9 @@ pub enum ReferenceKind {
     Attribute,
     /// The generated Rust signature enforces arity/types at its call site.
     Rust,
+    /// A Rust use/re-export. A catalog namespace imports no message; importing
+    /// a function retains it even when calls use a re-exported path.
+    RustImport,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +164,15 @@ fn compile(
     };
     let mut reached: BTreeMap<String, bool> = BTreeMap::new();
     for reference in references {
+        if matches!(reference.kind, ReferenceKind::RustImport)
+            && (reference.key.is_empty()
+                || (!default.contains_key(&reference.key)
+                    && default
+                        .keys()
+                        .any(|key| key.starts_with(&format!("{}.", reference.key)))))
+        {
+            continue;
+        }
         if !reference.key.starts_with("common.")
             && !reference.key.starts_with(&format!("{}.", reference.module))
         {

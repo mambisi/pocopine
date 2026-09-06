@@ -5,6 +5,7 @@
 //! ICU4X is only a host-side test oracle for those rules.
 
 mod catalog;
+mod config;
 mod generated;
 mod locale;
 mod message;
@@ -17,6 +18,7 @@ pub use catalog::{
     CATALOG_FORMAT_VERSION, Catalog, CatalogArtifact, CatalogAudience, CatalogEntry, CatalogError,
     CatalogIdentity, CatalogMessage, MessageId,
 };
+pub use config::{LocaleConfig, RoutingMode};
 pub use locale::{InvalidLocale, Locale, Locales};
 pub use message::{
     ArgumentKind, DateTimeStyle, FormatError, Message, MessageError, MessagePart, NumberStyle,
