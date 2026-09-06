@@ -517,6 +517,13 @@ where
     if let Some(traceparent) = call.traceparent() {
         headers.push(("traceparent".to_string(), traceparent));
     }
+    #[cfg(all(feature = "locale", target_arch = "wasm32"))]
+    if let Some(locale) = crate::locale::client::rpc_locale() {
+        headers.push((
+            pocopine_locale::LOCALE_HEADER.to_string(),
+            locale.to_string(),
+        ));
+    }
     let request = FetchRequest {
         url: url.to_string(),
         method: "POST".to_string(),
@@ -641,6 +648,12 @@ where
     let _ = headers.set(CLIENT_SESSION_HEADER, client_session_id());
     if let Some(traceparent) = call.traceparent() {
         let _ = headers.set("traceparent", &traceparent);
+    }
+    #[cfg(feature = "locale")]
+    if let Some(locale) = crate::locale::client::rpc_locale() {
+        headers
+            .set(pocopine_locale::LOCALE_HEADER, locale.as_str())
+            .map_err(|e| ServerError::Network(format!("locale header: {e:?}")))?;
     }
     init.set_headers(&headers);
 

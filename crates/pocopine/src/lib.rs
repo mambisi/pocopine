@@ -7,6 +7,8 @@
 pub use pocopine_auth::{AuthUser, Permission, Principal, Role, Session};
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
+#[cfg(feature = "locale")]
+pub use pocopine_core::locale;
 pub use pocopine_core::{
     App, AppBootCompleted, AppBootFailed, AppBootStarted, AppPlugin, Body, Component,
     ComponentCallbackFrame, ComponentEvent, ComponentMountFn, ComponentMounted, ComponentPluginExt,

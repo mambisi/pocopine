@@ -25,6 +25,8 @@ default = ["runtime-expr-fallback"]
 devtools = []
 mount-profiler = []
 runtime-expr-fallback = []
+locale = ["dep:pocopine-locale"]
+locale-strict-parity = ["locale", "pocopine-locale/strict-parity"]
 
 [dependencies]
 pocopine-codec = { workspace = true }
@@ -33,6 +35,7 @@ pocopine-codec = { workspace = true }
 pocopine-crypto = { workspace = true }
 # RFC-123 §5.5 — the browser end of the trunk (client spans).
 pocopine-observe = { workspace = true }
+pocopine-locale = { workspace = true, optional = true }
 tracing = { workspace = true }
 pocopine-expr = { workspace = true }
 # NOTE: wasm-bindgen's `enable-interning` feature was tried (RFC-095

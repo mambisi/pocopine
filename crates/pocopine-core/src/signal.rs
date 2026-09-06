@@ -103,6 +103,11 @@ impl<T: Clone + 'static> Signal<T> {
         track_signal(self.id);
         self.cell.borrow().clone()
     }
+
+    /// Read a boundary snapshot without subscribing the current effect.
+    pub fn get_untracked(&self) -> T {
+        self.cell.borrow().clone()
+    }
 }
 
 impl<T: 'static> Signal<T> {
