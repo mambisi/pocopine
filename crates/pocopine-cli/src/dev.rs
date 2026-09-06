@@ -314,6 +314,10 @@ fn watch_dev_paths(watcher: &mut DevWatcher, project: &Path, src_dir: &Path) -> 
     if assets_dir.is_dir() {
         watcher.watch(&assets_dir, RecursiveMode::Recursive)?;
     }
+    let locales_dir = project.join("locales");
+    if locales_dir.is_dir() {
+        watcher.watch(&locales_dir, RecursiveMode::Recursive)?;
+    }
     Ok(())
 }
 
@@ -384,6 +388,14 @@ impl Change {
     }
 
     fn from_path(project: &Path, path: &Path) -> Option<Self> {
+        let locale_project = project.join("pocopine.toml").is_file();
+        if path.starts_with(project.join("locales")) || path == project.join("pocopine.toml") {
+            return Some(Self {
+                wasm: true,
+                server: true,
+                ..Self::default()
+            });
+        }
         // RFC-100 — anything under assets/ rebuilds both targets so
         // every `asset!` expansion (wasm or server bin) re-hashes.
         if path.starts_with(project.join("assets")) {
@@ -411,13 +423,22 @@ impl Change {
             }
             return Some(Self {
                 wasm: true,
-                server: is_rust_source_path(path),
+                // A template can change dense message IDs/build identity.
+                // Keep the host's generated API paired with that compilation.
+                server: is_rust_source_path(path) || locale_project,
                 ..Self::default()
             });
         }
 
         if path.parent() == Some(project) {
             let name = path.file_name().and_then(|name| name.to_str())?;
+            if locale_project && matches!(name, "Cargo.toml" | "Cargo.lock" | "build.rs") {
+                return Some(Self {
+                    wasm: true,
+                    server: true,
+                    ..Self::default()
+                });
+            }
             if is_package_manifest(name) {
                 return Some(Self {
                     client: true,
@@ -486,6 +507,23 @@ fn is_package_lockfile(name: &str) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn locale_template_catalog_and_cfg_edits_rebuild_both_sides() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("pocopine.toml"), "[locale]").unwrap();
+        for path in [
+            "src/App.poco",
+            "locales/fr.json",
+            "pocopine.toml",
+            "Cargo.toml",
+            "Cargo.lock",
+            "build.rs",
+        ] {
+            let change = Change::from_path(temp.path(), &temp.path().join(path)).unwrap();
+            assert!(change.wasm && change.server, "{path}");
+        }
+    }
 
     fn project() -> PathBuf {
         PathBuf::from("/tmp/pocopine-dev-watch")

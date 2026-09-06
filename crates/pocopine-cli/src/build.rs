@@ -26,6 +26,7 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("could not resolve project path: {}", path.display()))?;
     with_wasm_build_lock(&path, || {
+        let locale = crate::locale::prepare(&path, release)?;
         println!("▶ wasm-pack build ({})", path.display());
         let project_tools = tools::ProjectTools::load(&path)?;
         let mut cmd = project_tools.wasm_pack().command();
@@ -46,6 +47,9 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
             cmd.arg("--dev");
         }
         cmd.current_dir(&path);
+        if let Some(locale) = &locale {
+            locale.configure(&mut cmd);
+        }
         // RFC-100 §6 — export the assets/ fingerprint so `asset!`
         // re-expands (and re-hashes) when the assets tree changed.
         crate::assets_sync::apply_fingerprint_env(&mut cmd, &path);
@@ -54,6 +58,9 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
             .context("failed to invoke wasm-pack (is it on $PATH?)")?;
         if !status.success() {
             bail!("wasm-pack build failed with status {status}");
+        }
+        if let Some(locale) = &locale {
+            crate::locale::publish(&path, locale)?;
         }
         hash_pkg_bundle(&path)?;
         Ok(())
@@ -333,6 +340,9 @@ fn write_pkg_index_html(project: &Path, hashed: &[(String, String)]) -> Result<(
     for (name, hash) in hashed {
         html = rewrite_bundle_refs(&html, name, hash);
     }
+    if let Some(locale) = crate::locale::load(project)? {
+        html = crate::locale::inject_html(&html, &locale)?;
+    }
     let loader = crate::config::load(project)
         .ok()
         .and_then(|c| c.loader)
@@ -488,6 +498,9 @@ fn build_bin(path: &Path, bin: &str, release: bool) -> Result<()> {
     let project_tools = tools::ProjectTools::load(&project)?;
     let mut cmd = project_tools.cargo().command();
     cmd.arg("build").arg("--bin").arg(bin);
+    if let Some(locale) = crate::locale::load(&project)? {
+        locale.configure(&mut cmd);
+    }
     if release {
         cmd.arg("--release");
     }

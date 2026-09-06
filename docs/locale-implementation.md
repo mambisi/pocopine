@@ -13,8 +13,8 @@ for a message without arguments; `$t('common.welcome', name)` supplies values
 in the generated signature's alphabetical argument-name order. There is no
 `pp-t` or `pp-t:*` directive. A direct `$t` binding in `pp-text` preserves rich
 message child elements. This clarification supersedes the original directive
-examples. Compiled template support is verified below; CLI/build delivery is
-still in progress.
+examples. Compiled template support and CLI/build delivery are verified below;
+routing and authoring tools remain in progress.
 
 ## Shared runtime and catalogs
 
@@ -37,7 +37,7 @@ still in progress.
 
 - [x] `[locale]` configuration; deterministic `.poco`, inline `poco!`, and Rust
   discovery from supplied target roots/cfg, with original source diagnostics.
-- [ ] Resolve Cargo browser/server/worker targets, features and build-script
+- [x] Resolve Cargo browser/server/worker targets, features and build-script
   cfg; wire discovery into the CLI and application build pipeline.
 - [x] Static keys; module locality and `common.*`; duplicate/leaf-branch errors;
   default-locale missing-key and argument/type validation; orphan reporting.
@@ -48,9 +48,9 @@ still in progress.
 
 ## Browser and delivery
 
-- [ ] Build produces fingerprinted per-locale catalogs, mapping metadata, and
+- [x] Build produces fingerprinted per-locale catalogs, mapping metadata, and
   generated API before wasm/server compilation. Message text stays out of wasm.
-- [ ] HTML shell starts catalog loading alongside wasm; splash waits for both;
+- [x] HTML shell starts catalog loading alongside wasm; splash waits for both;
   load failures and stale build IDs fail visibly and recover deliberately.
 - [x] Shared generated-API/browser cache and read-only committed locale signal;
   cancellation-safe atomic selection after catalog validation.
@@ -83,7 +83,7 @@ still in progress.
 - [ ] `pocopine locale` (`i18n` alias): check, extract, merge, stats, XLIFF 2.0
   import/export; deterministic sorted files and diagnostics.
 - [ ] LSP translation-key completion and default-locale hover.
-- [ ] Runnable example exercising browser, server errors, locale switching,
+- [x] Runnable example exercising browser, server errors, locale switching,
   plurals, attributes, and recipient messages; run through the Pocopine CLI.
 - [ ] Parser failure cases, CLDR oracle, catalog compatibility, compile-fail
   diagnostics, concurrent server locales, pre-handler errors, streaming,
@@ -341,3 +341,44 @@ application messages; the framework adapter handles pre-handler rejections.
 - SSR history was checked locally: `feat/rfc-099-ssr-phase2` and its remote ref
   contain the stamper/hydration work (including `6a94e7b0`); this checkout does
   not. The old RFC's PR status cannot establish availability on this branch.
+
+2026-09-06, CLI and catalog-delivery checkpoint:
+
+- The CLI probes Cargo's actual host/browser cfg, features and build-script
+  flags before source generation, discovers configured server/worker roots,
+  then writes the typed API and fingerprinted browser catalogs. The app uses
+  `pocopine::locale::include_translations!()` at crate root. Generated runtime
+  initialization APIs and their Rust import aliases are excluded from message
+  extraction. Catalog/config edits participate in dev rebuilds.
+- `[locale].strict_parity` selects the matching Cargo feature. Configured data
+  slicing remains unfinished; enabling the feature still uses full baked ICU
+  formatting data.
+- Generated HTML embeds metadata for its exact bundle and starts the selected
+  catalog before deferred wasm boot. CLDR parent exceptions are resolved from
+  the shared data, including script boundaries. Browser boot independently
+  negotiates, validates build/config/count/catalog identity, shares the preload,
+  and activates before mount. A failed boot exposes an explicit reload action;
+  a failed later selection preserves the committed language and can be retried.
+- `t::initialize(t::locales())`, followed by
+  `pocopine::locale::client::boot(t::catalogs()?).await`, prepares the app.
+  `LocaleController::set_locale` loads from the matching manifest and commits
+  only after readiness. Script direction is resolved at build time and sent
+  as one value per configured language; `lang` and `dir` follow committed state.
+  URL rewriting, persistence and router integration remain unchecked above.
+- The isolated `examples/locale` app was built and run through the Pocopine CLI.
+  An isolated Chrome session verified live name interpolation, plurals, rich
+  link text, translated attributes, French and Arabic server greetings/errors,
+  outgoing RPC locale snapshots, three catalog downloads across repeated
+  switches, immutable catalog response headers, RTL and a 390-pixel viewport.
+  Blocking catalog requests produced the failure screen without mounting;
+  its reload action recovered once requests were restored. Private source
+  catalogs and generated host files returned 404 from the example server.
+- Forty locale unit tests and all 145 CLI unit tests pass. All seven core
+  browser locale/boot tests and the standalone loader contract pass. Strict
+  host lint and core wasm lint pass; the final formatted example builds through
+  the CLI. The complete workspace gates are still pending. Including the
+  host-only CLI in a wasm lint attempt fails in its existing Tokio/mio graph;
+  `.github/workflows/ci.yml` explicitly excludes that CLI and other host crates.
+  A disk-full lint attempt was environmental: only this worktree's derived
+  debug caches were removed, recovering about 30 GB. Subsequent checks disable
+  incremental compilation and debug symbols to keep artifacts bounded.

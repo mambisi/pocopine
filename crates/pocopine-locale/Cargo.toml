@@ -15,6 +15,7 @@ icu_decimal = { version = "=2.3.0", default-features = false, features = ["compi
 icu_datetime = { version = "=2.3.0", default-features = false, features = ["compiled_data"] }
 icu_experimental = { version = "=0.6.0", default-features = false, features = ["compiled_data"] }
 icu_locale_core = "=2.3.0"
+icu_locale = { version = "=2.3.0", default-features = false, features = ["compiled_data"] }
 icu_provider = { version = "=2.3.0", features = ["sync"] }
 fixed_decimal = "=0.7.2"
 jiff = { version = "=0.2.35", default-features = false, features = ["std", "tzdb-bundle-always"] }

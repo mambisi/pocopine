@@ -98,6 +98,7 @@ function install() {
     setTimeout(function () { s.remove(); }, 700);
   }
   function complete() {
+    if (w.__pocopineLocale && !w.__pocopineLocale.ready) return;
     clearTimeout(showTimer); showTimer = 0;
     clearInterval(trickle); clearTimeout(resume);
     pending = 0; value = 1; render(); ensure(); el.classList.add('pp-loader--done');
@@ -143,7 +144,10 @@ function install() {
       el.classList.add('pp-loader--error'); value = 1; render(); hideSplash();
     },
     // App reported ready (AppBootCompleted): drop the splash + finish.
-    ready: function () { complete(); },
+    ready: function () {
+      if (w.__pocopineLocale) w.__pocopineLocale.appReady = true;
+      complete();
+    },
   };
   w.__pocopineProgress = api;
   return api;

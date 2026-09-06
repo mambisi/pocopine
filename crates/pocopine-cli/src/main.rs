@@ -32,6 +32,7 @@ mod fmt;
 // RFC-116 — name the lexer-hostile text in a `poco!` body before cargo
 // reports it as an unexplained tokenizer error.
 mod inline_lint;
+mod locale;
 mod lsp;
 mod native;
 mod server;

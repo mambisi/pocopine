@@ -62,6 +62,7 @@
     setTimeout(function () { s.remove(); }, 700);
   }
   function complete() {
+    if (window.__pocopineLocale && !window.__pocopineLocale.ready) return;
     clearTimeout(showTimer); showTimer = 0;
     clearInterval(trickle); clearTimeout(resume);
     pending = 0; value = 1; render();
@@ -109,7 +110,10 @@
     },
     // App reported ready (AppBootCompleted / first route paint): drop the
     // splash and finish the boot bar regardless of in-flight count.
-    ready: function () { complete(); },
+    ready: function () {
+      if (window.__pocopineLocale) window.__pocopineLocale.appReady = true;
+      complete();
+    },
   };
   window.__pocopineProgress = api;
 

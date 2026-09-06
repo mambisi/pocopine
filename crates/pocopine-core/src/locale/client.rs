@@ -15,6 +15,9 @@ use pocopine_locale::{Locale, Locales, MessageId, RenderedPart, TranslationError
 
 use crate::{ServerError, Setter, Signal, signal};
 
+mod boot;
+pub use boot::boot;
+
 thread_local! {
     static ACTIVE: RefCell<Option<LocaleController>> = const { RefCell::new(None) };
     static ACTIVATED: (Signal<bool>, Setter<bool>) = signal(false);
@@ -30,6 +33,7 @@ struct State {
     selected: Signal<Locale>,
     set_selected: Setter<Locale>,
     pending: RefCell<Option<Weak<()>>>,
+    delivery: Option<pocopine_locale::LocaleManifest>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +46,14 @@ impl LocaleController {
     /// `initial` must be an exact configured locale with a validated catalog.
     /// Negotiation belongs to boot/the router, before constructing this state.
     pub fn new(catalogs: ClientCatalogs, initial: Locale) -> Result<Self, TranslationError> {
+        Self::with_delivery(catalogs, initial, None)
+    }
+
+    fn with_delivery(
+        catalogs: ClientCatalogs,
+        initial: Locale,
+        delivery: Option<pocopine_locale::LocaleManifest>,
+    ) -> Result<Self, TranslationError> {
         require_supported(catalogs.locales(), &initial)?;
         catalogs.catalog(&initial)?;
         let (selected, set_selected) = signal(initial);
@@ -50,6 +62,7 @@ impl LocaleController {
             selected,
             set_selected,
             pending: RefCell::new(None),
+            delivery,
         })))
     }
 
@@ -101,6 +114,13 @@ impl LocaleController {
         self.0.selected.clone()
     }
 
+    fn update_document(&self, locale: &Locale) -> Result<(), TranslationError> {
+        if let Some(manifest) = &self.0.delivery {
+            boot::update_document(locale, manifest.directions[locale])?;
+        }
+        Ok(())
+    }
+
     pub fn format(
         &self,
         id: MessageId,
@@ -139,6 +159,18 @@ impl LocaleController {
             target,
             token,
         })
+    }
+
+    /// Load a language from this boot's fingerprinted catalog map. A failed
+    /// request leaves the current language intact; calling again retries it.
+    pub async fn set_locale(&self, target: Locale) -> Result<SwitchOutcome, TranslationError> {
+        let manifest = self.0.delivery.as_ref().ok_or_else(|| {
+            TranslationError::Initialization("controller has no catalog delivery manifest".into())
+        })?;
+        let url = manifest.catalogs.get(&target).ok_or_else(|| {
+            TranslationError::Initialization(format!("unsupported UI locale {target}"))
+        })?;
+        self.switch_with(target, |_| boot::load_catalog(url)).await
     }
 
     /// Fetch on a cache miss and atomically commit only the newest selection.
@@ -206,6 +238,7 @@ impl LocaleSwitch {
                 .install(self.target.clone(), bytes)?;
         }
         self.controller.0.catalogs.catalog(&self.target)?;
+        self.controller.update_document(&self.target)?;
         // Release borrows and retire this ticket before notifying effects:
         // custom synchronous schedulers may begin another switch reentrantly.
         self.controller.0.pending.borrow_mut().take();
