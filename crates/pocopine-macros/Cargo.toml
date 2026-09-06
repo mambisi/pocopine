@@ -18,7 +18,7 @@ quote = { workspace = true }
 syn = { workspace = true }
 # RFC 050 — compile-time `.poco` parser, now a shared host-only crate
 # so build tooling (pocopine-stylekit) reuses it. Never linked into wasm.
-pocopine-template-parser = { workspace = true }
+pocopine-template-parser = { workspace = true, features = ["inline-source"] }
 # RFC 063 — the removed-directive table lives in the shared directive registry
 # so the macro's hard-error scan and the language server stay in lockstep.
 pocopine-directives = { workspace = true }

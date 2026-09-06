@@ -100,6 +100,9 @@ use std::ops::Range;
 #[cfg(feature = "inline-scan")]
 pub mod inline_scan;
 
+mod interpolation;
+pub use interpolation::{InterpolationSegment, parse_interpolations};
+
 use html5ever::driver::ParseOpts;
 use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
@@ -1476,3 +1479,6 @@ mod tests {
         assert_eq!(ast.element_roots().next().unwrap().tag, "th");
     }
 }
+
+#[cfg(feature = "inline-source")]
+pub mod inline_source;

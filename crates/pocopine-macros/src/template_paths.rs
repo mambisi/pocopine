@@ -468,31 +468,17 @@ fn parse_pp_for(s: &str) -> Option<(String, String)> {
 /// Escapes (`\{{`, `\}}`) hide the braces from interp — mirror
 /// that by skipping the escaped pair.
 fn harvest_interps(text: &str, scope: &[String], out: &mut Roots) {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 2 < bytes.len() {
-            let (n1, n2) = (bytes[i + 1], bytes[i + 2]);
-            if (n1 == b'{' && n2 == b'{') || (n1 == b'}' && n2 == b'}') {
-                i += 3;
-                continue;
-            }
-        }
-        if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            let start = i + 2;
-            let Some(rel) = text[start..].find("}}") else {
-                return; // unclosed — the strict validator owns the error
-            };
-            let src = &text[start..start + rel];
+    let Ok(segments) = pocopine_template_parser::parse_interpolations(text) else {
+        return; // The compiled-plan parser reports malformed interpolation.
+    };
+    for segment in segments {
+        if let pocopine_template_parser::InterpolationSegment::Dynamic(src) = segment {
             let ctx = RootCtx {
-                display: format!("{{{{ {} }}}}", src.trim()),
-                needle: Needle::Interp(src.to_string()),
+                display: format!("{{{{ {} }}}}", src),
+                needle: Needle::Interp(src.clone()),
             };
-            harvest_expr_src(src, &ctx, scope, out, false);
-            i = start + rel + 2;
-            continue;
+            harvest_expr_src(&src, &ctx, scope, out, false);
         }
-        i += 1;
     }
 }
 
