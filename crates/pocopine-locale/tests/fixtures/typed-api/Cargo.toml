@@ -15,6 +15,7 @@ bad-argument = []
 missing-key = []
 host-key-in-browser = []
 catalog-update = []
+server-integration = ["dep:pocopine", "dep:pocopine-server", "dep:futures", "dep:tokio"]
 
 [dependencies]
 pocopine-locale = { path = "../../.." }
@@ -29,6 +30,12 @@ serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine = { path = "../../../../pocopine", optional = true }
+pocopine-server = { path = "../../../../pocopine-server", features = ["locale"], optional = true }
+futures = { version = "0.3", optional = true }
+tokio = { version = "1", features = ["macros", "rt", "time"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

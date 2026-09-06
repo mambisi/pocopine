@@ -50,8 +50,11 @@ replace or narrow the RFC.
 
 - [x] Shared explicit-preference negotiation, CLDR parent matching, bounded
   Accept-Language weights/exclusions and selection-source metadata.
-- [ ] Negotiated typed request locale available before framework rejections;
-  RPC metadata propagation; locale fixed for streaming calls.
+- [x] Negotiated typed request locale available before framework rejections;
+  locale fixed for streaming calls, with incoming explicit RPC preference.
+- [ ] Outgoing RPC metadata propagation from committed UI locale.
+- [x] Catalog-backed guard/body/extractor rejection payloads, stable error
+  variants, and public payload access without diagnostic Display prefixes.
 - [ ] Public error/validation text translated without changing classification;
   internal diagnostics separated from public payload; network errors localized
   on the client. Preserve existing wire compatibility.
@@ -199,3 +202,55 @@ Implementation and verification are in progress.
   regional/script fallback and oversized input on host and wasm. This is the
   pure boundary policy; no HTTP middleware, redirects or RPC injection has been
   installed yet, and the integration checklist remains unchecked.
+
+2026-09-06, HTTP integration checkpoint:
+
+- The server `locale` feature exposes `ServerLocale` and `FrameworkMessages`.
+  Applications initialize their generated host catalogs and bind four generated
+  functions for unauthorized, forbidden, malformed-request and internal public
+  messages. `Server::with_locale` prepares the boundary outside auth and plugin
+  layers at finalization, including routes added after configuration.
+- Requests receive typed `Locale` and negotiation metadata before guards, body
+  decoding and extractors. Explicit `pocopine-locale` metadata precedes cookie
+  and weighted language detection; conflicting duplicate explicit values are
+  ignored. RPCs never redirect. Responses preserve existing Content-Language
+  and Vary values while adding negotiated language/cache variation when needed.
+  This boundary currently handles unprefixed RPC paths; URL routing is pending.
+- Generated macro rejection sites apply the prepared public text after existing
+  diagnostic logging. Existing ServerError variants/wire shapes remain intact,
+  handler-returned messages stay verbatim, and missing required extensions use
+  generic internal copy. `ServerError::public_message()` avoids diagnostic
+  prefixes and returns None for client-side network diagnostics; client network
+  localization remains pending.
+- The real generated-API fixture includes auth ordering, late routes, locale
+  conflicts/fallback, malformed and oversized bodies, guard and extractor
+  failures, application errors, and concurrent English/French SSE streams.
+  It also exercises unchanged legacy behavior without locale configuration.
+- Verification against the workspace lock: the complete generated-API verifier
+  passes, including its HTTP fixture and expanded host-message byte audit.
+  Existing two streaming-server-function and three auth-layer-ordering tests
+  pass, as do all 134 macro unit tests. Focused host server/macro strict Clippy,
+  wasm core/server strict Clippy and build, server feature-disabled check,
+  workspace formatting and whitespace checks pass. The fixture is now 421,963
+  bytes raw / 106,699 gzip; this remains a whole-fixture measurement. Full
+  workspace gates and the unchecked integration/size requirements remain open.
+
+The server wiring uses application-authored catalog keys; the framework does
+not introduce a second message format or hardcode a translation namespace:
+
+```rust
+// Host startup, after the application build has generated `t`.
+t::initialize()?;
+let messages = pocopine_server::locale::FrameworkMessages {
+    unauthorized: t::common::unauthorized,
+    forbidden: t::common::forbidden,
+    bad_request: t::common::bad_request,
+    internal: t::common::internal,
+};
+let locale = pocopine_server::locale::ServerLocale::new(locales, messages);
+let server = pocopine_server::Server::new(router).with_locale(locale);
+```
+
+Handlers extract `pocopine_server::Extension<pocopine_locale::Locale>` and pass
+the value to generated functions. Domain adapters choose translated public
+application messages; the framework adapter handles pre-handler rejections.

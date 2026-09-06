@@ -5756,11 +5756,13 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let error_return = if streaming {
         quote! {
             #span_error_record
+            let __pocopine_error = ::pocopine_server::public_rejection(__pocopine_error, &parts.extensions);
             return ::pocopine_server::sse_error_response(__pocopine_error);
         }
     } else {
         quote! {
             #span_error_record
+            let __pocopine_error = ::pocopine_server::public_rejection(__pocopine_error, &parts.extensions);
             let result = ::core::result::Result::Err(__pocopine_error);
             return ::pocopine_server::axum::Json(result);
         }

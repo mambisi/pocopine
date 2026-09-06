@@ -27,6 +27,7 @@ tracing-opentelemetry = { version = "0.32", optional = true }
 # RFC-107 — streaming server functions: the SSE response helper frames a
 # `StreamServerResult<T>` into `axum::response::Sse`.
 pocopine-core = { workspace = true }
+pocopine-locale = { workspace = true, optional = true }
 futures = "0.3"
 # RFC-100 Mode B — the `/assets/<hash>/<path>` private-bucket proxy
 # (src/assets.rs) reads objects through the shared AssetStore. Pulls
@@ -37,6 +38,7 @@ pocopine-assets = { workspace = true }
 
 [features]
 default = []
+locale = ["dep:pocopine-locale"]
 otel = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
 
 [dependencies]

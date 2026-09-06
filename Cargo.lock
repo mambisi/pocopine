@@ -8225,6 +8225,7 @@ dependencies = [
  "pocopine-assets",
  "pocopine-auth",
  "pocopine-core",
+ "pocopine-locale",
  "pocopine-observe",
  "serde",
  "serde_json",

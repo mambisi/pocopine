@@ -1,5 +1,8 @@
 include!(concat!(env!("OUT_DIR"), "/pocopine_locale.rs"));
 
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "server-integration"))]
+mod server_contract;
+
 #[cfg(feature = "bad-argument")]
 pub fn wrong_argument() -> String {
     t::cart::items("en".parse().unwrap(), "not a number")

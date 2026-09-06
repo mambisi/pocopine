@@ -20,6 +20,9 @@ function after a durable retry round-trip; an appointment also preserves its
 explicit timezone. Retaining exact wording across deployments would require
 persisting rendered content or its catalog version.
 
-This fixture does not deliver messages or run a web application. HTTP locale
-negotiation, browser UI and application build wiring have separate acceptance
-checks in `docs/locale-implementation.md`.
+With `server-integration`, an in-process HTTP test drives actual `#[server]`
+routes: locale precedes auth, rejected guards and invalid bodies use the
+generated catalogs, application messages stay intact, and concurrent SSE
+responses keep separate locales. No listener or message delivery is started.
+Browser UI, outgoing RPC metadata and application build wiring have separate
+acceptance checks in `docs/locale-implementation.md`.
