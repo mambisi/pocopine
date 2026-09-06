@@ -456,6 +456,11 @@ enum BindingKindLite {
         arg: String,
     },
     Show,
+    Translate {
+        key: String,
+        arguments: Vec<pocopine_expr::Spanned<pocopine_expr::Expr>>,
+        elements: usize,
+    },
 }
 
 struct ListenerLite {
@@ -750,7 +755,35 @@ impl AnalysisCtx {
             .bindings
             .iter()
             .enumerate()
+            .filter(|(_, entry)| !matches!(entry.kind, BindingKindLite::Translate { .. }))
             .map(|(idx, entry)| emit_specialized_binding(idx, &entry.node_path));
+        let translations = self
+            .bindings
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches!(entry.kind, BindingKindLite::Translate { .. }))
+            .collect::<Vec<_>>();
+        let (capture_translations, install_translations) = if translations.is_empty() {
+            (quote! {}, quote! {})
+        } else {
+            let count = translations.len();
+            let captures = translations.iter().map(|(idx, entry)| {
+                let resolve = emit_specialized_resolve(&entry.node_path);
+                let idx = syn::Index::from(*idx);
+                quote! { #resolve __poc_translation_targets.push((__poc_el.clone(), &__poc_plan.bindings[#idx])); }
+            });
+            (
+                quote! {
+                    let mut __poc_translation_targets = ::std::vec::Vec::with_capacity(#count);
+                    #(#captures)*
+                },
+                quote! {
+                    for (__poc_target, __poc_translation) in __poc_translation_targets {
+                        ::pocopine::__private::install_static_binding(&__poc_target, scope_id, proxy, __poc_translation, __poc_template_name);
+                    }
+                },
+            )
+        };
         let listeners = self
             .listeners
             .iter()
@@ -839,6 +872,7 @@ impl AnalysisCtx {
                 ::std::vec::Vec::with_capacity(#interp_capacity);
             #(#slot_outlets)*
             #(#refs)*
+            #capture_translations
             #(#bindings)*
             #(#listeners)*
             #(#child_mounts)*
@@ -852,6 +886,7 @@ impl AnalysisCtx {
             #(#materialize_slots)*
             #(#opaque_directives)*
             #(#install_interps)*
+            #install_translations
         })
     }
 
@@ -1322,7 +1357,23 @@ fn emit_specialized_native_model(idx: usize, path: &[u16]) -> TokenStream {
 
 fn emit_binding(b: &BindingLite) -> TokenStream {
     let path = emit_node_path(&b.node_path);
-    let expr = proc_macro2::Literal::string(&b.expr_src);
+    if let BindingKindLite::Translate {
+        key,
+        arguments,
+        elements,
+    } = &b.kind
+    {
+        let plan = emit_translation_plan(key, arguments, Some(*elements));
+        return quote! {
+            ::pocopine::__private::StaticBinding {
+                node_path: #path,
+                kind: ::pocopine::__private::BindingKind::Translate(#plan),
+                expr_src: "",
+                compiled: ::core::option::Option::None,
+            }
+        };
+    }
+    let expr = runtime_expr_source(&b.expr_src);
     let compiled = emit_compiled_expr_option(&b.expr_src);
     let kind = match &b.kind {
         BindingKindLite::Text => quote! { ::pocopine::__private::BindingKind::Text },
@@ -1332,6 +1383,7 @@ fn emit_binding(b: &BindingLite) -> TokenStream {
             let arg_lit = proc_macro2::Literal::string(arg);
             quote! { ::pocopine::__private::BindingKind::Bind { arg: #arg_lit } }
         }
+        BindingKindLite::Translate { .. } => unreachable!(),
     };
     quote! {
         ::pocopine::__private::StaticBinding {
@@ -1381,8 +1433,11 @@ fn emit_compiled_expr_option(src: &str) -> TokenStream {
     // (multi-segment paths, ternaries, calls, …) still fall through
     // to runtime evaluation by emitting `Option::None`.
     match pocopine_expr::parse(src) {
-        Ok(expr) => match emit_compiled_expr(&expr) {
+        Ok(expr) => match emit_compiled_expr(&expr, contains_translation(src)) {
             Some(compiled) => quote! { ::core::option::Option::Some(#compiled) },
+            None if contains_translation(src) => {
+                quote! { ::core::compile_error!("$t needs a compiled value expression; move calls or assignments to a computed field") }
+            }
             None => quote! { ::core::option::Option::None },
         },
         Err(err) => {
@@ -1402,9 +1457,20 @@ fn emit_compiled_expr_option(src: &str) -> TokenStream {
     }
 }
 
-fn emit_compiled_expr(expr: &pocopine_expr::Spanned<pocopine_expr::Expr>) -> Option<TokenStream> {
+fn emit_compiled_expr(
+    expr: &pocopine_expr::Spanned<pocopine_expr::Expr>,
+    extended: bool,
+) -> Option<TokenStream> {
     use pocopine_expr::{BinOp, Expr, Literal};
 
+    match translation_reference(expr) {
+        Ok(Some((key, arguments))) => {
+            let plan = emit_translation_plan(&key, arguments, None);
+            return Some(quote! { &::pocopine::__private::StaticExpr::Translation(#plan) });
+        }
+        Err(message) => return Some(quote! { ::core::compile_error!(#message) }),
+        Ok(None) => {}
+    }
     match &expr.value {
         Expr::Literal(literal) => {
             let lit = match literal {
@@ -1423,7 +1489,7 @@ fn emit_compiled_expr(expr: &pocopine_expr::Spanned<pocopine_expr::Expr>) -> Opt
             };
             Some(quote! { &::pocopine::__private::StaticExpr::Literal(#lit) })
         }
-        Expr::Path(segments) if (1..=2).contains(&segments.len()) => {
+        Expr::Path(segments) if !segments.is_empty() && (extended || segments.len() <= 2) => {
             let segments = segments.iter().map(|segment| {
                 let segment = proc_macro2::Literal::string(segment);
                 quote! { #segment }
@@ -1431,7 +1497,7 @@ fn emit_compiled_expr(expr: &pocopine_expr::Spanned<pocopine_expr::Expr>) -> Opt
             Some(quote! { &::pocopine::__private::StaticExpr::Path(&[ #(#segments),* ]) })
         }
         Expr::Not(inner) => {
-            let inner = emit_compiled_expr(inner)?;
+            let inner = emit_compiled_expr(inner, extended)?;
             Some(quote! { &::pocopine::__private::StaticExpr::Not(#inner) })
         }
         Expr::BinOp(op, lhs, rhs) => {
@@ -1444,10 +1510,11 @@ fn emit_compiled_expr(expr: &pocopine_expr::Spanned<pocopine_expr::Expr>) -> Opt
                 BinOp::Le => quote! { ::pocopine::__private::StaticBinOp::Le },
                 BinOp::Gt => quote! { ::pocopine::__private::StaticBinOp::Gt },
                 BinOp::Ge => quote! { ::pocopine::__private::StaticBinOp::Ge },
-                BinOp::Plus => return None,
+                BinOp::Plus if !extended => return None,
+                BinOp::Plus => quote! { ::pocopine::__private::StaticBinOp::Plus },
             };
-            let lhs = emit_compiled_expr(lhs)?;
-            let rhs = emit_compiled_expr(rhs)?;
+            let lhs = emit_compiled_expr(lhs, extended)?;
+            let rhs = emit_compiled_expr(rhs, extended)?;
             Some(quote! {
                 &::pocopine::__private::StaticExpr::BinOp {
                     op: #op,
@@ -1456,14 +1523,104 @@ fn emit_compiled_expr(expr: &pocopine_expr::Spanned<pocopine_expr::Expr>) -> Opt
                 }
             })
         }
-        Expr::Ternary(_, _, _) | Expr::Call(_, _) | Expr::Assign(_, _) | Expr::Seq(_) => None,
+        Expr::Ternary(_, _, _) if !extended => None,
+        Expr::Ternary(condition, yes, no) => {
+            let condition = emit_compiled_expr(condition, extended)?;
+            let yes = emit_compiled_expr(yes, extended)?;
+            let no = emit_compiled_expr(no, extended)?;
+            Some(quote! { &::pocopine::__private::StaticExpr::Ternary(#condition, #yes, #no) })
+        }
+        Expr::Call(_, _) | Expr::Assign(_, _) | Expr::Seq(_) => None,
         Expr::Path(_) => None,
     }
 }
 
+type TranslationReference<'a> = (String, &'a [pocopine_expr::Spanned<pocopine_expr::Expr>]);
+
+/// A path is the no-argument shorthand; calls keep a literal key and pass
+/// values in the same sorted-name order as the generated Rust signature.
+fn translation_reference(
+    expr: &pocopine_expr::Spanned<pocopine_expr::Expr>,
+) -> Result<Option<TranslationReference<'_>>, &'static str> {
+    use pocopine_expr::{Expr, Literal};
+    match &expr.value {
+        Expr::Path(parts) if parts.first().is_some_and(|p| p == "$t") => {
+            if parts.len() < 3 {
+                return Err("$t requires a complete static dotted message key");
+            }
+            Ok(Some((parts[1..].join("."), &[])))
+        }
+        Expr::Call(name, args) if name == "$t" => {
+            let Some(pocopine_expr::Spanned {
+                value: Expr::Literal(Literal::String(key)),
+                ..
+            }) = args.first()
+            else {
+                return Err("$t requires a literal message key as its first argument");
+            };
+            if !key.contains('.') {
+                return Err("$t requires a complete static dotted message key");
+            }
+            Ok(Some((key.clone(), &args[1..])))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn emit_translation_plan(
+    key: &str,
+    arguments: &[pocopine_expr::Spanned<pocopine_expr::Expr>],
+    elements: Option<usize>,
+) -> TokenStream {
+    let key = template_key_tokens(key);
+    let count = arguments.len();
+    let elements = match elements {
+        Some(count) => quote! { ::core::option::Option::Some(#count) },
+        None => quote! { ::core::option::Option::None },
+    };
+    let args = arguments.iter().map(|expr| emit_compiled_expr(expr, true).unwrap_or_else(|| {
+        quote! { ::core::compile_error!("$t arguments require a compiled value expression; move calls or assignments to a computed field") }
+    }));
+    quote! { const { &::pocopine::locale::template::TranslationPlan {
+        message: crate::t::__template!(#key).validate(#count, #elements),
+        arguments: &[#(#args),*],
+    } } }
+}
+
+fn template_key_tokens(key: &str) -> TokenStream {
+    key.parse().unwrap_or_else(
+        |_| quote! { ::core::compile_error!("translation key must be a static dotted identifier") },
+    )
+}
+
+pub(crate) fn contains_translation(source: &str) -> bool {
+    use pocopine_expr::Expr;
+    fn visit(expr: &pocopine_expr::Spanned<Expr>) -> bool {
+        match &expr.value {
+            Expr::Path(path) => path.first().is_some_and(|s| s == "$t"),
+            Expr::Not(value) => visit(value),
+            Expr::BinOp(_, a, b) => visit(a) || visit(b),
+            Expr::Ternary(a, b, c) => visit(a) || visit(b) || visit(c),
+            Expr::Call(name, values) => name == "$t" || values.iter().any(visit),
+            Expr::Assign(path, value) => path.first().is_some_and(|s| s == "$t") || visit(value),
+            Expr::Seq(values) => values.iter().any(visit),
+            Expr::Literal(_) => false,
+        }
+    }
+    source.contains("$t") && pocopine_expr::parse(source).is_ok_and(|expr| visit(&expr))
+}
+
+fn runtime_expr_source(source: &str) -> proc_macro2::Literal {
+    proc_macro2::Literal::string(if contains_translation(source) {
+        ""
+    } else {
+        source
+    })
+}
+
 fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
     let path = emit_node_path(&ip.template_node_path);
-    let expr = proc_macro2::Literal::string(&ip.expr_src);
+    let expr = runtime_expr_source(&ip.expr_src);
     let compiled = emit_compiled_expr_option(&ip.expr_src);
     let teleport_selector_tokens = match ip.teleport_selector.as_deref() {
         Some(selector) => {
@@ -1478,7 +1635,7 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
     };
     let body_tokens = opt_body(&ip.body_fn_ident);
     let else_if_tokens = ip.else_if.iter().map(|(expr_src, body)| {
-        let e = proc_macro2::Literal::string(expr_src);
+        let e = runtime_expr_source(expr_src);
         let c = emit_compiled_expr_option(expr_src);
         let b = opt_body(body);
         quote! {
@@ -1509,7 +1666,7 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
 
 fn emit_match_plan(mp: &MatchPlanLite) -> TokenStream {
     let path = emit_node_path(&mp.template_node_path);
-    let expr = proc_macro2::Literal::string(&mp.expr_src);
+    let expr = runtime_expr_source(&mp.expr_src);
     let compiled = emit_compiled_expr_option(&mp.expr_src);
     let teleport_selector_tokens = match mp.teleport_selector.as_deref() {
         Some(selector) => {
@@ -1614,6 +1771,10 @@ fn emit_interp(ip: &InterpLite) -> TokenStream {
             quote! { ::pocopine::__private::PlannedSegment::Static(#lit) }
         }
         InterpSegment::Dynamic(src) => {
+            if contains_translation(src) {
+                let compiled = emit_compiled_expr_option(src);
+                return quote! { ::pocopine::__private::PlannedSegment::Compiled(const { (#compiled).expect("compiled translation expression") }) };
+            }
             let lit = proc_macro2::Literal::string(src);
             quote! { ::pocopine::__private::PlannedSegment::Dynamic(#lit) }
         }
@@ -1674,7 +1835,7 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
         }
     });
     let show_tokens = c.host_shows.iter().map(|expr_src| {
-        let expr = proc_macro2::Literal::string(expr_src);
+        let expr = runtime_expr_source(expr_src);
         let compiled = emit_compiled_expr_option(expr_src);
         quote! {
             ::pocopine::__private::StaticChildHostShow {
@@ -1685,7 +1846,7 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     });
     let binding_tokens = c.host_bindings.iter().map(|b| {
         let arg = proc_macro2::Literal::string(&b.arg);
-        let expr = proc_macro2::Literal::string(&b.expr_src);
+        let expr = runtime_expr_source(&b.expr_src);
         let compiled = emit_compiled_expr_option(&b.expr_src);
         quote! {
             ::pocopine::__private::StaticChildHostBinding {
@@ -1977,6 +2138,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         // the mount.
         return;
     }
+    classify_translation(el, path, ctx);
 
     // RFC-058 Phase 4.2 — `pp-for` on a `<template>` host
     // graduates into a `StaticForPlan` entry. Same eligibility
@@ -3311,6 +3473,13 @@ fn classify_attr(
     if let Some(rest) = name.strip_prefix("pp-") {
         // pp-text="<expr>"
         if rest == "text" {
+            if ctx
+                .bindings
+                .iter()
+                .any(|b| b.node_path == path && matches!(b.kind, BindingKindLite::Translate { .. }))
+            {
+                return ClassifyOutcome::Stripped;
+            }
             let Some(expr_src) = check_template_expr(value, "pp-text", ctx) else {
                 return ClassifyOutcome::Preserved;
             };
@@ -3522,6 +3691,100 @@ fn classify_attr(
     }
     // Plain HTML attribute — preserved.
     ClassifyOutcome::Preserved
+}
+
+fn classify_translation(el: &Element, path: &[u16], ctx: &mut AnalysisCtx) {
+    for (name, value) in &el.attrs {
+        if name == "pp-t"
+            || name == ":pp-t"
+            || name == "pp-bind:pp-t"
+            || name.starts_with("pp-t:")
+            || name.starts_with("pp-t@")
+            || name.starts_with("pp-t.")
+        {
+            ctx.diagnostics.push(
+                "pp-t is not supported; use $t in pp-text, attribute bindings, or interpolation",
+            );
+        }
+        if contains_translation(value)
+            && (name.starts_with('@')
+                || name.starts_with("pp-on:")
+                || name.starts_with("pp-model")
+                || name == "pp-key"
+                || name == "pp-html"
+                || name == "pp-for")
+        {
+            ctx.diagnostics.push("$t is a read-only text expression; use pp-text, attribute bindings or interpolation, and generated Rust functions in handlers");
+        }
+    }
+    let Some((_, source)) = el.attrs.iter().find(|(name, _)| name == "pp-text") else {
+        return;
+    };
+    let Ok(expr) = pocopine_expr::parse(source) else {
+        return;
+    };
+    let (key, arguments) = match translation_reference(&expr) {
+        Ok(Some(reference)) => reference,
+        Ok(None) => return,
+        Err(message) => {
+            ctx.diagnostics.push(message);
+            return;
+        }
+    };
+    if !is_plan_native(&el.tag)
+        || is_void_element(&el.tag)
+        || matches!(el.tag.as_str(), "template" | "slot")
+    {
+        ctx.diagnostics
+            .push("translated pp-text needs a native element that owns text content");
+    }
+    if el
+        .attrs
+        .iter()
+        .any(|(name, _)| matches!(name.as_str(), "pp-html" | "pp-owned-content"))
+    {
+        ctx.diagnostics.push(
+            "translated pp-text cannot share content ownership with pp-html or pp-owned-content",
+        );
+    }
+    let mut elements = 0;
+    for child in &el.children {
+        match child {
+            Node::Text(text, _) if !text.trim().is_empty() => ctx
+                .diagnostics
+                .push("translated pp-text copy belongs in the locale catalog"),
+            Node::Element(child) => {
+                elements += 1;
+                if !is_plan_native(&child.tag)
+                    || is_void_element(&child.tag)
+                    || matches!(child.tag.as_str(), "template" | "slot")
+                    || child
+                        .children
+                        .iter()
+                        .any(|node| !matches!(node, Node::Text(text, _) if text.trim().is_empty()))
+                    || child.attrs.iter().any(|(name, _)| {
+                        matches!(name.as_str(), "pp-text" | "pp-html" | "pp-owned-content")
+                    })
+                {
+                    ctx.diagnostics.push("rich translation placeholders must be empty native text containers; attributes and listeners stay in the template, and text comes from the catalog");
+                }
+            }
+            _ => {}
+        }
+    }
+    ctx.stripped.push(StrippedAttr {
+        node_path: path.to_vec(),
+        name: "pp-text".to_owned(),
+    });
+    ctx.bindings.push(BindingLite {
+        node_path: path.to_vec(),
+        kind: BindingKindLite::Translate {
+            key,
+            arguments: arguments.to_vec(),
+            elements,
+        },
+        expr_src: String::new(),
+    });
 }
 
 /// Parse the post-`pp-` part of an attribute name into
@@ -4239,7 +4502,19 @@ fn serialize_cleaned(roots: &[Node], ctx: &AnalysisCtx) -> String {
 fn emit_node(node: &Node, ctx: &AnalysisCtx, out: &mut String, path: &mut Vec<u16>) {
     match node {
         Node::Element(el) => emit_element(el, ctx, out, path),
-        Node::Text(text, _) => out.push_str(&escape_text(text)),
+        Node::Text(text, _) => {
+            // Structural and slot bodies also remain as inert source HTML in
+            // the outer template. Their actual compiled fragment carries the
+            // text segments; never retain a second copy containing static keys.
+            let translated = pocopine_template_parser::parse_interpolations(text).is_ok_and(|segments| {
+                segments.iter().any(|segment| matches!(segment, pocopine_template_parser::InterpolationSegment::Dynamic(source) if contains_translation(source)))
+            });
+            if translated {
+                out.push(' ');
+            } else {
+                out.push_str(&escape_text(text));
+            }
+        }
         Node::Comment(text, _) => {
             out.push_str("<!--");
             out.push_str(text);
@@ -4276,6 +4551,18 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
     out.push_str(&el.tag);
     for (name, value) in &el.attrs {
         if ctx.is_stripped(path, name) {
+            continue;
+        }
+        // A lifted body's plan owns these expressions even when this outer
+        // serializer has no entries for the body's private node paths.
+        if (name.starts_with(':')
+            || name.starts_with("pp-bind:")
+            || matches!(
+                name.as_str(),
+                "pp-text" | "pp-show" | "pp-if" | "pp-else-if" | "pp-match"
+            ))
+            && contains_translation(value)
+        {
             continue;
         }
         out.push(' ');
@@ -4339,7 +4626,19 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
             emit_node(child, ctx, out, path);
             path.pop();
         } else {
-            emit_node(child, ctx, out, path);
+            let text_index = el.children[..i]
+                .iter()
+                .filter(|node| matches!(node, Node::Text(_, _)))
+                .count();
+            let translated = matches!(child, Node::Text(_, _)) && ctx.interps.iter().any(|interp| {
+                interp.node_path.as_slice() == path.as_slice() && interp.text_index as usize == text_index
+                    && interp.segments.iter().any(|segment| matches!(segment, InterpSegment::Dynamic(source) if contains_translation(source)))
+            });
+            if translated {
+                out.push(' ');
+            } else {
+                emit_node(child, ctx, out, path);
+            }
         }
     }
     out.push_str("</");
@@ -4727,10 +5026,8 @@ mod tests {
 
     #[test]
     fn valid_but_not_compile_time_representable_falls_through() {
-        // `a + b` parses fine but `emit_compiled_expr` can't lower a
-        // non-literal `+` to a `StaticExpr`. The fallthrough path
-        // must still emit `Option::None` (runtime evaluation), NOT a
-        // compile error.
+        // General expressions keep their existing fallback. Localization
+        // plans additionally lower their argument/branch expressions.
         let out = emit_compiled_expr_option("a + b").to_string();
         assert!(
             !out.contains("compile_error"),

@@ -1,4 +1,4 @@
-use pocopine_expr::{Expr, Spanned};
+use pocopine_expr::{Expr, Literal, Spanned};
 use pocopine_template_parser::{Element, InterpolationSegment, Node};
 
 use super::{Diagnostic, MessageReference, ReferenceKind, Span};
@@ -120,84 +120,61 @@ fn element_references(
     out: &mut Extraction,
     location: Span,
 ) {
-    let key = element
-        .attrs
-        .iter()
-        .find(|(name, _)| name == "pp-t")
-        .map(|(_, value)| value);
-    let mut args = Vec::new();
-    for (name, value) in &element.attrs {
-        if name == ":pp-t"
+    for (name, source) in &element.attrs {
+        if name == "pp-t"
+            || name == ":pp-t"
             || name == "pp-bind:pp-t"
+            || name.starts_with("pp-t:")
             || name.starts_with("pp-t@")
             || name.starts_with("pp-t.")
         {
             out.diagnostics.push(
-                Diagnostic::error(
-                    "pp-t requires a literal key; use $t paths for translated attributes",
-                )
-                .at(location),
-            );
-        } else if let Some(argument) = name.strip_prefix("pp-t:") {
-            if argument.is_empty() || argument.contains('.') {
-                out.diagnostics.push(
-                    Diagnostic::error("pp-t arguments require an unmodified argument name")
-                        .at(location),
-                );
-            }
-            args.push(argument.to_owned());
-            if let Err(error) = pocopine_expr::parse(value) {
-                out.diagnostics.push(
-                    Diagnostic::error(format!(
-                        "invalid pp-t argument expression: {}",
-                        error.message
-                    ))
+                Diagnostic::error("pp-t is not supported; use $t in existing bindings")
                     .at(location),
-                );
+            );
+        } else if expression_attribute(name) && source.contains("$t") {
+            match pocopine_expr::parse(source) {
+                Ok(ast) => {
+                    let direct = matches!(&ast.value, Expr::Path(parts) if parts.first().is_some_and(|p| p == "$t"))
+                        || matches!(&ast.value, Expr::Call(name, _) if name == "$t");
+                    let elements = if name == "pp-text" && direct {
+                        if element.attrs.iter().any(|(name, _)| {
+                            matches!(name.as_str(), "pp-html" | "pp-owned-content")
+                        }) {
+                            out.diagnostics.push(Diagnostic::error("translated pp-text cannot share content ownership with pp-html or pp-owned-content").at(location));
+                        }
+                        if element.children.iter().any(
+                            |node| matches!(node, Node::Text(text, _) if !text.trim().is_empty()),
+                        ) {
+                            out.diagnostics.push(
+                                Diagnostic::error(
+                                    "translated pp-text copy belongs in the locale catalog",
+                                )
+                                .at(location),
+                            );
+                        }
+                        Some(
+                            element
+                                .children
+                                .iter()
+                                .filter(|node| matches!(node, Node::Element(_)))
+                                .count(),
+                        )
+                    } else {
+                        None
+                    };
+                    expression_refs(&ast, context, out, location, elements);
+                }
+                Err(error) => out.diagnostics.push(
+                    Diagnostic::error(format!("invalid translation expression: {}", error.message))
+                        .at(location),
+                ),
             }
-            expression(value, context, out, location);
-        } else if expression_attribute(name) {
-            expression(value, context, out, location);
         } else if name == "pp-for"
-            && let Some((_, items)) = value.split_once(" in ")
+            && let Some((_, items)) = source.split_once(" in ")
         {
             expression(items, context, out, location);
         }
-    }
-    if let Some(key) = key {
-        if element
-            .attrs
-            .iter()
-            .any(|(name, _)| name == "pp-text" || name == "pp-html")
-        {
-            out.diagnostics.push(Diagnostic::error("pp-t owns translated content and cannot share an element with pp-text or pp-html").at(location));
-        }
-        if element
-            .children
-            .iter()
-            .any(|node| matches!(node, Node::Text(text,_) if !text.trim().is_empty()))
-        {
-            out.diagnostics.push(Diagnostic::error("pp-t text belongs in the locale catalog; its element may contain only placeholder elements and whitespace").at(location));
-        }
-        out.references.push(MessageReference {
-            key: key.clone(),
-            module: context.namespace().to_owned(),
-            audience: context.audience,
-            span: location,
-            kind: ReferenceKind::Text {
-                arguments: args,
-                elements: element
-                    .children
-                    .iter()
-                    .filter(|node| matches!(node, Node::Element(_)))
-                    .count(),
-            },
-        });
-    } else if !args.is_empty() {
-        out.diagnostics.push(
-            Diagnostic::error("pp-t arguments require a pp-t message key on the same element")
-                .at(location),
-        );
     }
 }
 
@@ -218,7 +195,7 @@ fn expression(source: &str, context: &SourceContext, out: &mut Extraction, locat
         return;
     }
     match pocopine_expr::parse(source) {
-        Ok(ast) => expression_refs(&ast, context, out, location),
+        Ok(ast) => expression_refs(&ast, context, out, location, None),
         Err(error) => out.diagnostics.push(
             Diagnostic::error(format!("invalid translation expression: {}", error.message))
                 .at(location),
@@ -231,6 +208,7 @@ fn expression_refs(
     context: &SourceContext,
     out: &mut Extraction,
     location: Span,
+    elements: Option<usize>,
 ) {
     match &ast.value {
         Expr::Path(parts) if parts.first().is_some_and(|part| part == "$t") => {
@@ -243,40 +221,62 @@ fn expression_refs(
                 out.references.push(MessageReference {
                     key: parts[1..].join("."),
                     module: context.namespace().to_owned(),
-                    kind: ReferenceKind::Attribute,
+                    kind: ReferenceKind::Template {
+                        arguments: 0,
+                        elements,
+                    },
                     audience: context.audience,
                     span: location,
                 });
             }
         }
-        Expr::Not(value) => expression_refs(value, context, out, location),
+        Expr::Not(value) => expression_refs(value, context, out, location, None),
         Expr::BinOp(_, left, right) => {
-            expression_refs(left, context, out, location);
-            expression_refs(right, context, out, location);
+            expression_refs(left, context, out, location, None);
+            expression_refs(right, context, out, location, None);
         }
         Expr::Ternary(condition, left, right) => {
-            expression_refs(condition, context, out, location);
-            expression_refs(left, context, out, location);
-            expression_refs(right, context, out, location);
+            expression_refs(condition, context, out, location, None);
+            expression_refs(left, context, out, location, None);
+            expression_refs(right, context, out, location, None);
         }
         Expr::Assign(parts, value) => {
             if parts.first().is_some_and(|part| part == "$t") {
                 out.diagnostics
                     .push(Diagnostic::error("$t translation paths are read-only").at(location));
             }
-            expression_refs(value, context, out, location);
+            expression_refs(value, context, out, location, None);
         }
         Expr::Call(name, args) => {
             if name == "$t" {
-                out.diagnostics.push(Diagnostic::error("$t uses static paths; call generated Rust functions for messages with arguments").at(location));
+                match args.first().map(|arg| &arg.value) {
+                    Some(Expr::Literal(Literal::String(key))) if key.contains('.') => {
+                        out.references.push(MessageReference {
+                            key: key.clone(),
+                            module: context.namespace().to_owned(),
+                            kind: ReferenceKind::Template {
+                                arguments: args.len() - 1,
+                                elements,
+                            },
+                            audience: context.audience,
+                            span: location,
+                        })
+                    }
+                    _ => out.diagnostics.push(
+                        Diagnostic::error(
+                            "$t requires a literal dotted message key as its first argument",
+                        )
+                        .at(location),
+                    ),
+                }
             }
             for arg in args {
-                expression_refs(arg, context, out, location);
+                expression_refs(arg, context, out, location, None);
             }
         }
         Expr::Seq(values) => {
             for value in values {
-                expression_refs(value, context, out, location);
+                expression_refs(value, context, out, location, None);
             }
         }
         _ => {}
@@ -298,8 +298,8 @@ mod tests {
 
     #[test]
     fn reads_real_directives_and_paths_but_not_comments_or_literal_strings() {
-        let source = r#"<div><!-- <p pp-t="cart.fake"></p> -->
-            <p pp-t="cart.items" pp-t:count="items.len"></p>
+        let source = r#"<div><!-- <p pp-text="$t.cart.fake"></p> -->
+            <p pp-text="$t('cart.items', items.len)"></p>
             <input :placeholder="$t.cart.search" title="$t.cart.literal">
             <span pp-text="'$t.cart.quoted'"></span>
             <span>{{ ready ? $t.common.ready : $t.common.wait }}</span>
@@ -320,9 +320,13 @@ mod tests {
                 .iter()
                 .all(|r| r.span.file == 2 && r.span.start >= 30)
         );
-        assert!(
-            matches!(&found.references[0].kind,ReferenceKind::Text {arguments,elements:0} if arguments == &["count"])
-        );
+        assert!(matches!(
+            &found.references[0].kind,
+            ReferenceKind::Template {
+                arguments: 1,
+                elements: Some(0)
+            }
+        ));
     }
 
     #[test]
@@ -332,7 +336,9 @@ mod tests {
             r#"<p pp-t:count="n"></p>"#,
             r#"<p pp-t="cart.x" pp-text="x"></p>"#,
             r#"<p pp-text="$t.cart.x = 'oops'"></p>"#,
-            r#"<p :title="$t('cart.x')"></p>"#,
+            r#"<p :title="$t(key)"></p>"#,
+            r#"<p pp-text="$t.cart.x" pp-html="html"></p>"#,
+            r#"<p pp-text="$t.cart.x">Baked copy</p>"#,
             r#"<p pp-t="cart.x">Baked copy</p>"#,
             r#"<p pp-t="cart.x" pp-t="cart.y"></p>"#,
         ] {

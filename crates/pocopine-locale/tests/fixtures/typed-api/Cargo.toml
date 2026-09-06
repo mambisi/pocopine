@@ -15,10 +15,19 @@ bad-argument = []
 missing-key = []
 host-key-in-browser = []
 catalog-update = []
+strict-parity = ["pocopine-locale/strict-parity", "pocopine?/locale-strict-parity"]
+template-integration = ["dep:pocopine", "dep:serde"]
+template-missing-key = ["template-integration"]
+template-bad-arity = ["template-integration"]
+template-rich-attribute = ["template-integration"]
+template-dynamic-key = ["template-integration"]
+template-old-directive = ["template-integration"]
 server-integration = ["dep:pocopine", "dep:pocopine-server", "dep:futures", "dep:tokio"]
 
 [dependencies]
 pocopine-locale = { path = "../../.." }
+pocopine = { path = "../../../../pocopine", features = ["locale"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 
 [build-dependencies]
 pocopine-locale = { path = "../../.." }
@@ -30,9 +39,9 @@ serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "Node", "HtmlCollection", "Event", "MouseEvent"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-pocopine = { path = "../../../../pocopine", optional = true }
 pocopine-server = { path = "../../../../pocopine-server", features = ["locale"], optional = true }
 futures = { version = "0.3", optional = true }
 tokio = { version = "1", features = ["macros", "rt", "time"], optional = true }

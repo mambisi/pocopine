@@ -77,6 +77,8 @@ pub enum BindingKind {
     /// truthiness; routes through transition presets when
     /// present. RFC-058 Phase 2 template-plan addition.
     Show,
+    #[cfg(feature = "locale")]
+    Translate(&'static crate::locale::template::TranslationPlan),
 }
 
 /// Static-lifetime binding descriptor emitted by the macro. The
@@ -1581,6 +1583,11 @@ fn apply_binding(
                 "rfc-054: row plan received an RFC-058 template-plan-only \
                  BindingKind (Html / Bind / Show); skipping",
             ));
+            None
+        }
+        #[cfg(feature = "locale")]
+        BindingKind::Translate(_) => {
+            console::error_1(&"translation reached an incompatible row plan".into());
             None
         }
     }

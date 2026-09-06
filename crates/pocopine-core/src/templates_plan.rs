@@ -314,6 +314,11 @@ pub fn install_static_binding(
     entry: &'static StaticBinding,
     template_name: &str,
 ) {
+    #[cfg(feature = "locale")]
+    if let BindingKind::Translate(plan) = entry.kind {
+        crate::locale::template::install(el, scope_id, proxy, plan);
+        return;
+    }
     let Some(evaluator) = scoped_static_evaluator(scope_id, entry.compiled, entry.expr_src) else {
         fail(
             "binding-parse",
@@ -343,6 +348,10 @@ pub fn install_static_binding(
             entry.node_path,
             Some(entry.expr_src),
         ),
+        #[cfg(feature = "locale")]
+        BindingKind::Translate(_) => {
+            unreachable!("translation installs before expression evaluation")
+        }
     }
 }
 
@@ -746,6 +755,10 @@ pub fn apply_static_pp_as_plan(
         crate::refs::register(scope_id, r.name, root);
     }
     for b in plan.bindings.iter().filter(|b| b.node_path.is_empty()) {
+        #[cfg(feature = "locale")]
+        if matches!(b.kind, BindingKind::Translate(_)) {
+            continue;
+        }
         let Some(evaluator) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
             fail(
                 "pp-as-binding-parse",
@@ -770,6 +783,8 @@ pub fn apply_static_pp_as_plan(
                     Some(b.expr_src),
                 );
             }
+            #[cfg(feature = "locale")]
+            BindingKind::Translate(_) => unreachable!("translation installs after host directives"),
         }
     }
     for l in plan.listeners.iter().filter(|l| l.node_path.is_empty()) {
@@ -796,6 +811,12 @@ pub fn apply_static_pp_as_plan(
                 d.node_path,
                 Some(d.name),
             );
+        }
+    }
+    #[cfg(feature = "locale")]
+    for b in plan.bindings.iter().filter(|b| b.node_path.is_empty()) {
+        if let BindingKind::Translate(translation) = b.kind {
+            crate::locale::template::install(root, scope_id, proxy, translation);
         }
     }
 }

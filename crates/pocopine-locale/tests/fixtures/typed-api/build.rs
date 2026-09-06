@@ -5,6 +5,7 @@ use pocopine_locale::{CatalogAudience, Locales};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=TranslationHost.html");
     let locales = Locales::new(
         "en".parse().unwrap(),
         ["en", "fr"].map(|l| l.parse().unwrap()),
@@ -24,6 +25,9 @@ fn main() {
             ("common.bad_request", "Invalid request.", "Requête invalide."),
             ("common.internal", "Something went wrong.", "Une erreur est survenue."),
         ] { data[key] = if locale == "en" { en } else { fr }.into(); }
+        data["common.welcome"] = if locale == "en" { "Hello {name}, welcome to Pocopine" } else { "Bonjour {name}, bienvenue sur Pocopine" }.into();
+        data["cart.nesting"] = "{count, plural, one {<0>Outer <1>inner</1></0>} other {<1>Outer <0>inner</0></1>}}".into();
+        data["cart.terms"] = if locale == "en" { "I accept <0>Terms</0> and <1>Privacy</1>." } else { "Je lis <1>Confidentialité</1> et <0>Conditions</0>." }.into();
         if cfg!(feature = "catalog-update") {
             data["a.first"] = "NEW_HOST_COPY_SENTINEL".into();
             data["auth.denied"] = if locale == "en" { "Updated denial" } else { "Accès refusé" }.into();
@@ -66,6 +70,20 @@ fn main() {
             kind: ReferenceKind::Rust,
             span: Span::UNKNOWN,
         });
+    }
+    if cfg!(feature = "template-integration") {
+        let source = std::fs::read_to_string("TranslationHost.html").unwrap();
+        let found = pocopine_locale::server::extract_template(
+            &source,
+            &pocopine_locale::server::SourceContext {
+                file: 2,
+                module: "cart".into(),
+                audience: CatalogAudience::Browser,
+                offset: 0,
+            },
+        );
+        assert!(found.diagnostics.is_empty(), "{:?}", found.diagnostics);
+        references.extend(found.references);
     }
     let compiled = compile_catalogs(&locales, &sources, &references);
     assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);

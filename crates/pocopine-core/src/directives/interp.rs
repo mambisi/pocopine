@@ -28,6 +28,7 @@ use crate::reactive::effect;
 enum Segment {
     Static(String),
     Dynamic(String),
+    Compiled(&'static expr::StaticExpr),
 }
 
 /// Static-lifetime equivalent of [`Segment`] for compile-time
@@ -41,6 +42,7 @@ enum Segment {
 pub enum PlannedSegment {
     Static(&'static str),
     Dynamic(&'static str),
+    Compiled(&'static expr::StaticExpr),
 }
 
 /// Resolve the `text_index`-th text-node child of `parent`
@@ -92,6 +94,7 @@ pub fn install_planned_target(
         .map(|s| match s {
             PlannedSegment::Static(t) => Segment::Static((*t).to_string()),
             PlannedSegment::Dynamic(src) => Segment::Dynamic((*src).to_string()),
+            PlannedSegment::Compiled(expr) => Segment::Compiled(expr),
         })
         .collect();
     install(parent, proxy, root, target, runtime_segments);
@@ -107,6 +110,21 @@ fn install(
     let parent_node: &Node = parent.as_ref();
     for seg in segments {
         match seg {
+            Segment::Compiled(expression) => {
+                let Some(doc) = parent.owner_document() else {
+                    return;
+                };
+                let node = doc.create_text_node("");
+                let _ = parent_node.insert_before(node.as_ref(), Some(original.as_ref()));
+                let proxy = proxy.clone();
+                let root = root.clone();
+                let id = effect(move || {
+                    node.set_data(&js_to_string(
+                        &expression.evaluate_with(&proxy, root.as_ref()),
+                    ));
+                });
+                track_effect_on(parent, id);
+            }
             Segment::Static(s) => {
                 let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
                     return;

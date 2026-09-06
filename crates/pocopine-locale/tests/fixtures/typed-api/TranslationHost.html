@@ -1,0 +1,15 @@
+<section>
+  <h1 pp-text="$t.cart.title"></h1>
+  <p class="welcome" pp-text="$t('common.welcome', name)"></p>
+  <p class="items" pp-text="$t('cart.items', count)"></p>
+  <input class="label" :aria-label="$t('common.welcome', name)">
+  <span class="interp">{{ $t('common.welcome', name) }}</span>
+  <p class="rich" pp-text="$t.cart.terms">
+    <a class="terms" pp-ref="terms" href="#terms" @click.prevent="clicked"></a>
+    <a class="privacy" href="#privacy"></a>
+  </p>
+  <p class="nested" pp-text="$t('cart.nesting', count)"><strong class="n0"></strong><em class="n1"></em></p>
+  <template pp-if="visible"><p class="conditional" pp-text="$t('common.welcome', name)"></p></template>
+  <template pp-for="row in rows" pp-key="row.id"><p class="row" pp-text="$t('common.welcome', row.name)"></p></template>
+  <span class="trailing" pp-text="clicks"></span>
+</section>

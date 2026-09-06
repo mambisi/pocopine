@@ -5,6 +5,17 @@ Working branch: `feat/locale`. The specification is
 in section 5.5. An unchecked item remains required; this checklist does not
 replace or narrow the RFC.
 
+## Confirmed authoring decision
+
+2026-09-06: `$t` is the only template translation surface. Use existing
+`pp-text`, attribute bindings and interpolation. `$t.module.key` is shorthand
+for a message without arguments; `$t('common.welcome', name)` supplies values
+in the generated signature's alphabetical argument-name order. There is no
+`pp-t` or `pp-t:*` directive. A direct `$t` binding in `pp-text` preserves rich
+message child elements. This clarification supersedes the original directive
+examples. Compiled template support is verified below; CLI/build delivery is
+still in progress.
+
 ## Shared runtime and catalogs
 
 - [x] Leaf `pocopine-locale` crate; explicit, validated locale values; no ambient
@@ -32,8 +43,8 @@ replace or narrow the RFC.
   default-locale missing-key and argument/type validation; orphan reporting.
 - [x] Typed generated Rust functions with explicit locale; Rust completion/docs;
   host-only message retention and separation from browser assets.
-- [ ] Compiled `pp-t` plans, named arguments, positional element preservation,
-  compiled `$t` paths for attributes; diagnostics reject unsupported syntax.
+- [x] Compiled `$t` paths and calls in existing bindings; positional values,
+  rich child-element preservation, and diagnostics for unsupported syntax.
 
 ## Browser and delivery
 
@@ -43,9 +54,8 @@ replace or narrow the RFC.
   load failures and stale build IDs fail visibly and recover deliberately.
 - [x] Shared generated-API/browser cache and read-only committed locale signal;
   cancellation-safe atomic selection after catalog validation.
-- [ ] Reactive template text/attribute translation; cleanup on unmount;
-  no remount needed. The locale signal/effect contract is tested, but template
-  installation remains pending.
+- [x] Reactive template text/attribute translation; cleanup on unmount;
+  locale/argument updates preserve native placeholder identity without remounting.
 - [ ] Locale routing modes, precedence, explicit picker, persistence,
   `lang`/`dir`, and locale-aware links.
 
@@ -169,7 +179,7 @@ Implementation and verification are in progress.
 - `server::generate_rust` emits typed `t::module::message(locale, args...)`
   functions, default-copy Rust docs, explicit initialization, and separate
   host/browser modules. Rust references to element-bearing messages fail with a
-  `pp-t` diagnostic. App build wiring and compiled template plans remain pending.
+  rich-message diagnostic. App build wiring and compiled template plans remain pending.
 - `tools/check-locale-codegen.py` builds a real isolated consumer. Host and wasm
   calls work; wrong argument types, missing keys and browser calls to host-only
   keys fail compilation. The same persisted recipient jobs pass before/after a
@@ -295,3 +305,39 @@ application messages; the framework adapter handles pre-handler rejections.
   the umbrella crate and locale; the core/umbrella strict-parity wasm check also
   passes. Workspace formatting and diff whitespace checks pass. Full workspace
   gates remain pending.
+
+
+2026-09-06, corrected `$t` template checkpoint:
+
+- Replaced the directive proposal with `$t` in existing text bindings, attribute
+  bindings and interpolation. Calls such as `$t('common.welcome', name)` use a
+  literal key and positional values in alphabetical catalog-argument order,
+  matching generated Rust functions. The removed directive has no registry
+  entry; its spellings produce migration diagnostics.
+- Catalog extraction and template compilation enforce static keys, arity and
+  element contracts. A generated private macro resolves keys to descriptors
+  with dense IDs and build identity. Runtime values are checked against the
+  catalog's text/number/date kinds. Exact decimal-string plural inputs retain
+  visible fractional digits. Extended static expressions stay scoped to locale
+  plans; ordinary expression fallback behavior remains unchanged.
+- Direct translated `pp-text` preserves template child elements and safely
+  patches text/order/nesting. Attribute and interpolation translations remain
+  plain text. Bindings recover after late controller activation; unmount releases
+  them. The fixture checks names containing markup as literal text, changing
+  variables/counts/languages, conditionals, keyed rows, rich sibling reordering,
+  reversed nesting, focus, refs, listeners and teardown.
+- Verification: 38 locale unit tests, 134 macro unit tests, all 54 existing
+  template browser tests and all six locale browser tests pass. The complete
+  generated-API verifier passes host/worker/HTTP tests, normal browser calls,
+  default-Intl and strict-parity component tests, and targeted compile failures
+  for missing keys, wrong arity, rich attributes, dynamic keys and `pp-t`.
+  Focused host and wasm strict Clippy and formatter fixed-point checks pass.
+- Reachable release templates retain no audited catalog key/message bytes,
+  including inert source HTML for lifted bodies. The whole template fixture is
+  1,565,164 bytes raw / 426,107 gzip; the separate leaf fixture is 422,077 raw /
+  106,742 gzip. These are whole binaries, not marginal locale or configured-data
+  growth measurements. Full workspace gates and remaining integration tasks are
+  still required.
+- SSR history was checked locally: `feat/rfc-099-ssr-phase2` and its remote ref
+  contain the stamper/hydration work (including `6a94e7b0`); this checkout does
+  not. The old RFC's PR status cannot establish availability on this branch.

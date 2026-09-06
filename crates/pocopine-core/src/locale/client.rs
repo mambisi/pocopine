@@ -17,6 +17,7 @@ use crate::{ServerError, Setter, Signal, signal};
 
 thread_local! {
     static ACTIVE: RefCell<Option<LocaleController>> = const { RefCell::new(None) };
+    static ACTIVATED: (Signal<bool>, Setter<bool>) = signal(false);
 }
 
 /// One browser application's committed locale. Cloning shares selection and
@@ -56,23 +57,33 @@ impl LocaleController {
     /// same controller is harmless; replacing it would strand mounted effects
     /// and is rejected. No corresponding ambient host state exists.
     pub fn activate(&self) -> Result<(), TranslationError> {
-        ACTIVE.with(|slot| {
+        let newly_active = ACTIVE.with(|slot| {
             let mut slot = slot.borrow_mut();
             if let Some(existing) = slot.as_ref() {
                 if Rc::ptr_eq(&existing.0, &self.0) {
-                    return Ok(());
+                    return Ok(false);
                 }
                 return Err(TranslationError::Initialization(
                     "a different browser locale controller is already active".into(),
                 ));
             }
             *slot = Some(self.clone());
-            Ok(())
-        })
+            Ok(true)
+        })?;
+        // Publish only after releasing ACTIVE's borrow. Bindings mounted too
+        // early can leave their diagnostic state once boot has validated data.
+        if newly_active {
+            ACTIVATED.with(|(_, setter)| setter.set(true));
+        }
+        Ok(())
     }
 
     pub fn locales(&self) -> &Locales {
         self.0.catalogs.locales()
+    }
+
+    pub fn build_id(&self) -> &str {
+        self.0.catalogs.build_id()
     }
 
     /// Reactive read for computed text and template effects.
@@ -223,11 +234,11 @@ fn require_supported(locales: &Locales, locale: &Locale) -> Result<(), Translati
 
 /// Read the active browser controller. Used by compiled template bindings.
 pub fn active() -> Result<LocaleController, TranslationError> {
-    ACTIVE.with(|slot| {
-        slot.borrow()
-            .clone()
-            .ok_or(TranslationError::NotInitialized)
-    })
+    let controller = ACTIVE.with(|slot| slot.borrow().clone());
+    if controller.is_none() {
+        ACTIVATED.with(|(signal, _)| signal.get());
+    }
+    controller.ok_or(TranslationError::NotInitialized)
 }
 
 pub(crate) fn rpc_locale() -> Option<Locale> {

@@ -15,12 +15,12 @@ pub struct CatalogSource {
 
 #[derive(Clone, Debug)]
 pub enum ReferenceKind {
-    /// Named pp-t arguments and the number of template-owned child elements.
-    Text {
-        arguments: Vec<String>,
-        elements: usize,
+    /// A compiled template call. Values follow alphabetical catalog-argument
+    /// order. Only a direct pp-text binding supplies element placeholders.
+    Template {
+        arguments: usize,
+        elements: Option<usize>,
     },
-    Attribute,
     /// The generated Rust signature enforces arity/types at its call site.
     Rust,
     /// A Rust use/re-export. A catalog namespace imports no message; importing
@@ -200,43 +200,29 @@ fn compile(
             continue;
         };
         match &reference.kind {
-            ReferenceKind::Text {
+            ReferenceKind::Template {
                 arguments,
                 elements,
             } => {
-                let supplied: BTreeSet<_> = arguments.iter().cloned().collect();
-                let expected: BTreeSet<_> = message.arguments().keys().cloned().collect();
-                if supplied.len() != arguments.len() || supplied != expected {
-                    out.diagnostics.push(
-                        Diagnostic::error(format!(
-                            "{} requires arguments {expected:?}; received {arguments:?}",
-                            reference.key
-                        ))
-                        .at(reference.span),
-                    );
+                if *arguments != message.arguments().len() {
+                    let names = message.arguments().keys().collect::<Vec<_>>();
+                    out.diagnostics.push(Diagnostic::error(format!("{} requires arguments {names:?} in this order; received {arguments} values", reference.key)).at(reference.span));
                 }
-                let expected_elements: BTreeSet<_> = (0..*elements)
-                    .filter_map(|i| u16::try_from(i).ok())
-                    .collect();
-                if *elements > u16::MAX as usize || message.elements() != &expected_elements {
-                    out.diagnostics.push(
-                        Diagnostic::error(format!(
-                            "{} element placeholders do not match its {elements} template children",
-                            reference.key
-                        ))
-                        .at(reference.span),
-                    );
+                match elements {
+                    Some(elements) => {
+                        let expected: BTreeSet<_> = (0..*elements).filter_map(|i| u16::try_from(i).ok()).collect();
+                        if *elements > u16::MAX as usize || message.elements() != &expected {
+                            out.diagnostics.push(Diagnostic::error(format!("{} element placeholders do not match its {elements} template children", reference.key)).at(reference.span));
+                        }
+                    }
+                    None if !message.elements().is_empty() => out.diagnostics.push(Diagnostic::error(format!("{} requires a direct $t binding in pp-text for its element placeholders", reference.key)).at(reference.span)),
+                    None => {}
                 }
-            }
-            ReferenceKind::Attribute
-                if !message.arguments().is_empty() || !message.elements().is_empty() =>
-            {
-                out.diagnostics.push(Diagnostic::error(format!("$t.{} requires a text-only message without arguments; use a computed Rust translation for argument-taking attributes", reference.key)).at(reference.span));
             }
             ReferenceKind::Rust | ReferenceKind::RustImport if !message.elements().is_empty() => {
                 out.diagnostics.push(
                     Diagnostic::error(format!(
-                        "{} has element placeholders and requires pp-t template rendering",
+                        "{} has element placeholders and requires a direct $t binding in pp-text",
                         reference.key
                     ))
                     .at(reference.span),
@@ -405,9 +391,9 @@ mod tests {
             MessageReference {
                 key: "cart.items".into(),
                 module: "cart".into(),
-                kind: ReferenceKind::Text {
-                    arguments: vec!["n".into()],
-                    elements: 0,
+                kind: ReferenceKind::Template {
+                    arguments: 1,
+                    elements: Some(0),
                 },
                 audience: CatalogAudience::Browser,
                 span: Span::UNKNOWN,
@@ -530,9 +516,12 @@ mod tests {
     }
 
     #[test]
-    fn refuses_attributes_with_arguments_and_leaf_namespace_collisions() {
+    fn rejects_wrong_arity_and_leaf_namespace_collisions() {
         let (locales, mut sources, mut references) = setup();
-        references[0].kind = ReferenceKind::Attribute;
+        references[0].kind = ReferenceKind::Template {
+            arguments: 0,
+            elements: None,
+        };
         sources[0].source =
             r#"{"cart.items":"{n, number}","cart.items.count":"Count","auth.failed":"Failed"}"#
                 .into();
@@ -547,7 +536,7 @@ mod tests {
             result
                 .diagnostics
                 .iter()
-                .any(|d| d.message.contains("text-only"))
+                .any(|d| d.message.contains("requires arguments"))
         );
         assert!(result.catalogs.is_empty());
     }
@@ -564,11 +553,11 @@ mod tests {
             result
                 .diagnostics
                 .iter()
-                .any(|d| d.message.contains("requires pp-t"))
+                .any(|d| d.message.contains("requires a direct $t"))
         );
-        references[0].kind = ReferenceKind::Text {
-            arguments: vec![],
-            elements: 1,
+        references[0].kind = ReferenceKind::Template {
+            arguments: 0,
+            elements: Some(1),
         };
         let result = compile_catalogs(&locales, &sources, &references);
         assert!(!result.has_errors(), "{:?}", result.diagnostics);

@@ -165,3 +165,6 @@ mod browser_tests {
         );
     }
 }
+
+#[cfg(feature = "template-integration")]
+mod template_contract;

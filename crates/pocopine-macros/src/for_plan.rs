@@ -376,6 +376,9 @@ fn walk_row(el: &Element, ctx: &mut RowWalkCtx, path: &mut Vec<u16>) -> bool {
 /// dynamic attributes record a binding/listener; anything else
 /// fails the row.
 fn classify_attribute(name: &str, value: &str, path: &[u16], ctx: &mut RowWalkCtx) -> bool {
+    if crate::template_plan::contains_translation(value) {
+        return false;
+    }
     // Listener shorthand: `@<event>="<expr>"`. RFC-020.
     if let Some(event) = name.strip_prefix('@') {
         // No modifiers: reject if `event` contains a `.`.
