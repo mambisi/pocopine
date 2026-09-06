@@ -26,24 +26,33 @@
     }
     return null;
   }
-  var cookie = null;
+  var cookie = null, visited = false;
   try {
     document.cookie.split(";").some(function (entry) {
       var pair = entry.trim().split("=");
+      if (pair[0] === "pocopine_locale_visited" && pair[1] === "1") visited = true;
       if (pair[0] !== "pocopine_locale") return false;
-      cookie = pair[1]; return true;
+      cookie = pair[1]; return false;
     });
+  } catch (_) {}
+  try {
+    cookie = cookie || sessionStorage.getItem("pocopine_locale");
+    visited = visited || sessionStorage.getItem("pocopine_locale_visited") === "1";
   } catch (_) {}
   var segment = location.pathname.split("/")[1];
   var route = manifest.config.routing !== "none" && supported[segment.toLowerCase()] || null;
   var languages = Array.from(navigator.languages || [navigator.language]);
-  var selected = route || match(cookie);
+  // Only the first bare-root visit negotiates a redirect. Other unprefixed
+  // pages always mean the default, regardless of cookies or browser language.
+  var detect = manifest.config.routing === "none" || (!visited && location.pathname === "/");
+  var selected = route || (!detect && manifest.config.default) || match(cookie);
   for (var i = 0; !selected && i < languages.length; i++) selected = match(languages[i]);
   selected = selected || manifest.config.default;
   var pending = new Map();
   var api = {
     manifest: manifest, selected: selected, route: route, cookie: cookie,
-    accepted: languages.join(","), ready: false, appReady: false,
+    accepted: languages.join(","), visited: visited,
+    url: location.pathname + (location.search || "") + (location.hash || ""), ready: false, appReady: false,
     load: function (url) {
       if (!pending.has(url)) {
         var task = fetch(url, { credentials: "same-origin" }).then(function (response) {

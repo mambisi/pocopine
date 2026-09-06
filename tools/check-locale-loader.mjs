@@ -54,6 +54,11 @@ for (const [options, expected] of [
   [{ path: '/de/account', cookie: 'pocopine_locale=fr', routing: 'prefix-all' }, 'de'],
   [{ path: '/de/account', languages: ['fr'], routing: 'none' }, 'fr'],
   [{ languages: ['ja'] }, 'en'],
+  [{ path: '/pricing', cookie: 'pocopine_locale=fr', languages: ['de'], routing: 'prefix-except-default' }, 'en'],
+  [{ path: '/', cookie: 'pocopine_locale=fr; pocopine_locale_visited=1', routing: 'prefix-except-default' }, 'en'],
+  [{ path: '/', cookie: 'pocopine_locale=fr', routing: 'prefix-except-default' }, 'fr'],
+  [{ path: '/en/', cookie: 'pocopine_locale=fr', routing: 'prefix-except-default' }, 'en'],
+  [{ path: '/pricing', languages: ['fr'], routing: 'prefix-all' }, 'en'],
 ]) {
   const { context, requests } = shell(options);
   assert.equal(context.__pocopineLocale.selected, expected);

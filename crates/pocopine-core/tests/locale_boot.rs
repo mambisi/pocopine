@@ -12,6 +12,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 #[wasm_bindgen(inline_js = r#"
 export function shell(manifest) {
+  history.replaceState(null, "", "/fr/");
   window.__pocopineLocale = {
     manifest: JSON.parse(manifest), route: 'fr', cookie: 'en', accepted: 'en',
     responses: new Map(), ready: false, failed: 0, requests: 0,
@@ -25,12 +26,18 @@ export function shell(manifest) {
   };
 }
 export function response(url, bytes) { window.__pocopineLocale.responses.set(url, bytes.slice()); }
+export function cookie() { return document.cookie; }
+export function back() {
+  return new Promise(resolve => { window.addEventListener('popstate', () => setTimeout(resolve, 0), {once: true}); history.back(); });
+}
 export function metric(name) { return Number(window.__pocopineLocale[name]); }
 "#)]
 extern "C" {
     fn shell(manifest: &str);
     fn response(url: &str, bytes: &[u8]);
     fn metric(name: &str) -> u32;
+    fn cookie() -> String;
+    fn back() -> js_sys::Promise;
 }
 
 fn bytes(locale: &str, text: &str) -> Vec<u8> {
@@ -104,7 +111,16 @@ async fn boot_validates_before_activation_and_switch_retries_preserve_the_visibl
     assert_eq!(root.get_attribute("lang").as_deref(), Some("fr"));
     assert_eq!(root.get_attribute("dir").as_deref(), Some("ltr"));
     assert_eq!(controller.format(MessageId(0), &[]).unwrap(), "Bonjour");
+    assert_eq!(
+        controller.href("/pricing?q=1#buy").unwrap(),
+        "/fr/pricing?q=1#buy"
+    );
     assert!(controller.set_locale("en".parse().unwrap()).await.is_err());
+    assert_eq!(
+        web_sys::window().unwrap().location().pathname().unwrap(),
+        "/fr/"
+    );
+    assert!(!cookie().contains("pocopine_locale=en"));
     assert_eq!(controller.snapshot().as_str(), "fr");
     response("/pkg/locales/en.json", &bytes("en", "Hello"));
     assert_eq!(
@@ -116,4 +132,15 @@ async fn boot_validates_before_activation_and_switch_retries_preserve_the_visibl
     let requests = metric("requests");
     controller.set_locale("fr".parse().unwrap()).await.unwrap();
     assert_eq!(metric("requests"), requests, "cached switch must not fetch");
+    assert!(cookie().contains("pocopine_locale=fr"));
+    wasm_bindgen_futures::JsFuture::from(back()).await.unwrap();
+    assert_eq!(controller.snapshot().as_str(), "en");
+    assert_eq!(
+        web_sys::window().unwrap().location().pathname().unwrap(),
+        "/"
+    );
+    assert!(
+        cookie().contains("pocopine_locale=fr"),
+        "history must not overwrite the picker preference"
+    );
 }

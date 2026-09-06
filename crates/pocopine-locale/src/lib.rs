@@ -16,6 +16,7 @@ mod negotiate;
 mod plural;
 mod prepared;
 mod render;
+mod routing;
 
 #[cfg(any(not(target_arch = "wasm32"), feature = "strict-parity"))]
 mod icu;
@@ -47,6 +48,7 @@ pub use negotiate::{
 pub use plural::{CardinalRule, InvalidPluralArg, PluralArg, PluralCategory};
 pub use prepared::{PreparedCatalog, TranslationError};
 pub use render::{DateTimeArg, MessageFormatter, RenderError, RenderedPart, TimeZone};
+pub use routing::{LOCALE_VISITED_COOKIE, LocaleRoute, LocaleRoutes};
 
 /// The vendored CLDR JSON distribution used to generate the rule tables.
 pub const CLDR_VERSION: &str = "48.2.0";

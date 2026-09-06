@@ -1,4 +1,4 @@
 [locale]
 default = "en"
 locales = ["en", "fr", "ar"]
-routing = "none"
+routing = "prefix-except-default"

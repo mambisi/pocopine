@@ -8,7 +8,11 @@ pocopine run --path examples/locale --port 3088
 
 Open http://127.0.0.1:3088. Change the name, increase the item count, switch
 languages, and request a greeting or public error from the server. The server
-receives the committed browser language on every request.
+receives the committed browser language on every request. The Home/Pricing links
+follow the selected language; switching preserves the name and count, and browser
+back/forward restores the URL language without replacing the saved preference.
+A first visit to `/` can redirect from language detection; `/pricing` explicitly
+selects English and `/fr/pricing` selects French.
 
 The CLI reads `pocopine.toml`, extracts active browser and host references, and
 generates `t` before compiling. `include_translations!()` includes that output;
