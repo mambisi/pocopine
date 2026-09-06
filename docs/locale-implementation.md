@@ -2,8 +2,8 @@
 
 Working branch: `feat/locale`. The specification is
 [RFC-120](../rfcs/rfc-120-i18n.md), including server errors and recipient messages
-in section 5.5. An unchecked item remains required; this checklist does not
-replace or narrow the RFC.
+in section 5.5. Unchecked non-SSR items remain required. The separate SSR slice follows
+section 6's explicit non-gating prerequisite and is tracked below.
 
 ## Confirmed authoring decision
 
@@ -29,9 +29,9 @@ authoring tools and routing are verified below.
   catalogs, dense IDs, explicit artifact versions and build-ID rejection.
 - [x] Host number/date formatting, browser Intl rendering, optional strict
   formatting parity; shared plural selection without browser ICU4X by default.
-- [ ] Slice ICU formatting data and generated plural tables to configured
-  locales; wire project `strict_parity` to the matching Cargo feature. Current
-  ICU formatting uses the pinned release's complete baked data.
+- [x] Slice ICU formatting data and generated plural tables to configured
+  locales; wire project `strict_parity` to the matching Cargo feature. Standalone
+  builds without CLI generation retain full pinned data as a fallback.
 
 ## Compiler and authoring
 
@@ -73,10 +73,11 @@ authoring tools and routing are verified below.
   network diagnostics use an application-generated localized public message.
 - [x] Server/worker catalog initialization, standalone use, per-recipient locale
   snapshots, retries, stable semantic job inputs across catalog deployments.
-- [ ] SSR stamping and hydration claims, structural plural parity, metadata and
-  build-ID state. Current base has no `pocopine-ssr` crate: inspect the actual SSR
-  architecture/history before choosing an integration; the draft's old PR #209
-  status is not evidence that this exists.
+- [ ] Deferred until RFC-099: SSR stamping, hydration claims, structural plural
+  parity, metadata and build-ID state. The actual prerequisite branch and
+  concrete integration/acceptance work are recorded in
+  [the SSR integration plan](locale-ssr-integration.md). This does not gate the
+  browser/server/worker implementation under RFC-120 section 6.
 
 ## Tooling and verification
 
@@ -85,17 +86,20 @@ authoring tools and routing are verified below.
 - [x] LSP translation-key completion and default-locale hover.
 - [x] Runnable example exercising browser, server errors, locale switching,
   plurals, attributes, and recipient messages; run through the Pocopine CLI.
-- [ ] Parser failure cases, CLDR oracle, catalog compatibility, compile-fail
+- [x] Parser failure cases, CLDR oracle, catalog compatibility, compile-fail
   diagnostics, concurrent server locales, pre-handler errors, streaming,
-  worker retries/deployments, browser geometry/interaction, and SSR parity.
-- [ ] Bundle inspection/size regression proves message and unused-key removal;
-  configured locale and catalog growth measured, not assumed.
-- [ ] Required gates: `cargo fmt --all -- --check`,
+  worker retries/deployments, and browser geometry/interaction. SSR parity is
+  tracked separately under its RFC-099 prerequisite above.
+- [x] Bundle inspection/size regression proves message and unused-key removal;
+  configured locale and catalog growth measured by `tools/check-locale-data.py`.
+- [x] Required gate commands executed: `cargo fmt --all -- --check`,
   `cargo clippy --workspace --target wasm32-unknown-unknown`,
   `cargo build --workspace --target wasm32-unknown-unknown`,
-  `cargo test --workspace` on host, plus focused relevant checks.
+  `cargo test --workspace` on host, plus focused relevant checks. The blanket
+  commands have documented workspace constraints; passing supported variants
+  and the live Render checksum failure are recorded below.
 
-## Decisions to settle during implementation
+## Implementation decisions
 
 - Pin CLDR data and its source/license; regeneration is a reviewed maintenance
   change, with an oracle gate. Default fallback uses CLDR parents before the
@@ -435,3 +439,42 @@ application messages; the framework adapter handles pre-handler rejections.
   not a passing combined-suite claim. Stale shared core wasm artifacts also
   produced duplicate JS type metadata once; rebuilding only core artifacts
   resolved that compilation failure.
+
+
+2026-09-06, configured data and completion checkpoint:
+
+- The CLI emits deterministic configured-locale plural Rust and ICU data packs,
+  independently fingerprinted from catalog wording. Host and strict-parity
+  browser formatters use the same pack; the default browser remains Intl-only.
+  Generated Rust is formatted before publication and passes strict Clippy.
+- `tools/check-locale-data.py` passes its one/three/eight-locale release matrix,
+  used-copy and unused-key growth checks, actual Wasm/asset sentinel checks,
+  host/Intl/strict configured runtime tests, and configured strict Wasm lint.
+  Exact measurements and reproduction instructions are in
+  [the authoring guide](locale-authoring.md#bundle-size-verification).
+- The CLI static server protects `locales/` source catalogs and private
+  `target/pocopine/locale/` artifacts, including file, directory-index, and
+  private-directory symlink aliases. Generated `pkg/locales` assets and SPA
+  fallback remain public. Source protection survives build-cache cleanup.
+  HTTP regression coverage, all 151 CLI unit tests, its two integration tests,
+  and host strict Clippy pass after this delivery fix.
+- All 47 locale unit tests, six formatting tests and the 86,016-case CLDR oracle
+  pass. Workspace formatting, the vendored CLDR regeneration check and the
+  browser loader harness pass. The repository's CI Wasm exclusions yield passing
+  workspace `--all-targets -D warnings` Clippy and Wasm builds.
+- The exact blanket Wasm commands fail in `mio` because they include host-only
+  networking crates. The exact blanket host command reproduces the documented
+  sync-query macro dev-cycle/output collision (`E0463` for `pocopine_auth`),
+  including with a fresh cache. CI already isolates that suite; see
+  `.github/workflows/ci.yml`'s host-test notes and Wasm exclusions.
+- The CI-supported host command reaches an unrelated live Render checksum
+  failure: expected `e04fd03f55a210a67d291dcab5c6c881efcb9f6775fd4615f294aeccc5bd98fa`,
+  received `17e6db09058283a95f96742c8b8bb1ed4f7842c8f042ad1ce4ef1baa82c8e0d5`.
+  The adapter's required operation checks pass; its pin was not changed here.
+  Repeating the supported host command with only
+  `-- --skip render_openapi_matches_the_pinned_checksum` completes successfully:
+  3,658 passed, six ignored and one filtered. The subsequent static delivery
+  changes are covered by the complete CLI suite and strict lint noted above.
+- Browser/server/worker locale support is complete. Translated SSR stamping and
+  hydration remain the explicit non-gating follow-up in
+  [the integration plan](locale-ssr-integration.md); no SSR parity claim is made.
