@@ -2,14 +2,18 @@
 //! crate root. Project discovery is the explicit IO boundary; catalog
 //! compilation is deterministic and operates on supplied source records.
 
+mod catalogs;
 mod cfg;
+mod codegen;
 mod compile;
 mod extract_rust;
 mod extract_template;
 mod project;
 mod source;
 
+pub use catalogs::ServerCatalogs;
 pub use cfg::CfgSet;
+pub use codegen::generate_rust;
 pub use compile::{
     CatalogSource, Compilation, CompiledCatalog, MessageReference, MessageSignature, ReferenceKind,
     compile_catalogs,
