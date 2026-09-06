@@ -1702,6 +1702,7 @@ fn update_route_state(
     });
     ROUTE_SCOPE.with(|cell| {
         if let Some(scope) = cell.get() {
+            crate::scope::invalidate_field_cache(scope.id);
             trigger_scope(scope.id);
         }
     });
