@@ -4,7 +4,7 @@ use std::{
     fmt,
 };
 
-use crate::{CardinalRule, Locale, PluralArg};
+use crate::{CardinalRule, DateTimeArg, Locale, PluralArg};
 
 const MAX_MESSAGE_BYTES: usize = 65_536;
 const MAX_NODES: usize = 4_096;
@@ -37,13 +37,13 @@ pub enum DateTimeStyle {
     Time(StyleLength),
 }
 
-/// Typed input to the shared message interpreter. Timestamps are milliseconds
-/// since the Unix epoch; their timezone is a separate rendering preference.
+/// Typed input to the shared message interpreter. Date/time inputs include an
+/// explicit recipient timezone as well as their Unix timestamp.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value<'a> {
     Text(&'a str),
     Number(PluralArg),
-    DateTime(i64),
+    DateTime(&'a DateTimeArg),
 }
 
 impl Value<'_> {
@@ -67,7 +67,7 @@ pub enum MessagePart<'a> {
         style: NumberStyle,
     },
     DateTime {
-        unix_millis: i64,
+        value: &'a DateTimeArg,
         style: DateTimeStyle,
     },
     OpenElement(u16),
@@ -238,8 +238,8 @@ fn select<'a>(
                     value,
                     style: NumberStyle::Decimal,
                 },
-                Value::DateTime(unix_millis) => MessagePart::DateTime {
-                    unix_millis,
+                Value::DateTime(value) => MessagePart::DateTime {
+                    value,
                     style: DateTimeStyle::Date(StyleLength::Medium),
                 },
             }),
@@ -253,11 +253,11 @@ fn select<'a>(
                 });
             }
             Node::DateTime(name, style) => {
-                let Value::DateTime(unix_millis) = get(name) else {
+                let Value::DateTime(value) = get(name) else {
                     unreachable!("checked argument contract")
                 };
                 out.push(MessagePart::DateTime {
-                    unix_millis,
+                    value,
                     style: *style,
                 });
             }
@@ -729,9 +729,10 @@ mod tests {
         let message = Message::parse("<1>Privacy</1>, <0>terms</0>: {n, number, percent}; {at, date, long}; {at, time, short}").unwrap();
         assert_eq!(message.arguments()["at"], ArgumentKind::DateTime);
         assert_eq!(message.elements(), &BTreeSet::from([0, 1]));
+        let at = DateTimeArg::new(0, crate::TimeZone::utc()).unwrap();
         let args = [
             ("n", Value::Number("0.5".parse().unwrap())),
-            ("at", Value::DateTime(0)),
+            ("at", Value::DateTime(&at)),
         ];
         let parts = message.parts(&"fr".parse().unwrap(), &args).unwrap();
         assert_eq!(parts[0], MessagePart::OpenElement(1));
@@ -740,7 +741,7 @@ mod tests {
             style: NumberStyle::Percent
         }));
         assert!(parts.contains(&MessagePart::DateTime {
-            unix_millis: 0,
+            value: &at,
             style: DateTimeStyle::Date(StyleLength::Long)
         }));
     }

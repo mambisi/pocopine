@@ -11,13 +11,16 @@ replace or narrow the RFC.
   server locale; host/client dependencies gated at module boundaries.
 - [x] Vendored, reproducible CLDR cardinal rules and parent chains; exact decimal
   plural operands; host ICU4X differential oracle and regeneration/drift check.
-- [ ] ICU MF1 closed-subset parser and formatter: interpolation, plural/exact
+- [x] ICU MF1 closed-subset parser and formatter: interpolation, plural/exact
   selectors, select, number/percent, date/time, apostrophe escaping, bounded
   nesting, and positional element placeholders.
 - [x] Default-locale argument contracts, safe fallback, validated immutable
   catalogs, dense IDs, explicit artifact versions and build-ID rejection.
-- [ ] Host number/date formatting, browser Intl rendering, optional strict
+- [x] Host number/date formatting, browser Intl rendering, optional strict
   formatting parity; shared plural selection without browser ICU4X by default.
+- [ ] Slice ICU formatting data and generated plural tables to configured
+  locales; wire project `strict_parity` to the matching Cargo feature. Current
+  ICU formatting uses the pinned release's complete baked data.
 
 ## Compiler and authoring
 
@@ -27,7 +30,7 @@ replace or narrow the RFC.
   cfg; wire discovery into the CLI and application build pipeline.
 - [x] Static keys; module locality and `common.*`; duplicate/leaf-branch errors;
   default-locale missing-key and argument/type validation; orphan reporting.
-- [ ] Typed generated Rust functions with explicit locale; completion metadata;
+- [x] Typed generated Rust functions with explicit locale; Rust completion/docs;
   host-only message retention and separation from browser assets.
 - [ ] Compiled `pp-t` plans, named arguments, positional element preservation,
   compiled `$t` paths for attributes; diagnostics reject unsupported syntax.
@@ -50,7 +53,7 @@ replace or narrow the RFC.
 - [ ] Public error/validation text translated without changing classification;
   internal diagnostics separated from public payload; network errors localized
   on the client. Preserve existing wire compatibility.
-- [ ] Server/worker catalog initialization, standalone use, per-recipient locale
+- [x] Server/worker catalog initialization, standalone use, per-recipient locale
   snapshots, retries, stable semantic job inputs across catalog deployments.
 - [ ] SSR stamping and hydration claims, structural plural parity, metadata and
   build-ID state. Current base has no `pocopine-ssr` crate: inspect the actual SSR
@@ -83,8 +86,9 @@ replace or narrow the RFC.
   reject `selectordinal` explicitly instead of silently treating it as cardinal.
 - Runtime catalog decoding/one-time parsing at initialization is compatible
   with section 10's ban on source parsing on every request.
-- The unconditional no-ICU4X-browser rule and explicit `strict_parity` exception
-  must be reconciled in documentation when implementing the opt-in path.
+- ICU4X is excluded from runtime message plural selection and the default
+  browser backend. Host text rendering and opt-in browser `strict_parity` use
+  ICU4X as explicitly distinguished in RFC sections 6 and 10.
 
 ## Evidence
 
@@ -141,3 +145,36 @@ Implementation and verification are in progress.
   integration tests pass. Focused host strict Clippy, wasm locale strict Clippy
   and build, workspace formatting and diff whitespace checks pass. Full workspace gates,
   generated APIs, CLI/build wiring and runtime integration remain pending.
+
+2026-09-06, formatting and generated API checkpoint:
+
+- Added prepared host ICU4X and default wasm Intl formatters, plus the explicit
+  `strict-parity` Cargo feature. Plural operands retain exact integer/fraction
+  semantics before text rounding. Dates require a validated timestamp and IANA
+  timezone; host/strict wasm use the pinned bundled timezone database. Browser
+  number formatters are prepared once and date formatters use a bounded cache.
+- Host catalogs initialize completely before use, validate identity and required
+  slots, and support private content-addressed files or generated embedded data.
+  They carry no current language and can be shared across threads. Browser
+  catalog installation validates before replacing cache entries; unloaded
+  locales and stale build IDs produce explicit errors.
+- `server::generate_rust` emits typed `t::module::message(locale, args...)`
+  functions, default-copy Rust docs, explicit initialization, and separate
+  host/browser modules. Rust references to element-bearing messages fail with a
+  `pp-t` diagnostic. App build wiring and compiled template plans remain pending.
+- `tools/check-locale-codegen.py` builds a real isolated consumer. Host and wasm
+  calls work; wrong argument types, missing keys and browser calls to host-only
+  keys fail compilation. The same persisted recipient jobs pass before/after a
+  catalog change that shifts dense IDs and edits wording. Retries keep locale,
+  timezone and typed semantic inputs; the application owns its delivery queue.
+- Verification: 35 host unit tests, six host formatting tests and the 86,016-case
+  plural oracle pass. Default and strict-parity wasm each pass the catalog cache
+  test and five formatting tests in Node. The generated fixture passes two host
+  tests per catalog build and its wasm runtime test. Focused host/default-wasm/
+  strict-wasm Clippy uses `--all-targets -D warnings`.
+- The fixture's default release wasm is 421,906 bytes raw / 106,702 gzip, with
+  actual generated calls exported. Sentinel audits find no catalog message text,
+  static key strings or host-only copy; its normal wasm dependency tree has no
+  ICU formatting or Jiff. These are whole-fixture sizes, not incremental locale
+  cost or configured-locale growth measurements. The broader size gate remains
+  unchecked, as do real-browser UI, CLI/build, HTTP/error, routing and SSR work.

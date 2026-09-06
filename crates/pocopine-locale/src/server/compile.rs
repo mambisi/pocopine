@@ -233,6 +233,15 @@ fn compile(
             {
                 out.diagnostics.push(Diagnostic::error(format!("$t.{} requires a text-only message without arguments; use a computed Rust translation for argument-taking attributes", reference.key)).at(reference.span));
             }
+            ReferenceKind::Rust | ReferenceKind::RustImport if !message.elements().is_empty() => {
+                out.diagnostics.push(
+                    Diagnostic::error(format!(
+                        "{} has element placeholders and requires pp-t template rendering",
+                        reference.key
+                    ))
+                    .at(reference.span),
+                );
+            }
             _ => {}
         }
         *reached.entry(reference.key.clone()).or_default() |=
@@ -541,5 +550,27 @@ mod tests {
                 .any(|d| d.message.contains("text-only"))
         );
         assert!(result.catalogs.is_empty());
+    }
+
+    #[test]
+    fn rich_messages_require_template_owned_elements_instead_of_plain_rust_calls() {
+        let (locales, mut sources, mut references) = setup();
+        sources[0].source = r#"{"cart.items":"<0>Details</0>","auth.failed":"Failed"}"#.into();
+        sources[1].source = "{}".into();
+        references[0].kind = ReferenceKind::Rust;
+        let result = compile_catalogs(&locales, &sources, &references);
+        assert!(result.has_errors());
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("requires pp-t"))
+        );
+        references[0].kind = ReferenceKind::Text {
+            arguments: vec![],
+            elements: 1,
+        };
+        let result = compile_catalogs(&locales, &sources, &references);
+        assert!(!result.has_errors(), "{:?}", result.diagnostics);
     }
 }

@@ -121,7 +121,7 @@ impl fmt::Display for Locale {
 
 /// Validated application locale set. Fallback is deterministic and shared by
 /// the catalog compiler, request negotiation, and recipient-message workers.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Locales {
     default: Locale,
     supported: BTreeSet<Locale>,

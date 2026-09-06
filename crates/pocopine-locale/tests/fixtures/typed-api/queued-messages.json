@@ -1,0 +1,5 @@
+[
+  {"recipient":"recipient-en","locale":"en","message":{"kind":"access_denied"}},
+  {"recipient":"recipient-fr","locale":"fr","message":{"kind":"access_denied"}},
+  {"recipient":"recipient-in-dubai","locale":"fr","message":{"kind":"appointment","at":{"unix_millis":1709249400000,"time_zone":"Asia/Dubai"}}}
+]
