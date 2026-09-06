@@ -48,6 +48,8 @@ replace or narrow the RFC.
 
 ## Server and workers
 
+- [x] Shared explicit-preference negotiation, CLDR parent matching, bounded
+  Accept-Language weights/exclusions and selection-source metadata.
 - [ ] Negotiated typed request locale available before framework rejections;
   RPC metadata propagation; locale fixed for streaming calls.
 - [ ] Public error/validation text translated without changing classification;
@@ -178,3 +180,22 @@ Implementation and verification are in progress.
   ICU formatting or Jiff. These are whole-fixture sizes, not incremental locale
   cost or configured-locale growth measurements. The broader size gate remains
   unchecked, as do real-browser UI, CLI/build, HTTP/error, routing and SSR work.
+
+2026-09-06, boundary negotiation checkpoint:
+
+- Added `LocalePreferences`, `NegotiatedLocale`, `LocaleSource` and
+  `Locales::negotiate` for recognized route locale, explicit RPC preference,
+  cookie, passive language list and final configured fallback, in that order.
+  Unsupported or malformed preferences do not prematurely force the default.
+  Selection uses CLDR parents, including script boundaries, consistently with
+  recipient and catalog fallback; it is not a separate RFC 4647 lookup policy.
+- The passive list uses [HTTP quality weights](https://www.rfc-editor.org/rfc/rfc9110.html#name-quality-values),
+  stable preference order and zero-weight exclusions. Parsing is bounded at
+  8 KiB/64 ranges. If no acceptable configured locale exists, the application
+  deliberately falls back to its default instead of HTTP 406. The shared
+  metadata names are `pocopine-locale` and `pocopine_locale`; transport wiring
+  and cookie persistence remain pending.
+- Three behavioral tests cover conflicting preferences, malformed weights,
+  regional/script fallback and oversized input on host and wasm. This is the
+  pure boundary policy; no HTTP middleware, redirects or RPC injection has been
+  installed yet, and the integration checklist remains unchecked.
