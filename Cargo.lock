@@ -8152,6 +8152,7 @@ dependencies = [
  "html5ever 0.27.0",
  "markup5ever_rcdom",
  "proc-macro2",
+ "syn 2.0.118",
 ]
 
 [[package]]

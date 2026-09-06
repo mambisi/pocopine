@@ -7,14 +7,14 @@ repository.workspace = true
 description = "Host-only .poco template parser (html5ever-based) shared by pocopine-macros (#[component] expansion) and pocopine-stylekit (utility extraction). Never linked into wasm output."
 
 [features]
-# RFC-116 — locate `poco!` bodies inside `.rs` sources. Off by default so
-# `pocopine-macros` (which recovers bodies from real spans instead) does not
-# pull `span-locations` into the proc-macro build graph.
-inline-scan = ["dep:proc-macro2"]
+# Shared literal decoding and source locations for compiler and source tools.
+inline-source = ["dep:proc-macro2", "dep:syn", "proc-macro2/span-locations"]
+inline-scan = ["inline-source"]
 
 [dependencies]
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 # `span-locations` is what populates the fallback source map, without which
 # every scanned span reports an empty byte range.
-proc-macro2 = { version = "1", features = ["span-locations"], optional = true }
+proc-macro2 = { version = "1", optional = true }
+syn = { version = "2", optional = true }

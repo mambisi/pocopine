@@ -20,7 +20,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
-use syn::{Lit, LitStr};
+use syn::LitStr;
 
 /// Verbatim body source plus the anchor span diagnostics should point at.
 pub(crate) struct RecoveredTemplate {
@@ -95,65 +95,9 @@ pub(crate) fn recover(input: TokenStream) -> Result<RecoveredTemplate, syn::Erro
 ///     `pocopine-expr`, so this walk never descends;
 ///   * anything else at the top level is text.
 fn unquote_text_literals(tokens: &[proc_macro::TokenTree], source: &str, base: usize) -> String {
-    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
-    let mut prev_is_eq = false;
-
-    for token in tokens {
-        match token {
-            proc_macro::TokenTree::Literal(literal) => {
-                if !prev_is_eq {
-                    // `syn` owns literal decoding: escapes, raw strings, and
-                    // unicode escapes all resolve here rather than in a
-                    // hand-rolled unescaper.
-                    let parsed: Result<Lit, _> = syn::parse_str(&literal.to_string());
-                    if let Ok(Lit::Str(text)) = parsed {
-                        let range = literal.span().byte_range();
-                        if range.start >= base && range.end <= base + source.len() {
-                            edits.push((
-                                (range.start - base)..(range.end - base),
-                                html_escape_text(&text.value()),
-                            ));
-                        }
-                    }
-                }
-                prev_is_eq = false;
-            }
-            proc_macro::TokenTree::Punct(punct) => {
-                prev_is_eq = punct.as_char() == '=';
-            }
-            // Groups are `{{ }}` interpolation — expression territory.
-            _ => prev_is_eq = false,
-        }
-    }
-
-    if edits.is_empty() {
-        return source.to_string();
-    }
-
-    // Apply back-to-front so earlier ranges stay valid.
-    let mut out = source.to_string();
-    for (range, replacement) in edits.into_iter().rev() {
-        if out.is_char_boundary(range.start) && out.is_char_boundary(range.end) {
-            out.replace_range(range, &replacement);
-        }
-    }
-    out
-}
-
-/// Escape a decoded literal for text position. Quotes are deliberately left
-/// alone: they are legal in text and escaping them would surprise authors who
-/// quoted a run precisely to avoid thinking about entities.
-fn html_escape_text(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            other => out.push(other),
-        }
-    }
-    out
+    let stream: TokenStream = tokens.iter().cloned().collect();
+    pocopine_template_parser::inline_source::normalize_inline_text(source, stream.into(), base)
+        .source
 }
 
 /// Body of the `#[proc_macro] poco` entry point.

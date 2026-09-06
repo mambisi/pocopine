@@ -604,10 +604,7 @@ struct InterpLite {
     segments: Vec<InterpSegment>,
 }
 
-enum InterpSegment {
-    Static(String),
-    Dynamic(String),
-}
+use pocopine_template_parser::InterpolationSegment as InterpSegment;
 
 /// RFC-058 Phase 6.5 — accumulated `pp-model[.modifier]="field"`
 /// site on a native input/textarea/select. Component-target
@@ -3562,62 +3559,7 @@ fn parse_pp_directive_name(rest: &str) -> Option<(String, Option<String>, Vec<St
 /// unclosed-`{{` handling, asserted by the unit tests below
 /// alongside the runtime crate's own tests.
 fn parse_interp_segments(input: &str) -> Result<Vec<InterpSegment>, String> {
-    let mut out = Vec::new();
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    let mut static_buf = String::new();
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'\\' && i + 2 < bytes.len() {
-            let n1 = bytes[i + 1];
-            let n2 = bytes[i + 2];
-            if (n1 == b'{' && n2 == b'{') || (n1 == b'}' && n2 == b'}') {
-                static_buf.push(n1 as char);
-                static_buf.push(n2 as char);
-                i += 3;
-                continue;
-            }
-        }
-        if b == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-            static_buf.push('\\');
-            i += 2;
-            continue;
-        }
-        if b == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if !static_buf.is_empty() {
-                out.push(InterpSegment::Static(std::mem::take(&mut static_buf)));
-            }
-            let start = i + 2;
-            let mut j = start;
-            let mut found = false;
-            while j + 1 < bytes.len() {
-                if bytes[j] == b'}' && bytes[j + 1] == b'}' {
-                    found = true;
-                    break;
-                }
-                j += 1;
-            }
-            if !found {
-                return Err("unclosed `{{` in text".into());
-            }
-            let src = std::str::from_utf8(&bytes[start..j])
-                .map_err(|_| "non-UTF-8 text")?
-                .trim()
-                .to_string();
-            if src.is_empty() {
-                return Err("empty `{{}}` interpolation".into());
-            }
-            out.push(InterpSegment::Dynamic(src));
-            i = j + 2;
-            continue;
-        }
-        static_buf.push(b as char);
-        i += 1;
-    }
-    if !static_buf.is_empty() {
-        out.push(InterpSegment::Static(static_buf));
-    }
-    Ok(out)
+    pocopine_template_parser::parse_interpolations(input)
 }
 
 /// Whether any descendant is a `<slot>` outlet — the marker for the
