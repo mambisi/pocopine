@@ -10,6 +10,7 @@ mod config;
 mod generated;
 mod locale;
 mod message;
+mod negotiate;
 mod plural;
 mod prepared;
 mod render;
@@ -35,6 +36,9 @@ pub use locale::{InvalidLocale, Locale, Locales};
 pub use message::{
     ArgumentKind, DateTimeStyle, FormatError, Message, MessageError, MessagePart, NumberStyle,
     StyleLength, Value,
+};
+pub use negotiate::{
+    LOCALE_COOKIE, LOCALE_HEADER, LocalePreferences, LocaleSource, NegotiatedLocale,
 };
 pub use plural::{CardinalRule, InvalidPluralArg, PluralArg, PluralCategory};
 pub use prepared::{PreparedCatalog, TranslationError};
