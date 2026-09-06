@@ -8156,6 +8156,7 @@ dependencies = [
  "pocopine-expr",
  "pocopine-stylekit",
  "pocopine-template-parser",
+ "prettyplease",
  "proc-macro2",
  "quick-xml 0.38.4",
  "quote",
