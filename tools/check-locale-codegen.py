@@ -36,13 +36,14 @@ def main():
     shutil.copyfile(ROOT / "Cargo.lock", FIXTURE / "Cargo.lock")
     cargo("test")
     cargo("test", "--features", "catalog-update")
+    cargo("test", "--features", "server-integration")
     cargo("check", "--features", "bad-argument", fail_contains=("mismatched types", "PluralArg", "not a number"))
-    cargo("check", "--features", "missing-key", fail_contains=("could not find `common` in `t`",))
+    cargo("check", "--features", "missing-key", fail_contains=("cannot find function `unused`",))
     cargo("test", "--target", "wasm32-unknown-unknown", "--lib")
     cargo("check", "--target", "wasm32-unknown-unknown", "--features", "host-key-in-browser", fail_contains=("could not find `auth` in `t`",))
     cargo("build", "--target", "wasm32-unknown-unknown", "--release")
     wasm = (TARGET / "wasm32-unknown-unknown/release/locale_typed_api_contract.wasm").read_bytes()
-    for sentinel in [b"BROWSER_COPY_SENTINEL", b"HOST_COPY_SENTINEL", b"UNUSED_COPY_SENTINEL", b"cart.items", b"cart.title", b"auth.denied"]:
+    for sentinel in [b"BROWSER_COPY_SENTINEL", b"HOST_COPY_SENTINEL", b"UNUSED_COPY_SENTINEL", b"cart.items", b"cart.title", b"auth.denied", b"common.bad_request", b"Invalid request.", b"Something went wrong."]:
         if sentinel in wasm:
             raise SystemExit(f"locale key/message bytes leaked into release wasm: {sentinel!r}")
     tree = cargo("tree", "--target", "wasm32-unknown-unknown", "--edges", "normal")

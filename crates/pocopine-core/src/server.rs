@@ -46,6 +46,20 @@ impl fmt::Display for ServerError {
 impl std::error::Error for ServerError {}
 
 impl ServerError {
+    /// The server's public payload, without English diagnostic prefixes from
+    /// Display. Applications translate this payload at the response boundary;
+    /// the client displays it as received. Network diagnostics have no public
+    /// payload: the client should supply its localized transport-failure copy.
+    pub fn public_message(&self) -> Option<&str> {
+        match self {
+            Self::App(message)
+            | Self::Unauthorized(message)
+            | Self::Forbidden(message)
+            | Self::BadRequest(message) => Some(message),
+            Self::Network(_) => None,
+        }
+    }
+
     /// Build an authentication failure.
     pub fn unauthorized(msg: impl Into<String>) -> Self {
         ServerError::Unauthorized(msg.into())

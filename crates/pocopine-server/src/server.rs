@@ -92,6 +92,8 @@ pub struct Server {
     plugins: PluginRegistry,
     installing_plugin: Option<&'static str>,
     auth_providers: Vec<SharedAuthProvider>,
+    #[cfg(feature = "locale")]
+    locale: Option<Arc<crate::locale::ServerLocale>>,
     server_function_conflicts: Vec<ServerFunctionRouteConflict>,
     /// RFC-123 §3.1 — applied last by `try_finalize`, outside auth.
     request_events: Option<RequestEventOptions>,
@@ -145,6 +147,8 @@ impl Server {
             request_events: None,
             installing_plugin: None,
             auth_providers: Vec::new(),
+            #[cfg(feature = "locale")]
+            locale: None,
             server_function_conflicts,
         }
     }
@@ -187,6 +191,15 @@ impl Server {
     /// Install a pre-`Arc`'d auth provider.
     pub fn with_auth_arc(mut self, provider: SharedAuthProvider) -> Self {
         self.auth_providers.push(provider);
+        self
+    }
+
+    /// Negotiate each request's locale before auth, plugin layers and generated
+    /// server-function rejections. Deferred until finalization so later routes
+    /// receive the same boundary policy. Requires the server `locale` feature.
+    #[cfg(feature = "locale")]
+    pub fn with_locale(mut self, locale: crate::locale::ServerLocale) -> Self {
+        self.locale = Some(Arc::new(locale));
         self
     }
 
@@ -324,6 +337,8 @@ impl Server {
             mut router,
             plugins,
             auth_providers,
+            #[cfg(feature = "locale")]
+            locale,
             server_function_conflicts,
             request_events,
             ..
@@ -348,6 +363,13 @@ impl Server {
             router = router.layer(axum::middleware::from_fn_with_state(
                 provider,
                 auth_middleware,
+            ));
+        }
+        #[cfg(feature = "locale")]
+        if let Some(locale) = locale {
+            router = router.layer(axum::middleware::from_fn_with_state(
+                locale,
+                crate::locale::middleware,
             ));
         }
         // Outermost: the request span wraps auth, every plugin layer, and

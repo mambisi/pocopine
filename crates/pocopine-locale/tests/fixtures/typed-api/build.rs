@@ -18,6 +18,12 @@ fn main() {
         for module in ["std", "String", "Result", "__runtime", "__state"] {
             data[format!("{module}.title")] = "Namespace".into();
         }
+        for (key, en, fr) in [
+            ("common.unauthorized", "Please sign in.", "Veuillez vous connecter."),
+            ("common.forbidden", "Access denied.", "Accès interdit."),
+            ("common.bad_request", "Invalid request.", "Requête invalide."),
+            ("common.internal", "Something went wrong.", "Une erreur est survenue."),
+        ] { data[key] = if locale == "en" { en } else { fr }.into(); }
         if cfg!(feature = "catalog-update") {
             data["a.first"] = "NEW_HOST_COPY_SENTINEL".into();
             data["auth.denied"] = if locale == "en" { "Updated denial" } else { "Accès refusé" }.into();
@@ -30,6 +36,10 @@ fn main() {
         ("auth.denied", "auth", CatalogAudience::Host),
         ("schedule.when", "schedule", CatalogAudience::Host),
         ("type.match", "type", CatalogAudience::Browser),
+        ("common.unauthorized", "common", CatalogAudience::Host),
+        ("common.forbidden", "common", CatalogAudience::Host),
+        ("common.bad_request", "common", CatalogAudience::Host),
+        ("common.internal", "common", CatalogAudience::Host),
     ]
     .map(|(key, module, audience)| MessageReference {
         key: key.into(),

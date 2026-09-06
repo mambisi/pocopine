@@ -33,6 +33,8 @@ pub use tracing;
 // RFC-100 Mode B — env-enabled `/assets/<hash>/<path>` private-bucket
 // proxy; installed automatically by `Server::new`.
 mod assets;
+#[cfg(feature = "locale")]
+pub mod locale;
 mod observability;
 pub mod plugin;
 mod server;
@@ -85,6 +87,25 @@ use pocopine_auth::{AuthProvider, Principal};
 /// Default maximum JSON request body accepted by generated
 /// server-function routes.
 pub const DEFAULT_SERVER_FUNCTION_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// Response-boundary adapter for generated guard, extractor and malformed-body
+/// rejections. Diagnostics are logged before this is called. Applications
+/// without locale configuration retain their existing wire behavior.
+#[doc(hidden)]
+pub fn public_rejection(
+    error: pocopine_core::ServerError,
+    extensions: &axum::http::Extensions,
+) -> pocopine_core::ServerError {
+    #[cfg(feature = "locale")]
+    {
+        locale::public_rejection(error, extensions)
+    }
+    #[cfg(not(feature = "locale"))]
+    {
+        let _ = extensions;
+        error
+    }
+}
 
 /// Auth contracts passed to `#[server(guard = ...)]` functions.
 pub mod auth {
