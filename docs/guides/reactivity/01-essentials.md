@@ -108,50 +108,53 @@ values not tied to a component — lives in [Utilities](./02-utilities.md#memoiz
 
 ## Reacting to changes — #[watch(field)]
 
-When a change needs `self` or has a side effect (mirror into another
-field, kick off an animation, reset a buffer), use `#[watch(field)]`. The
-method takes `(new, prev)` where `prev` is `None` on the first call after
-mount, and runs whenever `field` changes.
+Use `#[watch(field)]` for an effect such as updating a DOM property,
+starting an animation, or logging a change. The handler borrows state
+through `&self`; it cannot assign fields or call a method requiring
+`&mut self`. Derive values with `#[computed]` and change state in an
+event/action handler.
 
-The signature is a contract: `&mut self` plus exactly
-`(new: V, prev: Option<V>)`. Any other shape — no args, a missing
-`prev`, no receiver, a bare `#[watch]` — is a compile error, as is
-stacking two `#[watch]` attributes on one method (list the fields in
-one attribute instead — below).
-
-### Several fields, one handler — #[watch(a, b, c)]
-
-When the same recompute reacts to many fields, list them (RFC-115).
-Two-plus fields flip the contract: the handler takes `&mut self` and
-**nothing else** — with heterogeneous field types there is no single
-`(new, prev)`, and the coalesced call has no one triggering value.
-Read whatever you need off `self`.
+The signature is a contract: `&self` plus exactly
+`(new: V, prev: Option<V>)`. The first call after mount passes `None`
+for `prev`. A mutable receiver, missing arguments, no receiver, a bare
+`#[watch]`, or stacked watch attributes produces a compile error.
 
 ```rust
-#[watch(preset, mode, start_date, start_day, start_time)]
-fn on_when_changed(&mut self) {
-    self.recompute();
+#[watch(value)]
+fn on_value_change(&self, value: String, _prev: Option<String>) {
+    let Some(scope) = pocopine::current_scope_id() else { return };
+    let Some(el) = pocopine::refs::get_on(scope, "input") else { return };
+    let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { return };
+    if input.value() != value {
+        input.set_value(&value);
+    }
 }
 ```
 
-Multi-field semantics differ from the typed form in three ways:
+The example uses `wasm_bindgen::JsCast` for `dyn_into`.
 
-* **Coalesced** — several listed fields changing in one flush run the
-  handler once, not once per field.
-* **Seeded** — the handler runs once after mount wiring (replacing
-  the manual `recompute()` seed in `on_mount`).
-* **External changes only** — instead of the typed form's
-  `(new, prev)` equality gate: runs whose field probes prove nothing
-  changed are skipped, and the handler's **own writes never re-fire
-  it** (recompute output can't re-invalidate its own input set).
-  Write listed fields freely inside the handler; it converges by
-  construction.
+### Several fields, one handler — #[watch(a, b, c)]
 
-A field in the list that doesn't exist (typo) or is `#[computed]` is
-a loud console error at mount and is ignored — computed fields can't
-be watched; watch their inputs instead. Cross-effect update loops
-remain bounded by the runtime cycle guard (100 re-runs per cascade,
-console error naming the field list).
+When an effect observes several fields, list them (RFC-115). Two-plus
+fields require `&self` and **no value arguments**: the coalesced callback
+has no single `(new, prev)`. Read the listed fields from `self`.
+
+```rust
+#[watch(width, height)]
+fn on_size_changed(&self) {
+    web_sys::console::log_1(&format!("Size: {} × {}", self.width, self.height).into());
+}
+```
+
+Several listed fields changing before a flush coalesce into one callback
+per flush pass. The callback also runs once after mount wiring. Probes
+that prove the inputs unchanged skip subsequent callbacks. Unknown keys
+and computed keys in a multi-field list are reported at mount and ignored;
+list the state inputs instead.
+
+### Derived values belong in #[computed]
+
+The card's completion state needs no stored boolean or watcher:
 
 ```rust
 #[derive(Default, Serialize, Deserialize)]
@@ -159,35 +162,26 @@ console error naming the field list).
 pub struct PinCardDemo {
     pub card_number: String,
     pub pin: String,
-    /// Derived mirror, kept as a plain bool so the template can
-    /// `pp-show="complete"`.
-    pub complete: bool,
 }
 
 #[handlers]
 impl PinCardDemo {
-    #[watch(card_number)]
-    fn on_card_change(&mut self, _new: String, _prev: Option<String>) {
-        self.recompute_complete();
-    }
-
-    #[watch(pin)]
-    fn on_pin_change(&mut self, _new: String, _prev: Option<String>) {
-        self.recompute_complete();
-    }
-}
-
-impl PinCardDemo {
-    fn recompute_complete(&mut self) {
-        self.complete =
-            self.card_number.chars().count() == 16 && self.pin.chars().count() == 4;
+    #[computed]
+    fn complete(card_number: &str, pin: &str) -> bool {
+        card_number.chars().count() == 16 && pin.chars().count() == 4
     }
 }
 ```
 
-Reach for `#[computed]` when the result is a pure projection you read in
-the template; reach for `#[watch(field)]` when you need `&mut self` or a
-side effect. The free-function family (`watch` / `watch_field`) is in
+The template still reads `pp-show="complete"`. Declared computed
+cycles are compile errors.
+
+This receiver restriction does not prohibit mutation through separately
+held handles, stores, signals, or asynchronous work. The existing runtime
+cycle guard still caps queued effects at 100 reruns per cascade. Do not
+migrate `self.recompute()` into `handle.update(...)` just to bypass the
+restriction; see [the migration guide](./06-readonly-watch-migration.md).
+The free-function watch family is documented in
 [Utilities](./02-utilities.md#watchers-watch-watch-field-scoped).
 
 ## App-wide state — #[store]

@@ -149,6 +149,7 @@ pub mod __private {
         clear_active_phf_registry_for_test, set_active_phf_registry,
     };
     pub use pocopine_core::server::server_function_default_path;
+    pub use pocopine_core::watch::invoke_watch_handler;
     pub use pocopine_core::{
         BindingKind, ClientModule, ClientModuleError, Component, ComponentMountFn, ComponentState,
         ComponentUses, ComponentVTable, ComputedTypeWitness, DynamicComponentHost,

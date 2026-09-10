@@ -1,4 +1,4 @@
-// The canonical `#[watch]` shape: `&mut self` + `(next: V, prev: Option<V>)`.
+// The canonical `#[watch]` shape: `&self` + `(next: V, prev: Option<V>)`.
 // Hosted on a `#[store]` so the generated observe machinery exists.
 use pocopine::prelude::*;
 
@@ -12,12 +12,12 @@ struct EditorStore {
 #[handlers]
 impl EditorStore {
     #[watch(start_time)]
-    fn on_start_time(&mut self, _next: String, _prev: Option<String>) {
-        self.count += 1;
+    fn on_start_time(&self, _next: String, _prev: Option<String>) {
+        let _ = self.count;
     }
 
     #[watch(count)]
-    fn on_count(&mut self, next: i32, prev: Option<i32>) {
+    fn on_count(&self, next: i32, prev: Option<i32>) {
         let _ = (next, prev);
     }
 }

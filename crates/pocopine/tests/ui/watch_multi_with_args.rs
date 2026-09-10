@@ -10,7 +10,7 @@ struct Editor {
 #[handlers]
 impl Editor {
     #[watch(start_time, end_time)]
-    fn on_times(&mut self, _next: String, _prev: Option<String>) {}
+    fn on_times(&self, _next: String, _prev: Option<String>) {}
 }
 
 fn main() {}

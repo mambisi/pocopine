@@ -1,5 +1,10 @@
 # RFC-115: Multi-field watch — `#[watch(a, b, c)]`
 
+> Receiver contract update: generated single- and multi-field watchers now
+> require `&self` and use shared-borrow dispatch without a dirty sweep.
+> The mutable examples below describe the original RFC. See the current
+> [migration guide](../docs/guides/reactivity/06-readonly-watch-migration.md).
+
 **Status:** Implemented
 **Crates:** `pocopine-macros` (`#[handlers]`), `pocopine-core` (reactive watch primitives, flush-cascade cycle guard)
 **Relates to:** RFC-026 (`#[watch(field)]` sugar), RFC-036 (watch install machinery), RFC-044 §5.10.5 (flattened-container watch), PR #279 (watch signature contract)

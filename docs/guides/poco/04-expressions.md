@@ -88,29 +88,24 @@ synthetic fields. The framework recomputes them when their inputs
 change. Use this for any pure derivation: labels, formatted numbers,
 truncated strings, percent strings, derived class names.
 
-### 2. `#[watch(field)]` — needs `self`, recomputes on prop change
+### 2. `#[watch(field)]` — observe changes with a shared receiver
 
 ```rust
 #[handlers]
 impl PineUploadItem {
     #[watch(extension)]
-    fn on_extension_change(&mut self, new: String, _prev: Option<String>) {
-        self.thumb_label = new
-            .chars()
-            .take(3)
-            .collect::<String>()
-            .to_uppercase();
+    fn on_extension_change(&self, new: String, _prev: Option<String>) {
+        web_sys::console::log_1(&format!("Upload extension: {new}").into());
     }
 }
 ```
 
-`#[watch(field)]` methods receive the new value and the previous value
-as typed arguments (`new: V, prev: Option<V>`). The first call after
-mount passes `None` for `prev`.
-
-Reach for `#[watch]` when the derivation isn't a pure function of a
-single value — for example, when it touches other fields on `self`,
-calls out to a store, or has side effects (logging, telemetry).
+Watchers require `&self` and receive typed `(new: V, prev: Option<V>)`
+arguments. The first call after mount passes `None` for `prev`.
+Use them for side effects such as logging or synchronizing a DOM property.
+For a derived thumbnail label, use `#[computed]` with `extension` as an
+input. Reading several fields does not require a mutable watcher: computed
+methods can declare several inputs.
 
 ### 3. Plain handler — derives on user action
 
@@ -171,7 +166,7 @@ points at the offending span in the `.poco` file:
 | `...rest` | `` spread `...` is not supported in pine-expr `` |
 
 The fix in every case is the same: compute the value as a
-`#[computed]` field (or `#[watch]`, or in a handler) and bind to it
+`#[computed]` field (or in an event/action handler) and bind to it
 by name.
 
 ## Related

@@ -1,5 +1,5 @@
 // RFC-115 — the multi-field form: two-plus fields require the
-// payload-less `&mut self` shape; the handler is invoked once per
+// payload-less `&self` shape; the handler is invoked once per
 // flush when any listed field changes.
 use pocopine::prelude::*;
 
@@ -14,13 +14,13 @@ struct EditorStore {
 #[handlers]
 impl EditorStore {
     #[watch(start_time, end_time)]
-    fn on_when_changed(&mut self) {
-        self.count += 1;
+    fn on_when_changed(&self) {
+        let _ = self.count;
     }
 
     // The typed single-field contract coexists unchanged.
     #[watch(count)]
-    fn on_count(&mut self, next: i32, prev: Option<i32>) {
+    fn on_count(&self, next: i32, prev: Option<i32>) {
         let _ = (next, prev);
     }
 }

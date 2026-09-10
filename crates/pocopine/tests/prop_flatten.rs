@@ -193,14 +193,14 @@ impl FlattenWatchChild {
     // RFC-044 §5.10.5 — one watcher for the whole flattened struct.
     // Dual-key triggering must fire it when any leaf changes.
     #[watch(common)]
-    fn on_common(&mut self, new: WatchLeaves, _: Option<WatchLeaves>) {
+    fn on_common(&self, new: WatchLeaves, _: Option<WatchLeaves>) {
         COMMON_FIRES.with(|c| c.set(c.get() + 1));
         LAST_COMMON_LABEL.with(|s| *s.borrow_mut() = new.label.clone());
     }
 
     // the per-leaf watch must keep firing for the same write
     #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
+    fn on_label(&self, _: String, _: Option<String>) {
         LABEL_FIRES.with(|c| c.set(c.get() + 1));
     }
 }
@@ -382,13 +382,13 @@ impl BareFlattenWatchChild {
     // the bare-flatten path, not just the explicit-list path PR #102
     // tested.
     #[watch(common)]
-    fn on_common(&mut self, new: BareWatchLeaves, _: Option<BareWatchLeaves>) {
+    fn on_common(&self, new: BareWatchLeaves, _: Option<BareWatchLeaves>) {
         BARE_COMMON_FIRES.with(|c| c.set(c.get() + 1));
         BARE_LAST_COMMON_LABEL.with(|s| *s.borrow_mut() = new.label.clone());
     }
 
     #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
+    fn on_label(&self, _: String, _: Option<String>) {
         BARE_LABEL_FIRES.with(|c| c.set(c.get() + 1));
     }
 }

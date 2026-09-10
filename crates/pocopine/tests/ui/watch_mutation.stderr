@@ -1,0 +1,10 @@
+error[E0594]: cannot assign to `self.count`, which is behind a `&` reference
+  --> tests/ui/watch_mutation.rs:13:9
+   |
+13 |         self.count = next + 1;
+   |         ^^^^^^^^^^^^^^^^^^^^^ `self` is a `&` reference, so it cannot be written to
+   |
+help: consider changing this to be a mutable reference
+   |
+12 |     fn on_count(&mut self, next: i32, _prev: Option<i32>) {
+   |                  +++

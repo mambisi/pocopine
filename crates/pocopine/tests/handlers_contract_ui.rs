@@ -32,16 +32,18 @@ fn handlers_marker_contract() {
     cases.compile_fail("tests/ui/watch_stacked.rs");
     // A watch handler without a reference receiver is rejected.
     cases.compile_fail("tests/ui/watch_no_receiver.rs");
-    // A shared receiver (`&self`) is rejected — the contract is
-    // literally `&mut self`.
-    cases.compile_fail("tests/ui/watch_shared_receiver.rs");
+    // Mutable receivers are rejected for both watcher forms.
+    cases.compile_fail("tests/ui/watch_mut_receiver.rs");
+    cases.compile_fail("tests/ui/watch_multi_mut_receiver.rs");
+    // A shared receiver cannot directly write the component's state.
+    cases.compile_fail("tests/ui/watch_mutation.rs");
     // A lifecycle-named method without `self` is rejected (previously
     // skipped before name matching — the hook silently never fired).
     cases.compile_fail("tests/ui/lifecycle_no_receiver.rs");
     // `#[computed]` takes no arguments (previously discarded silently).
     cases.compile_fail("tests/ui/computed_with_args.rs");
     // RFC-115 — multi-field watch: two-plus fields take the
-    // payload-less `&mut self` shape and compile.
+    // payload-less `&self` shape and compile.
     cases.pass("tests/ui/watch_multi_pass.rs");
     // Value args on a multi-field watch are rejected (no single
     // (next, prev) exists).

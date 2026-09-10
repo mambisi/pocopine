@@ -63,16 +63,16 @@ releases its backing effect on drop.
 
 ### Reacting to changes — `#[watch(field)]`
 
-`#[watch(field)]` methods take `&mut self` and `(new: V, prev: Option<V>)`,
+`#[watch(field)]` methods take `&self` and `(new: V, prev: Option<V>)`,
 and run whenever the named field changes. The first call after mount
 passes `None` for `prev`.
 
 ```rust
 #[handlers]
-impl Calendar {
+impl Editor {
     #[watch(value)]
-    fn on_value_change(&mut self, new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
+    fn on_value_change(&self, new: String, _prev: Option<String>) {
+        web_sys::console::log_1(&new.into());
     }
 }
 ```

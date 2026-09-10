@@ -1,0 +1,5 @@
+error: #[watch] handlers must take `&self`, not `&mut self`; use #[computed] for derived values or an event/action handler for state changes
+  --> tests/ui/watch_mut_receiver.rs:11:5
+   |
+11 |     fn on_start_time(&mut self, _next: String, _prev: Option<String>) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -19,6 +19,24 @@ use serde::de::DeserializeOwned;
 use crate::reactive::{EffectId, ScopeId, effect, track};
 use crate::scope::{Scope, current_scope_id};
 
+/// Invoke a generated `#[watch]` handler through a shared state borrow.
+///
+/// Keep the component context and callback safe point while avoiding the
+/// dirty sweep and model writeback performed by `Handle::update`. Initial
+/// callbacks remain deferred by the installers; removed scopes are skipped.
+/// This restricts the receiver only, not writes through separately held handles.
+#[doc(hidden)]
+pub fn invoke_watch_handler<T: 'static>(scope_id: ScopeId, cb: impl FnOnce(&T)) {
+    let Some(scope) = Scope::find(scope_id) else {
+        return;
+    };
+    let Some(state) = scope.typed::<T>() else {
+        return;
+    };
+    let _frame = crate::ComponentCallbackFrame::for_scope(scope_id);
+    crate::scope::with_current_scope_id(scope_id, || cb(&state.borrow()));
+}
+
 /// Watch `source` and call `cb` whenever its value changes.
 ///
 /// `cb` fires once on the initial run (with `previous = None`), then once

@@ -4018,7 +4018,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut on_unmount_extractor_count: usize = 0;
     // One entry per `#[watch(...)]` method. RFC-115: a single field
     // keeps the typed `(next, prev)` contract; a two-plus list takes
-    // the payload-less `&mut self` shape and installs one coalesced
+    // the payload-less `&self` shape and installs one coalesced
     // multi-field subscription. The macro auto-generates an
     // `on_ready` that wires each entry.
     enum WatchEntry {
@@ -4108,13 +4108,26 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
         }
         if let Some(fields) = watch_fields {
-            // The documented contract is literally `&mut self` — a shared
-            // receiver compiles but leaves the handler unable to store
-            // its result, so it is rejected too.
-            let takes_mut_self = method
+            // Watchers observe state through a shared borrow. Derived values
+            // belong in #[computed]; state transitions belong in actions.
+            let takes_shared_self = method
                 .sig
                 .receiver()
-                .is_some_and(|r| r.reference.is_some() && r.mutability.is_some());
+                .is_some_and(|r| r.reference.is_some() && r.mutability.is_none());
+            if method
+                .sig
+                .receiver()
+                .is_some_and(|r| r.mutability.is_some())
+            {
+                return syn::Error::new_spanned(
+                    &method.sig,
+                    "#[watch] handlers must take `&self`, not `&mut self`; use \
+                     #[computed] for derived values or an event/action handler \
+                     for state changes",
+                )
+                .to_compile_error()
+                .into();
+            }
             let typed_args: Vec<syn::Type> = method
                 .sig
                 .inputs
@@ -4127,19 +4140,19 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             if fields.len() == 1 {
                 // RFC-036 contract: the generated dispatch calls
                 // `s.<method>(new_v, prev_v)`, so only the
-                // `&mut self, (next: V, prev: Option<V>)` shape can
+                // `&self, (next: V, prev: Option<V>)` shape can
                 // ever be installed. Anything else is rejected here —
                 // before this check, a no-arg handler compiled green
                 // and the watch silently never fired.
                 let field_ident = fields.into_iter().next().expect("len checked == 1");
-                if !takes_mut_self || typed_args.len() != 2 {
+                if !takes_shared_self || typed_args.len() != 2 {
                     let method_ident = &method.sig.ident;
                     return syn::Error::new_spanned(
                         &method.sig,
                         format!(
-                            "#[watch({field_ident})] handler must take `&mut self` and \
-                             `(next: V, prev: Option<V>)` — e.g. `fn {method_ident}(&mut \
-                             self, next: V, prev: Option<V>)` — or watch several fields \
+                            "#[watch({field_ident})] handler must take `&self` and \
+                             `(next: V, prev: Option<V>)` — e.g. `fn {method_ident}(&self, \
+                             next: V, prev: Option<V>)` — or watch several fields \
                              with a no-arg handler: #[watch(a, b, c)]"
                         ),
                     )
@@ -4160,10 +4173,10 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 // RFC-115 — with two-plus fields there is no single
                 // `(next, prev)`; the coalesced call is payload-less
                 // by contract.
-                if !takes_mut_self || !typed_args.is_empty() {
+                if !takes_shared_self || !typed_args.is_empty() {
                     return syn::Error::new_spanned(
                         &method.sig,
-                        "multi-field #[watch] handlers take `&mut self` only — the \
+                        "multi-field #[watch] handlers take `&self` only — the \
                          coalesced call has no single (next, prev); read the fields \
                          off self",
                     )
@@ -4563,29 +4576,9 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn has_on_mount(&self) -> bool { true }
         }
     });
-    // Build the list of watch_field registration statements for the
-    // auto-generated on_ready. Each `#[watch(field)]` method
-    // becomes:
-    //
-    //   let __scope = current_scope_id().expect(…);
-    //   pocopine::watch_field::<V, _>("field", move |new, prev| {
-    //       let new_v = new.clone();
-    //       let prev_v = prev.cloned();
-    //       if let Some(scope) = pocopine::Scope::find(__scope) {
-    //           if let Some(inner) = scope.typed::<Self>() {
-    //               pocopine::Handle::new(inner, __scope)
-    //                   .update(|s| s.<method>(new_v, prev_v));
-    //           }
-    //       }
-    //   });
-    //
-    // `Handle::new` + `update` acquires a fresh mutable borrow via
-    // the captured scope id. This sidesteps two things at once:
-    // (1) the &self / &mut self mismatch between on_ready and the
-    // decorated method, and (2) the fact that `this::<Self>()`
-    // depends on the thread-local `CURRENT_SCOPE_ID`, which isn't
-    // set during most watch callback re-runs (triggers come from
-    // the parent's effect chain, not a fresh `Scope::invoke`).
+    // Install shared-borrow watcher callbacks. The runtime binds the
+    // captured scope and owns the callback frame, preserving refs/this and
+    // safe browser-event re-entry without Handle::update or a dirty sweep.
     let watch_installs = watches.iter().map(|entry| match entry {
         WatchEntry::Single {
             method: method_ident,
@@ -4616,25 +4609,15 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                                     return;
                                 }
                                 __pending.set(false);
-                                if let Some(scope) = ::pocopine::Scope::find(__scope) {
-                                    if let Some(inner) = scope.typed::<#ty>() {
-                                        ::pocopine::Handle::new(inner, __scope)
-                                            .update(|s| {
-                                                s.#method_ident(new_v, ::core::option::Option::None);
-                                            });
-                                    }
-                                }
+                                ::pocopine::__private::invoke_watch_handler::<#ty>(__scope, |s| {
+                                    s.#method_ident(new_v, ::core::option::Option::None);
+                                });
                             });
                             return;
                         }
-                        if let Some(scope) = ::pocopine::Scope::find(__scope) {
-                            if let Some(inner) = scope.typed::<#ty>() {
-                                ::pocopine::Handle::new(inner, __scope)
-                                    .update(|s| {
-                                        s.#method_ident(new_v, prev_v);
-                                    });
-                            }
-                        }
+                        ::pocopine::__private::invoke_watch_handler::<#ty>(__scope, |s| {
+                            s.#method_ident(new_v, prev_v);
+                        });
                     });
                     ::pocopine::on_scope_unmount_for(__scope, move || {
                         ::pocopine::release(__watch_effect);
@@ -4672,14 +4655,9 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         &[#(#field_names),*],
                         #label,
                         move || {
-                            if let Some(scope) = ::pocopine::Scope::find(__scope) {
-                                if let Some(inner) = scope.typed::<#ty>() {
-                                    ::pocopine::Handle::new(inner, __scope)
-                                        .update(|s| {
-                                            s.#method_ident();
-                                        });
-                                }
-                            }
+                            ::pocopine::__private::invoke_watch_handler::<#ty>(__scope, |s| {
+                                s.#method_ident();
+                            });
                         },
                     );
                     ::pocopine::on_scope_unmount_for(__scope, move || {
