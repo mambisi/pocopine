@@ -15,6 +15,8 @@ async function command(page, command, value = '', anchor = 0, head = anchor) {
   }, {command, value, anchor, head});
 }
 async function settled(page) {
+  // Let a new mount or edit schedule its worker request before observing status.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.waitForFunction(() => JSON.parse(window.codeExample.inspect_editor()).snapshot.Ok.presentation_status !== 'Pending');
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
@@ -140,6 +142,7 @@ test('release typing, DOM locality, commands, and retained memory at documented 
       const start = performance.now(); el.scrollTop = el.scrollHeight; el.scrollLeft = el.scrollWidth;
       requestAnimationFrame(() => resolve({nextPrePaintMs: performance.now() - start, top: el.scrollTop, left: el.scrollLeft}));
     }));
+    await settled(page);
     await cdp.send('HeapProfiler.collectGarbage');
     report.datasets.push({name, bytes: text.length, lines: text.split('\n').length,
       presentation: (await snap(page)).presentation_status,
@@ -199,7 +202,7 @@ test('100 mount/edit/unmount cycles dispose listeners, observers, handles, and f
   const sample = async () => {
     await page.evaluate(() => codeExample.clear_editor_probes());
     await settled(page); await cdp.send('HeapProfiler.collectGarbage');
-    return {resources: await page.evaluate(() => resourceCounts), heap: await cdp.send('Runtime.getHeapUsage'), dom: await cdp.send('Memory.getDOMCounters'), wasmBytes: await page.evaluate(() => codeExampleWasm.memory.buffer.byteLength)};
+    return {workers: page.workers().length, resources: await page.evaluate(() => resourceCounts), heap: await cdp.send('Runtime.getHeapUsage'), dom: await cdp.send('Memory.getDOMCounters'), wasmBytes: await page.evaluate(() => codeExampleWasm.memory.buffer.byteLength)};
   };
   const points = [];
   for (let cycle = 0; cycle <= 100; cycle++) {
@@ -214,7 +217,10 @@ test('100 mount/edit/unmount cycles dispose listeners, observers, handles, and f
     await page.getByRole('button', {name: 'Open / close editor', exact: true}).click();
     await page.locator(surface).waitFor();
   }
-  await info.attach('mount-cycles', {body: JSON.stringify(points, null, 2), contentType: 'application/json'});
+  const cycleOutput = info.outputPath('mount-cycles.json');
+  await fs.writeFile(cycleOutput, JSON.stringify(points, null, 2) + '\n');
+  await info.attach('mount-cycles', {path: cycleOutput, contentType: 'application/json'});
+  expect(points.every(point => point.workers === 2)).toBe(true);
   expect(points.at(-1).resources).toEqual(points[1].resources);
   expect(points.at(-1).dom.nodes).toBeLessThanOrEqual(points[1].dom.nodes + 20);
   expect(points.at(-1).heap.usedSize).toBeLessThan(points[1].heap.usedSize + 512 * 1024);

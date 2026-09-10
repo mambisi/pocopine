@@ -6,24 +6,33 @@ release acceptance remains pending the manual checks below.
 
 ## Automated checks
 
-- Pure Rust: 24 tests covering Unicode offsets, normalized lines, change
-  inversion/mapping, revisions, bounded history, commands, search and lexing.
-- Firefox WASM library tests: 17 passing, including composition, injected
-  rendering failures, reentrancy and live framework removal paths.
+- Pure Rust: 28 tests covering Unicode offsets, normalized lines, change
+  inversion/mapping, revisions, bounded history, commands, search, lexing,
+  language registration, all four grammar packages, incremental parsing,
+  custom queries and parser-budget recovery.
+- Firefox WASM library tests: 20 passing, including composition, injected
+  rendering failures, reentrancy, live framework removal paths, stale syntax
+  responses and worker-request coalescing.
 - Framework pre-detachment hook: 3 Firefox tests passing; conditional,
   keyed-row, compiled bulk-clear, dynamic component, owned-mount and canceled
   leave behavior are additionally covered by the editor's integration tests.
 - `pine-code` builds without `view` for WASM and on the host; with `view`,
   WASM all-target Clippy passes with warnings denied.
 - Full workspace formatting passes.
+- The CLI's focused WASM-header discovery test passes, including dependency
+  reachability so an unrelated workspace package cannot supply the headers.
 
-Release integration: **69 / 69 passing** (23 each in Chromium 148.0.7778.96,
+Release integration: **84 / 84 passing** (28 each in Chromium 148.0.7778.96,
 Firefox 150.0.2, and WebKit 26.4). Cases cover native typing/history, Unicode
 and backwards selection, clipboard/drop, readonly/disabled navigation,
 composition guards and finalization, interrupted-draft policy, recovery,
 line identity, highlighting fallback, dynamic accessible names and styling.
+The real module worker is exercised with Rust, JSON, Python, JavaScript and a
+custom configuration grammar. Tests also cover language changes and stale
+results, worker startup failure and recovery, worker disposal/remounting, and
+the native language picker with language-specific indentation.
 The release CLI build passes. The example bundle used for this run is
-`code_editor_example_bg.50d94dee.wasm`.
+`code_editor_example_bg.5d51e60f.wasm`.
 
 On this Ubuntu 25.10 host, Playwright WebKit uses isolated Ubuntu 24.04
 compatibility libraries extracted from a disposable container. No host
@@ -36,9 +45,12 @@ Recorded 2026-09-10 on an Intel Core Ultra 9 275HX (24 logical CPUs,
 65,743,953,920 bytes RAM), Linux 6.17.0-41-generic, Chromium 148.0.7778.96.
 Build: `pocopine build --path examples/code-editor --release`, Rust
 1.95.0-nightly (2026-02-20), workspace `opt-level = "z"`, LTO enabled,
-one codegen unit, wasm-opt enabled. The complete example WASM is 798,771
-bytes, 338,024 bytes gzip, 258,670 bytes Brotli; this includes the demo and
-its Pine components, not just the editor library.
+one codegen unit, wasm-opt enabled. The complete example WASM is 3,317,456
+bytes, 1,035,822 bytes gzip, 723,431 bytes Brotli. This includes all four
+grammar packages, the demo and its Pine components, including the language
+picker. The preceding handwritten-tokenizer example was 798,771 bytes raw.
+Applications can enable only their required grammar features. Each active
+syntax worker initializes a separate instance of the application WASM module.
 
 Each dataset received 30 warmup edits followed by 200 native one-character
 replacements rotating between beginning, middle and end. Replacements keep
@@ -47,28 +59,30 @@ trace/screenshot recording. Chromium EventTiming includes the next paint,
 rounds to 8 ms, and omits durations below 16 ms; missing entries are assigned
 16 ms in the reported estimate. Separate synchronous input and next-rAF
 measurements are included in the raw data. A rAF callback is pre-paint and is
-not represented as a physical display measurement.
+not represented as a physical display measurement. These timings measure input
+responsiveness, not the time until asynchronous syntax coloring finishes.
 
 | Dataset | Presentation | Synchronous input p95 | Event-to-paint p95 estimate | Gate |
 | --- | --- | ---: | ---: | ---: |
-| 10 KiB | Rust highlighting, 1,160 spans | 3.6 ms | 24 ms | 32 ms |
-| 64 KiB | Rust highlighting, 7,445 spans | 18.7 ms | 32 ms | 32 ms |
+| 10 KiB | Rust highlighting, 928 spans | 2.9 ms | 24 ms | 32 ms |
+| 64 KiB | Rust highlighting, 5,956 spans | 16.2 ms | 24 ms | 32 ms |
 | 100 KiB | Plain, span budget | 8.9 ms | 24 ms | 32 ms |
-| 256 KiB | Plain, span budget | 18.2 ms | 32 ms | 50 ms |
-| 10,000 lines | Plain, span budget | 28.6 ms | 40 ms | 50 ms |
-| Single 32 KiB line | Plain, line highlight budget | 5.2 ms | 16 ms | 32 ms |
+| 256 KiB | Plain, span budget | 22.4 ms | 32 ms | 50 ms |
+| 10,000 lines | Plain, span budget | 29.2 ms | 40 ms | 50 ms |
+| Single 32 KiB line | Plain, line highlight budget | 5.1 ms | 16 ms | 32 ms |
 
-All p95 gates passed, and the 100 KiB run had no editing long task above
-50 ms. The 64 KiB run recorded 0 input-overlapping long tasks and a maximum
-EventTiming duration of 32 ms. The preceding measured run had a
-184 ms outlier; passing p95 does not guarantee every keystroke avoids a stall
-on this shared reference machine. These are measured desktop bounds, not guarantees on mobile or
-slower hardware.
+All p95 gates passed. None of the six datasets recorded an input-overlapping
+long task above 50 ms. The 64 KiB run had a maximum EventTiming duration of
+32 ms. Passing these gates does not guarantee every keystroke avoids a stall
+on this shared reference machine or establish performance on mobile or slower
+hardware.
 
 Every ordinary edit read one logical line; there were zero full-DOM reads in
 these typing runs. Retained history was 34,800 bytes after each measured edit
 sequence. Paste, replace-all, undo and scrolling were exercised and timed
-separately; results and DOM counts are in the raw artifact.
+separately; results and DOM counts are in the raw artifact. Bulk commands can
+exceed the typing gates: replacing across 10,000 lines took 170.4 ms and its
+undo took 97.5 ms in this run.
 
 The [initial measurement](validation/initial-performance.json) missed gates
 with 11,635 spans at 100 KiB (40 ms p95) and a single 256 KiB line (80 ms p95).
@@ -79,11 +93,14 @@ the complete document to plain presentation until load or language change.
 Custom document limits are accepted but extend beyond the measured envelope.
 
 The [100-cycle measurements](validation/mount-cycles.json) passed. After
-warmup, the two-editor page held 30 tracked editor listeners, two observers,
-zero pending frames, 1,002 DOM nodes and 1,507,328 bytes of WASM memory.
-Those counts stayed fixed from cycle 20 through 100. Collected JS heap grew
-from 2,716,400 to 2,862,980 bytes over that interval, with growth tapering;
-this is not a proof that every browser allocation is leak-free.
+warmup, the two-editor page held two workers, 30 tracked editor listeners,
+two observers, zero pending frames and 1,219 DOM nodes. Those counts stayed
+fixed from cycle 20 through 100. Main-thread WASM memory grew from 3,801,088
+bytes at cycle 20 to 3,866,624 at cycle 40 and stayed fixed through cycle 100.
+Collected main-thread JS heap grew from 2,951,420 to 3,106,752 bytes between
+cycles 20 and 100, with growth tapering. Worker heaps are not included in
+those memory measurements; stable worker counts and disposal checks do not
+prove that every browser allocation is leak-free.
 
 Raw artifacts: [final benchmark](validation/performance.json),
 [initial benchmark](validation/initial-performance.json),
@@ -129,5 +146,6 @@ the renderer's cached-range shortcut skipped repairing the native DOM.
 The renderer now verifies actual text/span boundaries before reusing that
 cache. The new browser regression types character by character across frames
 and checks both keyword/string styling and the resulting caret position.
-All three engines pass; the post-fix release benchmark above also passes.
-This correction is independent of any future grammar/parser replacement.
+All three engines pass with Tree-sitter worker output; the release benchmark
+above also passes. Native DOM repair remains necessary regardless of which
+parser produces the token ranges.

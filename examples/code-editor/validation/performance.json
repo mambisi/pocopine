@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-10T18:15:40.392Z",
+  "timestamp": "2026-09-10T19:14:30.831Z",
   "browser": "148.0.7778.96",
   "machine": {
     "platform": "linux",
@@ -17,21 +17,21 @@
       "lines": 233,
       "presentation": "Highlighted",
       "syncMs": {
-        "p50": 2.5,
-        "p95": 3.5999999940395355,
-        "max": 4
+        "p50": 2.300000011920929,
+        "p95": 2.9000000059604645,
+        "max": 3.199999988079071
       },
       "nextPrePaintMs": {
-        "p50": 7.5,
-        "p95": 14.699999988079071,
-        "max": 15.699999988079071
+        "p50": 6.899999976158142,
+        "p95": 9.800000011920929,
+        "max": 13.099999994039536
       },
       "eventToPaintMsUpperEstimate": {
         "p50": 16,
         "p95": 24,
         "max": 24
       },
-      "observedKeydowns": 122,
+      "observedKeydowns": 100,
       "editingLongTasks": [],
       "maxChangedLines": 1,
       "metrics": {
@@ -40,12 +40,12 @@
         "last_read_lines": 1,
         "last_read_bytes": 43,
         "mounted_lines": 233,
-        "token_spans": 1160,
+        "token_spans": 928,
         "history_bytes": 34800
       },
       "commands": {
         "replace-all-x": {
-          "durationMs": 9.400000005960464,
+          "durationMs": 6.5999999940395355,
           "outcome": {
             "Ok": {
               "revision": 231,
@@ -54,7 +54,7 @@
           }
         },
         "undo": {
-          "durationMs": 6.4000000059604645,
+          "durationMs": 4.299999982118607,
           "outcome": {
             "Ok": {
               "revision": 232,
@@ -63,25 +63,25 @@
           }
         },
         "paste": {
-          "durationMs": 1.2999999821186066
+          "durationMs": 1.0999999940395355
         },
         "scroll": {
-          "nextPrePaintMs": 9.399999976158142,
+          "nextPrePaintMs": 2,
           "top": 4797,
           "left": 0
         }
       },
-      "wasmMemoryBytes": 2752512,
+      "wasmMemoryBytes": 5046272,
       "jsHeap": {
-        "usedSize": 2638544,
-        "totalSize": 3506176,
-        "embedderHeapUsedSize": 3102152,
-        "backingStorageSize": 222125
+        "usedSize": 2902688,
+        "totalSize": 3653632,
+        "embedderHeapUsedSize": 2728232,
+        "backingStorageSize": 230499
       },
       "dom": {
         "documents": 2,
-        "nodes": 4233,
-        "jsEventListeners": 83
+        "nodes": 3752,
+        "jsEventListeners": 90
       }
     },
     {
@@ -90,18 +90,18 @@
       "lines": 1490,
       "presentation": "Highlighted",
       "syncMs": {
-        "p50": 13.099999994039536,
-        "p95": 18.700000017881393,
-        "max": 19.400000005960464
+        "p50": 11.900000005960464,
+        "p95": 16.19999998807907,
+        "max": 16.599999994039536
       },
       "nextPrePaintMs": {
-        "p50": 14.5,
-        "p95": 19.599999994039536,
-        "max": 20.400000005960464
+        "p50": 13.100000023841858,
+        "p95": 17.100000023841858,
+        "max": 17.5
       },
       "eventToPaintMsUpperEstimate": {
         "p50": 24,
-        "p95": 32,
+        "p95": 24,
         "max": 32
       },
       "observedKeydowns": 200,
@@ -113,12 +113,12 @@
         "last_read_lines": 1,
         "last_read_bytes": 43,
         "mounted_lines": 1490,
-        "token_spans": 7445,
+        "token_spans": 5956,
         "history_bytes": 34800
       },
       "commands": {
         "replace-all-x": {
-          "durationMs": 153.59999999403954,
+          "durationMs": 42.5,
           "outcome": {
             "Ok": {
               "revision": 465,
@@ -127,7 +127,7 @@
           }
         },
         "undo": {
-          "durationMs": 42,
+          "durationMs": 32.900000005960464,
           "outcome": {
             "Ok": {
               "revision": 466,
@@ -136,25 +136,25 @@
           }
         },
         "paste": {
-          "durationMs": 1.7999999821186066
+          "durationMs": 2.699999988079071
         },
         "scroll": {
-          "nextPrePaintMs": 0.29999998211860657,
+          "nextPrePaintMs": 0.30000001192092896,
           "top": 32942,
           "left": 0
         }
       },
-      "wasmMemoryBytes": 3538944,
+      "wasmMemoryBytes": 5701632,
       "jsHeap": {
-        "usedSize": 2881036,
-        "totalSize": 3506176,
-        "embedderHeapUsedSize": 15289952,
-        "backingStorageSize": 279300
+        "usedSize": 3288540,
+        "totalSize": 4177920,
+        "embedderHeapUsedSize": 12491672,
+        "backingStorageSize": 287715
       },
       "dom": {
         "documents": 2,
-        "nodes": 21835,
-        "jsEventListeners": 83
+        "nodes": 17583,
+        "jsEventListeners": 90
       }
     },
     {
@@ -165,21 +165,21 @@
         "PlainFallback": "TokenBudget"
       },
       "syncMs": {
-        "p50": 6.700000017881393,
+        "p50": 7.9000000059604645,
         "p95": 8.900000005960464,
-        "max": 9.400000005960464
+        "max": 9.399999976158142
       },
       "nextPrePaintMs": {
-        "p50": 9.599999994039536,
-        "p95": 15.399999976158142,
-        "max": 15.899999976158142
+        "p50": 10.5,
+        "p95": 14.599999994039536,
+        "max": 15
       },
       "eventToPaintMsUpperEstimate": {
         "p50": 16,
         "p95": 24,
         "max": 24
       },
-      "observedKeydowns": 167,
+      "observedKeydowns": 201,
       "editingLongTasks": [],
       "maxChangedLines": 1,
       "metrics": {
@@ -193,7 +193,7 @@
       },
       "commands": {
         "replace-all-x": {
-          "durationMs": 61.20000001788139,
+          "durationMs": 56.79999998211861,
           "outcome": {
             "Ok": {
               "revision": 699,
@@ -202,7 +202,7 @@
           }
         },
         "undo": {
-          "durationMs": 42.29999998211861,
+          "durationMs": 44.599999994039536,
           "outcome": {
             "Ok": {
               "revision": 700,
@@ -211,7 +211,7 @@
           }
         },
         "paste": {
-          "durationMs": 3.4000000059604645
+          "durationMs": 3.899999976158142
         },
         "scroll": {
           "nextPrePaintMs": 0.4000000059604645,
@@ -219,17 +219,17 @@
           "left": 0
         }
       },
-      "wasmMemoryBytes": 4063232,
+      "wasmMemoryBytes": 6029312,
       "jsHeap": {
-        "usedSize": 2961384,
-        "totalSize": 3768320,
-        "embedderHeapUsedSize": 7529264,
-        "backingStorageSize": 317419
+        "usedSize": 3191612,
+        "totalSize": 4177920,
+        "embedderHeapUsedSize": 7537968,
+        "backingStorageSize": 325833
       },
       "dom": {
         "documents": 2,
-        "nodes": 5648,
-        "jsEventListeners": 83
+        "nodes": 5858,
+        "jsEventListeners": 88
       }
     },
     {
@@ -240,21 +240,21 @@
         "PlainFallback": "TokenBudget"
       },
       "syncMs": {
-        "p50": 12.100000023841858,
-        "p95": 18.200000017881393,
-        "max": 20.299999982118607
+        "p50": 19.599999994039536,
+        "p95": 22.400000005960464,
+        "max": 22.900000005960464
       },
       "nextPrePaintMs": {
-        "p50": 13.700000017881393,
-        "p95": 20.200000017881393,
-        "max": 22.400000005960464
+        "p50": 22,
+        "p95": 24.80000001192093,
+        "max": 25.299999982118607
       },
       "eventToPaintMsUpperEstimate": {
-        "p50": 24,
+        "p50": 32,
         "p95": 32,
-        "max": 32
+        "max": 40
       },
-      "observedKeydowns": 200,
+      "observedKeydowns": 201,
       "editingLongTasks": [],
       "maxChangedLines": 1,
       "metrics": {
@@ -268,7 +268,7 @@
       },
       "commands": {
         "replace-all-x": {
-          "durationMs": 133.40000000596046,
+          "durationMs": 134.19999998807907,
           "outcome": {
             "Ok": {
               "revision": 933,
@@ -277,7 +277,7 @@
           }
         },
         "undo": {
-          "durationMs": 107.30000001192093,
+          "durationMs": 87.80000001192093,
           "outcome": {
             "Ok": {
               "revision": 934,
@@ -286,25 +286,25 @@
           }
         },
         "paste": {
-          "durationMs": 5.5999999940395355
+          "durationMs": 5.699999988079071
         },
         "scroll": {
-          "nextPrePaintMs": 0.20000001788139343,
+          "nextPrePaintMs": 3.100000023841858,
           "top": 132984,
           "left": 0
         }
       },
-      "wasmMemoryBytes": 5636096,
+      "wasmMemoryBytes": 7274496,
       "jsHeap": {
-        "usedSize": 3411740,
-        "totalSize": 4296704,
-        "embedderHeapUsedSize": 17762184,
-        "backingStorageSize": 481192
+        "usedSize": 3632528,
+        "totalSize": 4182016,
+        "embedderHeapUsedSize": 17631680,
+        "backingStorageSize": 489611
       },
       "dom": {
         "documents": 2,
-        "nodes": 12911,
-        "jsEventListeners": 83
+        "nodes": 13118,
+        "jsEventListeners": 88
       }
     },
     {
@@ -315,21 +315,21 @@
         "PlainFallback": "TokenBudget"
       },
       "syncMs": {
-        "p50": 19.400000005960464,
-        "p95": 28.599999994039536,
-        "max": 32.70000001788139
+        "p50": 25.5,
+        "p95": 29.19999998807907,
+        "max": 30.700000017881393
       },
       "nextPrePaintMs": {
-        "p50": 20.599999994039536,
-        "p95": 29.900000005960464,
-        "max": 34.20000001788139
+        "p50": 26.900000005960464,
+        "p95": 30.5,
+        "max": 32.20000001788139
       },
       "eventToPaintMsUpperEstimate": {
-        "p50": 32,
+        "p50": 40,
         "p95": 40,
         "max": 48
       },
-      "observedKeydowns": 200,
+      "observedKeydowns": 201,
       "editingLongTasks": [],
       "maxChangedLines": 1,
       "metrics": {
@@ -343,7 +343,7 @@
       },
       "commands": {
         "replace-all-x": {
-          "durationMs": 182.5,
+          "durationMs": 170.40000000596046,
           "outcome": {
             "Ok": {
               "revision": 1167,
@@ -352,7 +352,7 @@
           }
         },
         "undo": {
-          "durationMs": 108.80000001192093,
+          "durationMs": 97.5,
           "outcome": {
             "Ok": {
               "revision": 1168,
@@ -361,7 +361,7 @@
           }
         },
         "paste": {
-          "durationMs": 4.9000000059604645
+          "durationMs": 5.5
         },
         "scroll": {
           "nextPrePaintMs": 0.30000001192092896,
@@ -369,17 +369,17 @@
           "left": 0
         }
       },
-      "wasmMemoryBytes": 6225920,
+      "wasmMemoryBytes": 7864320,
       "jsHeap": {
-        "usedSize": 3580716,
-        "totalSize": 4165632,
-        "embedderHeapUsedSize": 24323424,
-        "backingStorageSize": 333324
+        "usedSize": 3827252,
+        "totalSize": 4575232,
+        "embedderHeapUsedSize": 26404048,
+        "backingStorageSize": 341738
       },
       "dom": {
         "documents": 2,
-        "nodes": 20997,
-        "jsEventListeners": 83
+        "nodes": 21202,
+        "jsEventListeners": 88
       }
     },
     {
@@ -390,21 +390,21 @@
         "PlainFallback": "LineBudget"
       },
       "syncMs": {
-        "p50": 4,
-        "p95": 5.200000017881393,
-        "max": 6.299999982118607
+        "p50": 4.299999982118607,
+        "p95": 5.0999999940395355,
+        "max": 5.699999988079071
       },
       "nextPrePaintMs": {
-        "p50": 7,
-        "p95": 11.800000011920929,
-        "max": 14.099999994039536
+        "p50": 6.800000011920929,
+        "p95": 11.699999988079071,
+        "max": 18.900000005960464
       },
       "eventToPaintMsUpperEstimate": {
         "p50": 16,
         "p95": 16,
         "max": 24
       },
-      "observedKeydowns": 199,
+      "observedKeydowns": 195,
       "editingLongTasks": [],
       "maxChangedLines": 1,
       "metrics": {
@@ -418,7 +418,7 @@
       },
       "commands": {
         "replace-all-x": {
-          "durationMs": 5.4000000059604645,
+          "durationMs": 6,
           "outcome": {
             "Ok": {
               "revision": 1401,
@@ -439,38 +439,29 @@
           "durationMs": 2.9000000059604645
         },
         "scroll": {
-          "nextPrePaintMs": 5.5,
+          "nextPrePaintMs": 14,
           "top": 0,
           "left": 275264
         }
       },
-      "wasmMemoryBytes": 6225920,
+      "wasmMemoryBytes": 7864320,
       "jsHeap": {
-        "usedSize": 2856768,
-        "totalSize": 3903488,
-        "embedderHeapUsedSize": 1458760,
-        "backingStorageSize": 278589
+        "usedSize": 3095904,
+        "totalSize": 4050944,
+        "embedderHeapUsedSize": 1445336,
+        "backingStorageSize": 287003
       },
       "dom": {
         "documents": 2,
-        "nodes": 1005,
-        "jsEventListeners": 83
+        "nodes": 1214,
+        "jsEventListeners": 88
       }
     }
   ],
   "bundle": {
-    "file": "code_editor_example_bg.50d94dee.wasm",
-    "wasmBytes": 798771,
-    "gzipBytes": 338251,
-    "brotliBytes": 260206
-  },
-  "trace": "disabled",
-  "compiler": "rustc 1.95.0-nightly (0376d43d4 2026-02-20)",
-  "release_profile": {
-    "opt-level": "z",
-    "lto": true,
-    "codegen-units": 1,
-    "wasm-opt": true
-  },
-  "verification": "After keyword span reconciliation fix; existing lifecycle memory measurement retained separately"
+    "file": "code_editor_example_bg.5d51e60f.wasm",
+    "wasmBytes": 3317456,
+    "gzipBytes": 1035822,
+    "brotliBytes": 723431
+  }
 }

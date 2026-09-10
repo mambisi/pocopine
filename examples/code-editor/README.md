@@ -1,5 +1,10 @@
 # Native code editor example
 
+The example includes Tree-sitter packages for Rust, JSON, Python and JavaScript,
+a custom configuration grammar, and a native language picker. See the
+[language API guide](../../crates/pine-code/LANGUAGES.md) for registration,
+worker setup, and the Clang/llvm-ar build prerequisites.
+
 Run from the workspace root:
 
 ```sh
