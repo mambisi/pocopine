@@ -315,3 +315,21 @@ test('read-only composition cannot become an interrupted recovery draft', async 
   expect(final.committed.composing).toBe(false);
   expect(final.interrupted).toBeNull();
 });
+
+test('line limits reject native growth and joins atomically', async ({page}) => {
+  const long = 'x'.repeat(32 * 1024);
+  await load(page, long);
+  await command(page, 'selection', '', long.length);
+  const before = await snapshot(page);
+  await page.keyboard.type('!');
+  expect((await snapshot(page)).text).toBe(long);
+  expect((await snapshot(page)).revision).toBe(before.revision);
+  const split = 'x'.repeat(20_000) + '\n' + 'y'.repeat(20_000);
+  await load(page, split);
+  await command(page, 'selection', '', 20_001);
+  await page.keyboard.press('Backspace');
+  expect((await snapshot(page)).text).toBe(split);
+  expect(await page.locator(`${content} > [data-pine-code-line]`).count()).toBe(2);
+  expect((await command(page, 'load', 'z'.repeat(32 * 1024 + 1))).Err).toBe('SizeLimit');
+  expect((await snapshot(page)).text).toBe(split);
+});

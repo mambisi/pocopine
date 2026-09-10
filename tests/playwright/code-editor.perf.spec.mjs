@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import { gzipSync, brotliCompressSync } from 'node:zlib';
 
 test.setTimeout(600_000);
+// Trace DOM snapshots and screenshots materially distort large-document timing.
+test.use({trace: 'off', screenshot: 'off', video: 'off'});
 const surface = '#source [data-pine-code-content]';
 const snap = page => page.evaluate(() => JSON.parse(window.codeExample.inspect_editor()).snapshot.Ok);
 async function command(page, command, value = '', anchor = 0, head = anchor) {
@@ -35,6 +37,7 @@ async function bootstrap(page) {
 test('release typing, DOM locality, commands, and retained memory at documented limits', async ({page, browser}, info) => {
   test.skip(info.project.name !== 'code-editor-chromium', 'PerformanceEventTiming is measured in Chromium.');
   await bootstrap(page);
+  expect((await command(page, 'load', 'x'.repeat(256 * 1024))).Err).toBe('SizeLimit');
   const report = {
     timestamp: new Date().toISOString(), browser: browser.version(),
     machine: {platform: os.platform(), release: os.release(), cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, memoryBytes: os.totalmem()},
@@ -80,10 +83,11 @@ test('release typing, DOM locality, commands, and retained memory at documented 
     });
   }, surface);
   const cdp = await page.context().newCDPSession(page);
+  const output = info.outputPath('code-editor-performance.json');
   for (const [name, text] of [
-    ['10 KiB', sized(10 * 1024)], ['100 KiB', sized(100 * 1024)],
+    ['10 KiB', sized(10 * 1024)], ['64 KiB', sized(64 * 1024)], ['100 KiB', sized(100 * 1024)],
     ['256 KiB', sized(256 * 1024)], ['10,000 lines', 'let x = 1;\n'.repeat(9999) + 'x'],
-    ['single 256 KiB line', 'x'.repeat(256 * 1024)],
+    ['single 32 KiB line', 'x'.repeat(32 * 1024)],
   ]) {
     expect((await command(page, 'load', text)).Ok).toBeTruthy();
     await command(page, 'focus'); await settled(page);
@@ -146,8 +150,8 @@ test('release typing, DOM locality, commands, and retained memory at documented 
       metrics: measurements.metrics, commands, wasmMemoryBytes: measurements.wasmMemoryBytes,
       jsHeap: await cdp.send('Runtime.getHeapUsage'), dom: await cdp.send('Memory.getDOMCounters'),
     });
+    await fs.writeFile(output, JSON.stringify(report, null, 2));
   }
-  const output = info.outputPath('code-editor-performance.json');
   await fs.writeFile(output, JSON.stringify(report, null, 2));
   await info.attach('performance', {path: output, contentType: 'application/json'});
   // Keep measurements even when a performance gate fails.

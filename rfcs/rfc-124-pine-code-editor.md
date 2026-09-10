@@ -44,10 +44,11 @@ large-file text buffer can follow without replacing the input surface.
 | Search | Literal, case-sensitive find next/previous, replace current/all |
 | Integration | Initial text, typed handle, compact change notifications, explicit document replacement |
 | Input quality | IME, Unicode, touch selection, keyboard access, read-only and disabled states |
-| Size | Default maximum 256 KiB of normalized UTF-8 and 10,000 logical lines |
+| Size | Default maximum 256 KiB normalized UTF-8, 10,000 logical lines, and 32 KiB per logical line |
 
-Both size limits apply. They are proposed release limits, subject to the
-performance gate in §11, not measured claims about the current workspace.
+All size limits apply. They remain subject to the performance gate in §11;
+the implementation's measurements and adjustments are recorded in the example
+validation report.
 Empty text is one line; a final newline adds an empty final line.
 
 ### Deferred
@@ -578,7 +579,7 @@ chunks; discard scheduled work when its document revision or language changes.
 No worker protocol, parser trees, Lezer port, or Syntect browser bundle is
 required. A later parser adapter can feed the same presentation ranges.
 
-Default highlight budgets are 20,000 token spans per document, 8 KiB per
+Default highlight budgets are 8,000 token spans per document, 8 KiB per
 highlighted line, and a 4 ms work slice per frame. Exceeding a line/token budget
 switches the document to plain presentation and emits a compact presentation
 status; text is untouched. Budget values must be measured in §11. Lexing a
@@ -984,3 +985,15 @@ the workspace's shipped crates.
 
 All design choices and limits above are Pocopine proposals. This RFC does
 not promise CodeMirror API compatibility or parity with its complete feature set.
+
+### Measured limit adjustment
+
+The initial Chromium release measurements exceeded the latency gates with
+11,635 syntax spans at 100 KiB (40 ms p95) and a single 256 KiB line (80 ms
+p95). The implementation therefore uses an 8,000-span presentation budget
+and an additional default `DocumentLimits.max_line_bytes = 32 * 1024`.
+The document remains bounded at 256 KiB total and 10,000 lines. Oversized
+logical lines are rejected atomically with `SizeLimit`, including loads,
+paste, joins and replacement; initial oversized content stays visible and
+immutable. Custom limits can opt into a larger, unmeasured envelope.
+See the example validation report for the rerun and baseline measurements.

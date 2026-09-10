@@ -1,0 +1,122 @@
+[
+  {
+    "cycle": 0,
+    "resources": {
+      "listeners": 30,
+      "observers": 2,
+      "frames": 0
+    },
+    "heap": {
+      "usedSize": 2246456,
+      "totalSize": 3244032,
+      "embedderHeapUsedSize": 717152,
+      "backingStorageSize": 95663
+    },
+    "dom": {
+      "documents": 2,
+      "nodes": 996,
+      "jsEventListeners": 81
+    },
+    "wasmBytes": 1376256
+  },
+  {
+    "cycle": 20,
+    "resources": {
+      "listeners": 30,
+      "observers": 2,
+      "frames": 0
+    },
+    "heap": {
+      "usedSize": 2716400,
+      "totalSize": 3768320,
+      "embedderHeapUsedSize": 806968,
+      "backingStorageSize": 96235
+    },
+    "dom": {
+      "documents": 2,
+      "nodes": 1002,
+      "jsEventListeners": 81
+    },
+    "wasmBytes": 1507328
+  },
+  {
+    "cycle": 40,
+    "resources": {
+      "listeners": 30,
+      "observers": 2,
+      "frames": 0
+    },
+    "heap": {
+      "usedSize": 2807724,
+      "totalSize": 4030464,
+      "embedderHeapUsedSize": 871064,
+      "backingStorageSize": 96235
+    },
+    "dom": {
+      "documents": 2,
+      "nodes": 1002,
+      "jsEventListeners": 81
+    },
+    "wasmBytes": 1507328
+  },
+  {
+    "cycle": 60,
+    "resources": {
+      "listeners": 30,
+      "observers": 2,
+      "frames": 0
+    },
+    "heap": {
+      "usedSize": 2842704,
+      "totalSize": 4030464,
+      "embedderHeapUsedSize": 903808,
+      "backingStorageSize": 96235
+    },
+    "dom": {
+      "documents": 2,
+      "nodes": 1002,
+      "jsEventListeners": 81
+    },
+    "wasmBytes": 1507328
+  },
+  {
+    "cycle": 80,
+    "resources": {
+      "listeners": 30,
+      "observers": 2,
+      "frames": 0
+    },
+    "heap": {
+      "usedSize": 2856368,
+      "totalSize": 3768320,
+      "embedderHeapUsedSize": 910344,
+      "backingStorageSize": 96235
+    },
+    "dom": {
+      "documents": 2,
+      "nodes": 1002,
+      "jsEventListeners": 81
+    },
+    "wasmBytes": 1507328
+  },
+  {
+    "cycle": 100,
+    "resources": {
+      "listeners": 30,
+      "observers": 2,
+      "frames": 0
+    },
+    "heap": {
+      "usedSize": 2862980,
+      "totalSize": 4030464,
+      "embedderHeapUsedSize": 911368,
+      "backingStorageSize": 96235
+    },
+    "dom": {
+      "documents": 2,
+      "nodes": 1002,
+      "jsEventListeners": 81
+    },
+    "wasmBytes": 1507328
+  }
+]

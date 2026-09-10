@@ -200,6 +200,7 @@ fn invalid_selection_and_size_limits_leave_state_and_history_untouched() {
         DocumentLimits {
             max_bytes: 4,
             max_lines: 2,
+            ..DocumentLimits::default()
         },
         HistoryLimits::default(),
     )
@@ -305,4 +306,29 @@ fn retention_evicts_whole_groups_and_applies_unretainable_edits() {
     assert!(!replace(&mut editor, 0, 0, "still applies", 0, EditOrigin::Api).history_retained);
     assert_eq!(editor.state().document().text(), "still applies");
     assert!(!editor.can_undo());
+}
+
+#[test]
+fn long_line_limit_applies_to_load_join_and_replacement_without_partial_edits() {
+    let limits = DocumentLimits {
+        max_line_bytes: 4,
+        ..DocumentLimits::default()
+    };
+    let mut editor = Editor::new("ab\ncd", limits, HistoryLimits::default()).unwrap();
+    let revision = editor.state().revision();
+    assert_eq!(
+        editor.load_document("abcde", revision).unwrap_err(),
+        CodeError::SizeLimit
+    );
+    let changes =
+        ChangeSet::new(editor.state().document(), vec![Change::replace(2, 3, "X")]).unwrap();
+    let transaction = editor.state().transaction(changes, EditOrigin::Api);
+    assert_eq!(
+        editor.dispatch(transaction, 0).unwrap_err(),
+        CodeError::SizeLimit
+    );
+    assert_eq!(editor.state().document().text(), "ab\ncd");
+    assert_eq!(editor.state().revision(), revision);
+    assert!(!editor.can_undo());
+    editor.load_document("abcd\nefgh\n", revision).unwrap();
 }

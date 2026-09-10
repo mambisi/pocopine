@@ -66,7 +66,7 @@ pub struct HighlightLimits {
 impl Default for HighlightLimits {
     fn default() -> Self {
         Self {
-            max_spans: 20_000,
+            max_spans: 8_000,
             max_line_bytes: 8 * 1024,
             slice_ms: 4,
         }

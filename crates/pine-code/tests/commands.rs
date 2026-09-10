@@ -81,9 +81,9 @@ fn cache_cap_does_not_cap_navigation_or_replacement_and_replace_all_undoes_once(
         next_match(editor.state(), "a", false),
         Some(TextRange::new(20_000, 20_001))
     );
-    let transaction = replace_all(editor.state(), "a", "🦀", editor.limits()).unwrap();
+    let transaction = replace_all(editor.state(), "a", "é", editor.limits()).unwrap();
     editor.dispatch(transaction, 0).unwrap();
-    assert_eq!(editor.state().document().text(), "🦀 ".repeat(10_001));
+    assert_eq!(editor.state().document().text(), "é ".repeat(10_001));
     editor.undo().unwrap();
     assert_eq!(editor.state().document().text(), "a ".repeat(10_001));
     assert!(!editor.can_undo());
@@ -101,6 +101,7 @@ fn replacement_revalidates_selection_and_growth_before_any_change() {
     let limits = DocumentLimits {
         max_bytes: 8,
         max_lines: 1,
+        ..DocumentLimits::default()
     };
     assert_eq!(
         replace_all(editor.state(), "one", "too long", limits).unwrap_err(),

@@ -62,9 +62,12 @@ impl Selection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DocumentLimits {
     pub max_bytes: usize,
     pub max_lines: usize,
+    /// Bounds native browser editing/layout work on an individual logical line.
+    pub max_line_bytes: usize,
 }
 
 impl Default for DocumentLimits {
@@ -72,13 +75,14 @@ impl Default for DocumentLimits {
         Self {
             max_bytes: 256 * 1024,
             max_lines: 10_000,
+            max_line_bytes: 32 * 1024,
         }
     }
 }
 
 impl DocumentLimits {
     pub fn validate(self) -> CodeResult<()> {
-        if self.max_bytes == 0 || self.max_lines == 0 {
+        if self.max_bytes == 0 || self.max_lines == 0 || self.max_line_bytes == 0 {
             Err(CodeError::InvalidConfiguration)
         } else {
             Ok(())
@@ -109,6 +113,8 @@ impl TextDocument {
         for (i, b) in text.bytes().enumerate() {
             if b == b'\n' {
                 lines.push(i + 1);
+            } else if i + 1 - lines.last().unwrap() > limits.max_line_bytes {
+                return Err(CodeError::SizeLimit);
             }
             if lines.len() > limits.max_lines {
                 return Err(CodeError::SizeLimit);

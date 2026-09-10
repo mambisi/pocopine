@@ -103,10 +103,10 @@ from the latest committed model without another document event.
   while rejecting/restoring mutations. Disabled removes keyboard and pointer
   focus. Provide `aria-label` or `aria-labelledby`; accessible naming and
   descriptions are forwarded to the actual textbox.
-- Defaults: 256 KiB normalized text, 10,000 lines. Invalid initial documents
+- Defaults: 256 KiB normalized text, 10,000 lines, 32 KiB per logical line. Invalid initial documents
   remain visible and immutable with an error. Runtime limits reject edits
   atomically; they never truncate content.
-- Highlighting defaults: 20,000 spans, 8 KiB per line, 4 ms work slices.
+- Highlighting defaults: 8,000 spans, 8 KiB per line, 4 ms work slices.
   Unsupported languages and budget overflow fall back to plain text. After a
   span-budget overflow, plain presentation persists until a load or language
   change starts a fresh pass, avoiding repeated scans on each keystroke.

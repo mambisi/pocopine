@@ -1,0 +1,395 @@
+{
+  "timestamp": "2026-09-10T17:49:34.233Z",
+  "browser": "148.0.7778.96",
+  "machine": {
+    "platform": "linux",
+    "release": "6.17.0-41-generic",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "memoryBytes": 65743953920
+  },
+  "build": "pocopine build --path examples/code-editor --release",
+  "methodology": "200 native one-character replacements per dataset after 30 warmups; locations rotate beginning/middle/end. beforeinput-to-input measures synchronous processing. beforeinput-to-rAF measures the next pre-paint callback, not actual displayed pixels. Chromium EventTiming includes next paint, rounded to 8 ms, entries below 16 ms are censored; missing entries are conservatively assigned 16 ms. Long tasks overlap the input-to-rAF interval. Browser automation runs serially.",
+  "datasets": [
+    {
+      "name": "10 KiB",
+      "bytes": 10240,
+      "lines": 233,
+      "presentation": "Highlighted",
+      "syncMs": {
+        "p50": 2.399999976158142,
+        "p95": 3.4000000059604645,
+        "max": 3.5
+      },
+      "nextPrePaintMs": {
+        "p50": 7.5999999940395355,
+        "p95": 10.299999982118607,
+        "max": 15.5
+      },
+      "eventToPaintMsUpperEstimate": {
+        "p50": 16,
+        "p95": 16,
+        "max": 24
+      },
+      "observedKeydowns": 124,
+      "editingLongTasks": [],
+      "maxChangedLines": 1,
+      "metrics": {
+        "native_reads": 230,
+        "full_dom_reads": 0,
+        "last_read_lines": 1,
+        "last_read_bytes": 43,
+        "mounted_lines": 233,
+        "token_spans": 1160,
+        "history_bytes": 34800
+      },
+      "commands": {
+        "replace-all-x": {
+          "durationMs": 5.5,
+          "outcome": {
+            "Ok": {
+              "revision": 231,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "undo": {
+          "durationMs": 4.0999999940395355,
+          "outcome": {
+            "Ok": {
+              "revision": 232,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "paste": {
+          "durationMs": 1.0999999940395355
+        },
+        "scroll": {
+          "nextPrePaintMs": 0.699999988079071,
+          "top": 4797,
+          "left": 0
+        }
+      },
+      "wasmMemoryBytes": 2752512,
+      "jsHeap": {
+        "usedSize": 2662020,
+        "totalSize": 3244032,
+        "embedderHeapUsedSize": 3094840,
+        "backingStorageSize": 222125
+      },
+      "dom": {
+        "documents": 2,
+        "nodes": 4233,
+        "jsEventListeners": 83
+      }
+    },
+    {
+      "name": "100 KiB",
+      "bytes": 102400,
+      "lines": 2328,
+      "presentation": "Highlighted",
+      "syncMs": {
+        "p50": 17.400000005960464,
+        "p95": 28.19999998807907,
+        "max": 28.400000005960464
+      },
+      "nextPrePaintMs": {
+        "p50": 18.5,
+        "p95": 29.299999982118607,
+        "max": 29.599999994039536
+      },
+      "eventToPaintMsUpperEstimate": {
+        "p50": 32,
+        "p95": 40,
+        "max": 40
+      },
+      "observedKeydowns": 200,
+      "editingLongTasks": [],
+      "maxChangedLines": 1,
+      "metrics": {
+        "native_reads": 460,
+        "full_dom_reads": 0,
+        "last_read_lines": 1,
+        "last_read_bytes": 43,
+        "mounted_lines": 2328,
+        "token_spans": 11635,
+        "history_bytes": 34800
+      },
+      "commands": {
+        "replace-all-x": {
+          "durationMs": 212.69999998807907,
+          "outcome": {
+            "Ok": {
+              "revision": 465,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "undo": {
+          "durationMs": 54.19999998807907,
+          "outcome": {
+            "Ok": {
+              "revision": 466,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "paste": {
+          "durationMs": 2.300000011920929
+        },
+        "scroll": {
+          "nextPrePaintMs": 5,
+          "top": 51706,
+          "left": 0
+        }
+      },
+      "wasmMemoryBytes": 4259840,
+      "jsHeap": {
+        "usedSize": 3341844,
+        "totalSize": 3768320,
+        "embedderHeapUsedSize": 24448640,
+        "backingStorageSize": 317485
+      },
+      "dom": {
+        "documents": 2,
+        "nodes": 33614,
+        "jsEventListeners": 83
+      }
+    },
+    {
+      "name": "256 KiB",
+      "bytes": 262144,
+      "lines": 5958,
+      "presentation": {
+        "PlainFallback": "TokenBudget"
+      },
+      "syncMs": {
+        "p50": 14.300000011920929,
+        "p95": 19.599999994039536,
+        "max": 20.899999976158142
+      },
+      "nextPrePaintMs": {
+        "p50": 16.19999998807907,
+        "p95": 21.5,
+        "max": 22.799999982118607
+      },
+      "eventToPaintMsUpperEstimate": {
+        "p50": 24,
+        "p95": 32,
+        "max": 32
+      },
+      "observedKeydowns": 200,
+      "editingLongTasks": [],
+      "maxChangedLines": 1,
+      "metrics": {
+        "native_reads": 690,
+        "full_dom_reads": 0,
+        "last_read_lines": 1,
+        "last_read_bytes": 43,
+        "mounted_lines": 5958,
+        "token_spans": 0,
+        "history_bytes": 34800
+      },
+      "commands": {
+        "replace-all-x": {
+          "durationMs": 124.90000000596046,
+          "outcome": {
+            "Ok": {
+              "revision": 699,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "undo": {
+          "durationMs": 112,
+          "outcome": {
+            "Ok": {
+              "revision": 700,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "paste": {
+          "durationMs": 5.5999999940395355
+        },
+        "scroll": {
+          "nextPrePaintMs": 0.30000001192092896,
+          "top": 132984,
+          "left": 0
+        }
+      },
+      "wasmMemoryBytes": 6029312,
+      "jsHeap": {
+        "usedSize": 3381652,
+        "totalSize": 4034560,
+        "embedderHeapUsedSize": 17570248,
+        "backingStorageSize": 481192
+      },
+      "dom": {
+        "documents": 2,
+        "nodes": 12907,
+        "jsEventListeners": 83
+      }
+    },
+    {
+      "name": "10,000 lines",
+      "bytes": 109990,
+      "lines": 10000,
+      "presentation": {
+        "PlainFallback": "TokenBudget"
+      },
+      "syncMs": {
+        "p50": 15.200000017881393,
+        "p95": 17.80000001192093,
+        "max": 18.100000023841858
+      },
+      "nextPrePaintMs": {
+        "p50": 16,
+        "p95": 18.599999994039536,
+        "max": 18.900000005960464
+      },
+      "eventToPaintMsUpperEstimate": {
+        "p50": 24,
+        "p95": 24,
+        "max": 32
+      },
+      "observedKeydowns": 200,
+      "editingLongTasks": [],
+      "maxChangedLines": 1,
+      "metrics": {
+        "native_reads": 920,
+        "full_dom_reads": 0,
+        "last_read_lines": 1,
+        "last_read_bytes": 10,
+        "mounted_lines": 10000,
+        "token_spans": 0,
+        "history_bytes": 34800
+      },
+      "commands": {
+        "replace-all-x": {
+          "durationMs": 286.09999999403954,
+          "outcome": {
+            "Ok": {
+              "revision": 933,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "undo": {
+          "durationMs": 159.2000000178814,
+          "outcome": {
+            "Ok": {
+              "revision": 934,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "paste": {
+          "durationMs": 4.799999982118607
+        },
+        "scroll": {
+          "nextPrePaintMs": 0.5,
+          "top": 223486,
+          "left": 0
+        }
+      },
+      "wasmMemoryBytes": 6029312,
+      "jsHeap": {
+        "usedSize": 3578688,
+        "totalSize": 4427776,
+        "embedderHeapUsedSize": 26392104,
+        "backingStorageSize": 332643
+      },
+      "dom": {
+        "documents": 2,
+        "nodes": 20995,
+        "jsEventListeners": 83
+      }
+    },
+    {
+      "name": "single 256 KiB line",
+      "bytes": 262144,
+      "lines": 1,
+      "presentation": {
+        "PlainFallback": "LineBudget"
+      },
+      "syncMs": {
+        "p50": 19.5,
+        "p95": 22.899999976158142,
+        "max": 24.599999994039536
+      },
+      "nextPrePaintMs": {
+        "p50": 30.099999994039536,
+        "p95": 34.89999997615814,
+        "max": 36.69999998807907
+      },
+      "eventToPaintMsUpperEstimate": {
+        "p50": 72,
+        "p95": 80,
+        "max": 80
+      },
+      "observedKeydowns": 201,
+      "editingLongTasks": [],
+      "maxChangedLines": 1,
+      "metrics": {
+        "native_reads": 1150,
+        "full_dom_reads": 0,
+        "last_read_lines": 1,
+        "last_read_bytes": 262144,
+        "mounted_lines": 1,
+        "token_spans": 0,
+        "history_bytes": 34800
+      },
+      "commands": {
+        "replace-all-x": {
+          "durationMs": 27,
+          "outcome": {
+            "Ok": {
+              "revision": 1167,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "undo": {
+          "durationMs": 22,
+          "outcome": {
+            "Ok": {
+              "revision": 1168,
+              "view_status": "Ready"
+            }
+          }
+        },
+        "paste": {
+          "durationMs": 12.400000005960464
+        },
+        "scroll": {
+          "nextPrePaintMs": 12.5,
+          "top": 0,
+          "left": 2208608
+        }
+      },
+      "wasmMemoryBytes": 7798784,
+      "jsHeap": {
+        "usedSize": 3084960,
+        "totalSize": 4169728,
+        "embedderHeapUsedSize": 3207168,
+        "backingStorageSize": 738014
+      },
+      "dom": {
+        "documents": 2,
+        "nodes": 1003,
+        "jsEventListeners": 83
+      }
+    }
+  ],
+  "bundle": {
+    "file": "code_editor_example_bg.545a5f1a.wasm",
+    "wasmBytes": 797733,
+    "gzipBytes": 337802,
+    "brotliBytes": 258363
+  },
+  "reference_commit": "e1498f7a",
+  "trace": "disabled",
+  "purpose": "Initial measurements before reducing the span budget and adding the logical line limit"
+}
