@@ -47,6 +47,7 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
             cmd.arg("--dev");
         }
         cmd.current_dir(&path);
+        crate::wasm_c::configure(&path, &project_tools, &mut cmd)?;
         if let Some(locale) = &locale {
             locale.configure(&mut cmd);
         }

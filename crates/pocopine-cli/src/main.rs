@@ -27,6 +27,7 @@ mod deploy;
 mod dev;
 mod doctor;
 mod env;
+mod wasm_c;
 // RFC-117 — `pocopine fmt`, the rules that own where a template lives.
 mod fmt;
 // RFC-116 — name the lexer-hostile text in a `poco!` body before cargo
