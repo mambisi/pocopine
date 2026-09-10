@@ -8,6 +8,10 @@ pub mod commands;
 mod error;
 mod history;
 pub mod language;
+#[cfg(feature = "syntax")]
+pub mod syntax;
+#[cfg(feature = "syntax")]
+pub use syntax::{LanguageError, LanguageRegistry, TreeSitterLanguage, languages};
 pub mod search;
 mod state;
 mod text;

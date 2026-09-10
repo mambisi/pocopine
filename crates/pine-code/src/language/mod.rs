@@ -19,6 +19,14 @@ pub enum TokenKind {
     Literal,
     Punctuation,
     Lifetime,
+    Function,
+    Type,
+    Property,
+    Variable,
+    Operator,
+    Attribute,
+    Tag,
+    Escape,
 }
 impl TokenKind {
     pub fn class(self) -> &'static str {
@@ -30,6 +38,14 @@ impl TokenKind {
             Self::Literal => "literal",
             Self::Punctuation => "punctuation",
             Self::Lifetime => "lifetime",
+            Self::Function => "function",
+            Self::Type => "type",
+            Self::Property => "property",
+            Self::Variable => "variable",
+            Self::Operator => "operator",
+            Self::Attribute => "attribute",
+            Self::Tag => "tag",
+            Self::Escape => "escape",
         }
     }
 }
@@ -46,6 +62,11 @@ pub enum HighlightError {
     TokenBudget,
     InvalidRange,
     NoProgress,
+    DocumentBudget,
+    WorkBudget,
+    WorkerUnavailable,
+    WorkerFailed(String),
+    InvalidLanguage(String),
     UnknownLanguage(String),
 }
 
