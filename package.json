@@ -2,6 +2,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:code-editor": "pocopine build --path examples/code-editor",
+    "test:code-editor": "PLAYWRIGHT_EXAMPLE=code-editor playwright test code-editor.spec.mjs",
+    "test:code-editor-perf": "PLAYWRIGHT_EXAMPLE=code-editor CODE_EDITOR_RELEASE=1 playwright test code-editor.perf.spec.mjs --project=code-editor-chromium --workers=1",
     "build:richtext": "wasm-pack build examples/richtext --target web --out-dir pkg",
     "test:richtext-smoke": "npm run build:richtext && playwright test richtext.spec.mjs",
     "test:richtext-perf": "npm run build:richtext && playwright test richtext.perf.spec.mjs",

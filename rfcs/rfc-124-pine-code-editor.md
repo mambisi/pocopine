@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented; release validation pending |
 | **Created** | 2026-09-06 |
 | **Proposed crate** | `pine-code` |
 | **Component** | `PineCodeEditor` / `<pine-code-editor>` |
@@ -584,6 +584,10 @@ switches the document to plain presentation and emits a compact presentation
 status; text is untouched. Budget values must be measured in §11. Lexing a
 long line must not run unbounded before discovering the limit.
 
+Implementation detail: after a document-wide span overflow, plain mode stays
+active until an explicit load or language change starts a fresh pass. This
+avoids repeatedly scanning the entire document on every following keystroke.
+
 ### Editing commands
 
 - Enter inserts LF plus the current line's leading whitespace, limited to
@@ -645,12 +649,14 @@ change without remounting or resetting history.
 Defaults are empty initial text, plain language, line numbers off, two-space
 indentation unless supplied by the language, tab display width four, Tab focus
 navigation, and read-only/disabled false. An explicit indentation override
-survives language changes. `tab_size` is a positive display width distinct
+survives language changes. `tab_size` is a display width from 1 through 32, distinct
 from the indentation unit. Theme defaults inherit the application's color
 tokens, with documented light/dark fallbacks. Unknown language identifiers
 use plain text and report a configuration status; invalid sizes or indentation
 settings return a configuration error. Document/history limits are configured
 at mount and cannot be lowered underneath live state or retained history.
+Explicit indentation is one tab or 1 through 32 spaces; the empty value uses
+the language default.
 
 | Proposed handle operation | Contract |
 |---|---|
@@ -927,7 +933,9 @@ pocopine dev --path examples/code-editor
 pocopine build --path examples/code-editor --release
 ```
 
-These example commands become runnable when that future example is created.
+These commands run the implemented example. See
+[`examples/code-editor/VALIDATION.md`](../examples/code-editor/VALIDATION.md)
+for current measurements, automated checks, and outstanding manual checks.
 This documentation-only draft does not claim implementation test results.
 
 ## 12. Source provenance

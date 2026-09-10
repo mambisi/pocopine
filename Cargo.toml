@@ -7,6 +7,7 @@ members = [
     "crates/pine-icons-macros",
     "crates/pine-layout",
     "crates/pine-motion",
+    "crates/pine-code",
     "crates/pine-richtext",
     "crates/pine-richtext-collab",
     "crates/pine-richtext-extensions",
@@ -81,6 +82,7 @@ members = [
     "examples/keep",
     "examples/layout",
     "examples/live",
+    "examples/code-editor",
     "examples/observability-frontend",
     "examples/observability-smoke",
     "jsbench/pocopine",
@@ -172,6 +174,7 @@ pocopine-template-parser = { path = "crates/pocopine-template-parser", version =
 html5ever = "0.27"
 pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.2.0" }
 pine-richtext = { path = "crates/pine-richtext", version = "0.2.0" }
+pine-code = { path = "crates/pine-code", version = "0.2.0" }
 pine-richtext-collab = { path = "crates/pine-richtext-collab", version = "0.2.0" }
 pine-richtext-extensions = { path = "crates/pine-richtext-extensions", version = "0.2.0" }
 pine-richtext-macros = { path = "crates/pine-richtext-macros", version = "0.2.0" }

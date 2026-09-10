@@ -1,0 +1,31 @@
+[package]
+name = "pine-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native text transactions and contenteditable code editor for Pocopine"
+
+[features]
+default = []
+view = ["dep:pocopine", "dep:wasm-bindgen", "dep:js-sys", "dep:web-sys"]
+
+[dependencies]
+serde = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pocopine = { path = "../pocopine", optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "CharacterData", "ClipboardEvent", "CompositionEvent", "DataTransfer", "CustomEvent", "CustomEventInit", "CaretPosition",
+    "Document", "DomRect", "DragEvent", "Element", "Event", "EventTarget",
+    "HtmlElement", "InputEvent", "InputEventInit", "KeyboardEvent", "MouseEvent", "MutationObserver",
+    "MutationObserverInit", "MutationRecord", "Node", "NodeList", "Performance",
+    "Range", "Selection", "Text", "Window", "ScrollIntoViewOptions", "ScrollLogicalPosition",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+wasm-bindgen-futures = { workspace = true }
+pocopine-core = { workspace = true }
