@@ -333,3 +333,15 @@ test('line limits reject native growth and joins atomically', async ({page}) => 
   expect((await command(page, 'load', 'z'.repeat(32 * 1024 + 1))).Err).toBe('SizeLimit');
   expect((await snapshot(page)).text).toBe(split);
 });
+
+test('typing after a keyword repairs native span boundaries even when token ranges stay equal', async ({page}) => {
+  await load(page, '');
+  for (const ch of 'let fu') { await page.keyboard.type(ch); await frame(page); }
+  expect((await snapshot(page)).text).toBe('let fu');
+  await expect(page.locator(`${content} [data-token=keyword]`)).toHaveText('let');
+  expect((await snapshot(page)).selection).toEqual({anchor: 6, head: 6});
+  await page.keyboard.type('n = "hello";'); await frame(page);
+  expect((await snapshot(page)).text).toBe('let fun = "hello";');
+  await expect(page.locator(`${content} [data-token=keyword]`)).toHaveText('let');
+  await expect(page.locator(`${content} [data-token=string]`)).toHaveText('"hello"');
+});

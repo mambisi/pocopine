@@ -396,9 +396,6 @@ impl View {
             .lines
             .get_mut(index)
             .ok_or(CodeError::ViewUnavailable)?;
-        if line.tokens == tokens {
-            return Ok(false);
-        }
         crate::language::validate_tokens(&line.text, tokens)
             .map_err(|_| CodeError::ViewFailure("invalid highlight ranges".into()))?;
         let document = line
@@ -420,8 +417,37 @@ impl View {
         if end < line.text.len() {
             parts.push((None, &line.text[end..]));
         }
+        // Native editing can extend a syntax span without changing the
+        // tokenizer's ranges (typing " fu" after the keyword "let"). Cached
+        // ranges alone do not prove that the browser DOM still matches them.
+        if line.tokens == tokens && !parts.is_empty() {
+            let children = line.element.child_nodes();
+            let matches = children.length() as usize == parts.len()
+                && parts.iter().enumerate().all(|(index, (kind, text))| {
+                    children.item(index as u32).is_some_and(|node| {
+                        let shape_matches = match kind {
+                            None => node.node_type() == Node::TEXT_NODE,
+                            Some(kind) => node.dyn_ref::<Element>().is_some_and(|el| {
+                                el.local_name() == "span"
+                                    && el.get_attribute("data-token").as_deref()
+                                        == Some(kind.class())
+                                    && el.child_nodes().length() == 1
+                                    && el
+                                        .first_child()
+                                        .is_some_and(|child| child.node_type() == Node::TEXT_NODE)
+                            }),
+                        };
+                        shape_matches && node.text_content().as_deref() == Some(text)
+                    })
+                });
+            if matches {
+                return Ok(false);
+            }
+        }
         if parts.is_empty() {
-            Self::patch_line(&line.element, "")?;
+            let changed = Self::patch_line(&line.element, "")?;
+            line.tokens.clear();
+            return Ok(changed);
         } else {
             for (index, (kind, text)) in parts.iter().enumerate() {
                 let existing = line.element.child_nodes().item(index as u32);

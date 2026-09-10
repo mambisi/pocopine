@@ -406,3 +406,39 @@ fn repeated_text_uses_pre_input_caret_for_history_grouping() {
     assert_eq!(fixture.handle.text().unwrap(), "aaaa");
     assert!(!fixture.handle.snapshot().unwrap().can_undo);
 }
+
+#[wasm_bindgen_test(async)]
+async fn unchanged_token_ranges_repair_native_span_extension() {
+    let fixture = Fixture::options(CodeOptions {
+        initial_value: "let".into(),
+        language: "rust".into(),
+        ..CodeOptions::default()
+    });
+    fixture.handle.focus().unwrap();
+    frame().await;
+    let keyword = fixture
+        .surface()
+        .query_selector("[data-token=keyword]")
+        .unwrap()
+        .unwrap();
+    keyword.set_text_content(Some("let fu"));
+    let text = keyword.first_child().unwrap();
+    web_sys::window()
+        .unwrap()
+        .get_selection()
+        .unwrap()
+        .unwrap()
+        .set_base_and_extent(&text, 6, &text, 6)
+        .unwrap();
+    assert_eq!(fixture.handle.text().unwrap(), "let fu");
+    frame().await;
+    assert_eq!(keyword.text_content().as_deref(), Some("let"));
+    assert_eq!(fixture.surface().text_content().as_deref(), Some("let fu"));
+    assert_eq!(fixture.handle.selection().unwrap(), Selection::caret(6));
+    let selection = web_sys::window().unwrap().get_selection().unwrap().unwrap();
+    assert_eq!(
+        selection.anchor_node().unwrap().text_content().as_deref(),
+        Some(" fu")
+    );
+    assert_eq!(selection.anchor_offset(), 3);
+}
