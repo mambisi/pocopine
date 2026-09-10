@@ -153,6 +153,7 @@ fn remove_or_leave(root: &Element) {
     // and listener in the row leaks — and any portal clone stashed on a
     // descendant (`pp-teleport`) is orphaned at its target forever.
     if !crate::directives::transition::has_transition_in_subtree(root) {
+        crate::before_detach::prepare(root.as_ref());
         if let Some(parent) = root.parent_node() {
             let _ = parent.remove_child(root);
         }
@@ -161,6 +162,7 @@ fn remove_or_leave(root: &Element) {
     }
     let root_cap = root.clone();
     crate::directives::transition::leave_subtree(root, move || {
+        crate::before_detach::prepare(root_cap.as_ref());
         if let Some(parent) = root_cap.parent_node() {
             let _ = parent.remove_child(&root_cap);
         }
@@ -245,6 +247,9 @@ fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], anchor: &Node)
         return false;
     }
 
+    for entry in entries {
+        crate::before_detach::prepare(entry.element.as_ref());
+    }
     let scope_ids: Vec<ScopeId> = entries.iter().map(|entry| entry.scope_id).collect();
     // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
     // marker is gone with the mount. Synchronous bulk teardown
@@ -1194,6 +1199,7 @@ fn try_single_remove_fast_path(
     if let Some(entry) = removed
         && !entry.leaving
     {
+        crate::before_detach::prepare(entry.element.as_ref());
         if let Some(parent) = entry.element.parent_node() {
             let _ = parent.remove_child(&entry.element);
         }
@@ -1789,6 +1795,9 @@ fn run_keyed(
             // bail out — `replace_children_with_node_1`
             // below would otherwise nuke them.
             if bulk_clear_safe(parent_el, pool.values(), &anchor, pool_count) {
+                for entry in pool.values() {
+                    crate::before_detach::prepare(entry.element.as_ref());
+                }
                 let scope_ids: Vec<ScopeId> = pool.values().map(|entry| entry.scope_id).collect();
                 // Cleanup BEFORE the DOM mutation:
                 //  1. Stamp every clone with the
@@ -1843,6 +1852,7 @@ fn run_keyed(
                 let key_for_retract = entry.key.clone();
                 let prior_for_retract = prior.clone();
                 if !crate::directives::transition::has_transition_in_subtree(&el) {
+                    crate::before_detach::prepare(el.as_ref());
                     if let Some(parent) = el.parent_node() {
                         let _ = parent.remove_child(&el);
                     }
@@ -1869,6 +1879,7 @@ fn run_keyed(
                 let done_synchronously = Rc::new(std::cell::Cell::new(false));
                 let done_flag = done_synchronously.clone();
                 crate::directives::transition::leave_subtree(&el, move || {
+                    crate::before_detach::prepare(el_for_cb.as_ref());
                     if let Some(parent) = el_for_cb.parent_node() {
                         let _ = parent.remove_child(&el_for_cb);
                     }

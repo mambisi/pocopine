@@ -1965,6 +1965,7 @@ pub fn listener_count() -> usize {
 }
 
 pub(crate) fn release_subtree(node: &Node) {
+    crate::before_detach::prepare(node);
     let unmount_start = crate::profiler::unmount::start();
     release_subtree_inner(node);
     crate::profiler::unmount::record_total(unmount_start);
