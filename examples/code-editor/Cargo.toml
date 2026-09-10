@@ -18,8 +18,9 @@ path = "src/bin/server.rs"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 pocopine = { path = "../../crates/pocopine" }
-pine-code = { workspace = true, features = ["view"] }
+pine-code = { workspace = true, features = ["view", "lang-rust", "lang-json", "lang-python", "lang-javascript"] }
 pine-ui = { path = "../../crates/pine" }
+tree-sitter-json = "0.24.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }

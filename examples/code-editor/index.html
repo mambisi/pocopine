@@ -6,6 +6,7 @@
   <script type="module">
     import init, * as example from "/pkg/code_editor_example.js";
     window.codeExampleWasm = await init();
+    example.start(new URL("/pkg/code_editor_example.js", location.href).href);
     window.codeExample = example;
   </script>
 </body>

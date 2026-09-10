@@ -13,6 +13,20 @@
       <pine-button @click="toggle_readonly">Toggle read-only</pine-button><pine-button @click="toggle_disabled">Toggle disabled</pine-button>
       <pine-button @click="toggle_editor">Open / close editor</pine-button>
     </div>
+    <div class="toolbar">
+      <span id="language-label">Language</span>
+      <pine-select-root pp-model:value="language">
+        <pine-select-trigger aria-labelledby="language-label"><pine-select-value>Choose language</pine-select-value></pine-select-trigger>
+        <pine-select-portal><pine-select-content>
+          <pine-select-item value="rust">Rust</pine-select-item>
+          <pine-select-item value="json">JSON</pine-select-item>
+          <pine-select-item value="python">Python</pine-select-item>
+          <pine-select-item value="javascript">JavaScript</pine-select-item>
+          <pine-select-item value="config">Custom config</pine-select-item>
+          <pine-select-item value="plain">Plain text</pine-select-item>
+        </pine-select-content></pine-select-portal>
+      </pine-select-root>
+    </div>
     <h2 id="source-label">Source</h2>
     <p id="source-help">Tab moves to the next control. Use Indent for indentation.</p>
     <template pp-if="visible">

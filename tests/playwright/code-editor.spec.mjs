@@ -13,12 +13,20 @@ async function load(page, text) {
   await command(page, 'focus');
 }
 async function frame(page) { await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); }
+async function highlighted(page, language) {
+  const revision = String((await snapshot(page)).revision);
+  const root = page.locator('#source [data-pine-code-root]');
+  await expect(root).toHaveAttribute('data-presentation', 'highlighted');
+  await expect(root).toHaveAttribute('data-highlight-revision', revision);
+  if (language) await expect(root).toHaveAttribute('data-highlight-language', language);
+}
 const documentChanges = state => state.changes.filter(change => change.document_changed);
 
 test.beforeEach(async ({page}) => {
   await page.goto('/');
   await page.locator('#source [data-pine-code-instance]').waitFor();
   await page.waitForFunction(() => Boolean(window.codeExample));
+  await highlighted(page);
 });
 
 test('bound seed, independent editors, and accessible content surface', async ({page}) => {
@@ -62,6 +70,7 @@ test('Enter and native joins preserve blank lines and the final newline', async 
 test('Unicode positions and backwards native selection survive syntax spans', async ({page}) => {
   await load(page, 'let 🦀 = "é";\n\n');
   await frame(page);
+  await highlighted(page);
   expect(await page.locator(`${content} [data-token]`).count()).toBeGreaterThan(0);
   const text = (await snapshot(page)).text;
   let bytes = 0;
@@ -344,4 +353,72 @@ test('typing after a keyword repairs native span boundaries even when token rang
   expect((await snapshot(page)).text).toBe('let fun = "hello";');
   await expect(page.locator(`${content} [data-token=keyword]`)).toHaveText('let');
   await expect(page.locator(`${content} [data-token=string]`)).toHaveText('"hello"');
+});
+
+
+test('registered Python, JavaScript and custom grammars use the same editor', async ({page}) => {
+  for (const [language, source, kind, token] of [
+    ['python', 'def greet(name):\n    return name', 'function', 'greet'],
+    ['javascript', 'function greet(name) { return name; }', 'function', 'greet'],
+    ['config', '{"custom": 42}', 'property', '"custom"'],
+  ]) {
+    await command(page, 'language', language);
+    await load(page, source);
+    await highlighted(page, language);
+    await expect(page.locator(`${content} [data-token=${kind}]`)).toHaveText(token);
+    expect((await snapshot(page)).text).toBe(source);
+  }
+});
+
+test('rapid loads and language changes discard stale worker responses', async ({page}) => {
+  await page.evaluate(() => {
+    const cmd = (command, value) => {
+      const state = JSON.parse(codeExample.inspect_editor()).snapshot.Ok;
+      const result = JSON.parse(codeExample.editor_command(command, value, 0, 0, BigInt(state.revision)));
+      if (!result.Ok) throw new Error(JSON.stringify(result));
+    };
+    cmd('load', 'fn old() { let value = 42; }\n'.repeat(1800));
+    cmd('language', 'json'); cmd('load', '{"latest": "value"}');
+    cmd('language', 'python'); cmd('load', 'def latest():\n    return 42');
+  });
+  await highlighted(page, 'python');
+  await expect(page.locator(`${content} [data-token=function]`)).toHaveText('latest');
+  await expect(page.locator(`${content} [data-token=keyword]`)).toHaveText(['def', 'return']);
+  expect((await snapshot(page)).text).toBe('def latest():\n    return 42');
+});
+
+test('syntax worker failure preserves edits and explicit load restarts parsing', async ({page}) => {
+  await page.route('**/code_editor_example.*.js', route => route.abort());
+  await command(page, 'language', 'plain'); await frame(page);
+  await command(page, 'language', 'rust');
+  await load(page, 'let safe = 42;');
+  await expect(page.locator('#source [data-pine-code-root]')).toHaveAttribute('data-presentation', 'plain-fallback');
+  await page.keyboard.press('ControlOrMeta+End'); await page.keyboard.type(' ');
+  expect((await snapshot(page)).text).toBe('let safe = 42; ');
+  await page.unroute('**/code_editor_example.*.js');
+  await load(page, 'fn recovered() {}');
+  await highlighted(page, 'rust');
+  await expect(page.locator(`${content} [data-token=function]`)).toHaveText('recovered');
+});
+
+test('closing and remounting releases each editor worker', async ({page}) => {
+  await expect.poll(() => page.workers().length).toBe(2);
+  for (let i = 0; i < 5; i++) {
+    await page.getByRole('button', {name: 'Open / close editor', exact: true}).click();
+    await expect.poll(() => page.workers().length).toBe(1);
+    await page.getByRole('button', {name: 'Open / close editor', exact: true}).click();
+    await highlighted(page, 'rust');
+    await expect.poll(() => page.workers().length).toBe(2);
+  }
+});
+
+
+test('language picker selects a registered package and its indentation defaults', async ({page}) => {
+  await load(page, 'def greet():\n    return 42');
+  await page.locator('pine-select-trigger button').click();
+  await page.getByRole('option', {name: 'Python', exact: true}).click();
+  await highlighted(page, 'python');
+  await command(page, 'selection', '', 0);
+  await page.getByRole('button', {name: 'Indent', exact: true}).click();
+  expect((await snapshot(page)).text).toBe('    def greet():\n    return 42');
 });

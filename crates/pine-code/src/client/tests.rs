@@ -286,14 +286,22 @@ async fn highlights_preserve_native_composition_nodes_and_defer_editability_chan
         ..CodeOptions::default()
     });
     fixture.handle.focus().unwrap();
-    await_frame_twice().await;
-    assert!(
+    // Seed an already-highlighted surface; worker integration is exercised by
+    // Playwright. This fixture has no application worker entrypoint.
+    for line in 0..2 {
         fixture
-            .surface()
-            .query_selector("[data-token=keyword]")
-            .unwrap()
-            .is_some()
-    );
+            .runtime
+            .view
+            .borrow_mut()
+            .patch_tokens(
+                line,
+                &[crate::language::Token {
+                    range: crate::TextRange::new(0, 3),
+                    kind: crate::language::TokenKind::Keyword,
+                }],
+            )
+            .unwrap();
+    }
     let untouched = fixture.runtime.view.borrow().lines[1].element.clone();
     fixture.runtime.start_composition();
     fixture.mutate("let value = に;");
@@ -415,6 +423,16 @@ async fn unchanged_token_ranges_repair_native_span_extension() {
         ..CodeOptions::default()
     });
     fixture.handle.focus().unwrap();
+    let tokens = vec![vec![crate::language::Token {
+        range: crate::TextRange::new(0, 3),
+        kind: crate::language::TokenKind::Keyword,
+    }]];
+    let response = fixture
+        .runtime
+        .highlight
+        .borrow_mut()
+        .response_for_test(tokens.clone());
+    fixture.runtime.receive_syntax(response);
     frame().await;
     let keyword = fixture
         .surface()
@@ -431,6 +449,12 @@ async fn unchanged_token_ranges_repair_native_span_extension() {
         .set_base_and_extent(&text, 6, &text, 6)
         .unwrap();
     assert_eq!(fixture.handle.text().unwrap(), "let fu");
+    let response = fixture
+        .runtime
+        .highlight
+        .borrow_mut()
+        .response_for_test(tokens);
+    fixture.runtime.receive_syntax(response);
     frame().await;
     assert_eq!(keyword.text_content().as_deref(), Some("let"));
     assert_eq!(fixture.surface().text_content().as_deref(), Some("let fu"));

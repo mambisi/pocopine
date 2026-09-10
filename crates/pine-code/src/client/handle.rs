@@ -141,7 +141,7 @@ impl CodeEditorHandle {
             |state, options| {
                 crate::commands::indent_lines(
                     state,
-                    options.indentation(),
+                    &options.indentation(),
                     outdent,
                     options.tab_size as usize,
                 )

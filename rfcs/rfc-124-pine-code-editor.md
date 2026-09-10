@@ -112,7 +112,8 @@ crates/pine-code/
     commands.rs         # pure editing operations
     history.rs
     search.rs
-    language/           # tokenizer interface, plain/JSON/Rust modules
+    language/           # presentation tokens and legacy standalone tokenizer helpers
+    syntax/             # language registry, optional packages, Tree-sitter parser
     client/
       mod.rs
       component.rs
@@ -457,7 +458,7 @@ with text nodes, not source interpolation into `innerHTML`.
 Retain line views across transactions and keep their model offsets current.
 An edit inside one line patches that line; a split/join updates the affected
 wrappers while retaining unaffected siblings. Syntax changes may invalidate
-later lines through lexical state, but must not rebuild the entire surface
+later lines through syntax context, but must not rebuild the entire surface
 by default. Reconcile spans and text nodes within dirty lines, preserving
 unchanged nodes where possible. Read selection before patches and restore its
 mapped anchor/head afterward only when needed. Selection restoration must not
@@ -544,50 +545,54 @@ committed text. The example demonstrates this explicit form integration.
 
 ## 7. Highlighting, commands, and search
 
-### Small language interface
+### Registered Tree-sitter languages
 
-Start with a synchronous, host-testable `Language` tokenizer interface that
-consumes a line and incoming lexical state and produces colored byte ranges
-plus outgoing state. Token ranges must be ordered, disjoint, scalar-aligned,
-and contained in the line. Invalid ranges disable that result, not editing.
-Internal lexical state need not be serialized or exposed to templates.
+The browser editor uses Tree-sitter in a dedicated module worker. Rust continues
+owning committed text, revisions, history, selection, and native input import.
+Highlighting is presentation only. The earlier line tokenizer helpers may remain
+available to standalone callers; they are not the browser editor's backend.
 
-Use the `StreamParser` contract in `language/src/stream-parser.ts` as a
-reference for state initialization, snapshotting, blank-line processing, and
-progress checks. Our per-line interface must produce independent, comparable
-state snapshots: evaluating one line cannot mutate the cached state of another
-line. Process blank lines too. Every internal tokenization loop must consume
-input or stop with an error after a bounded number of state-only transitions.
-A non-advancing tokenizer falls back to plain presentation; it cannot spin on
-the browser thread. Restart caches when language or lexical configuration
-changes. These contracts do not require porting Lezer, which the upstream
-`StreamLanguage` implementation uses internally.
+Applications enable optional `lang-rust`, `lang-json`, `lang-python`, and
+`lang-javascript` Cargo features and register the corresponding `languages::*()`
+definitions in a `LanguageRegistry`. A custom `TreeSitterLanguage` supplies an ID,
+a grammar `LanguageFn`, a standalone highlights query, and an indentation unit.
+The same registry factory runs in the page (metadata) and the worker (parsing).
+The component selects by `language` ID. New grammars do not change editing code.
+See [the implemented API guide](../crates/pine-code/LANGUAGES.md) for complete
+startup, build, registry, and custom-query examples.
 
-Ship plain text, JSON, and Rust in modules within `pine-code`; separate crates
-and general extension registries are unnecessary initially. JSON recognizes
-strings/escapes, numbers, literals, punctuation, and unfinished input. Rust
-covers keywords, numbers, ordinary/raw strings, chars versus lifetimes, line
-comments, and nested block comments. Incomplete or malformed source remains
-editable and need not receive a semantic error diagnosis. Each language also
-declares its indentation unit; users may override it (JSON two spaces, Rust
-four spaces by default).
+The worker imports the same content-hashed application module, then calls an
+explicit exported worker entrypoint. Applications mount their DOM in a separate
+exported page entrypoint. The library owns worker startup, message callbacks,
+Blob URL cleanup, timeouts, and termination before editor disposal completes.
+CSP must allow its module and Blob worker bootstrap. Worker failure falls back
+to plain presentation; explicit load or language change can retry.
 
-Cache incoming/outgoing lexical state per line. After an edit, re-tokenize
-from the first changed line until the unchanged suffix and incoming state
-agree with the previous cache. Work may continue in bounded animation-frame
-chunks; discard scheduled work when its document revision or language changes.
-No worker protocol, parser trees, Lezer port, or Syntect browser bundle is
-required. A later parser adapter can feed the same presentation ranges.
+Only one request per editor is in flight. Rapid changes are coalesced into the
+newest committed snapshot. The worker derives a scalar-aligned UTF-8 InputEdit
+between snapshots and reuses the preceding syntax tree. It caches queries by
+language. Every response carries revision, language ID, and generation; loads,
+configuration/recovery changes, and further edits make older results ineligible.
+Composition may continue while parsing runs, but no returned syntax patches
+may touch the composing surface. The next committed edit invalidates old results.
 
-Default highlight budgets are 8,000 token spans per document, 8 KiB per
-highlighted line, and a 4 ms work slice per frame. Exceeding a line/token budget
-switches the document to plain presentation and emits a compact presentation
-status; text is untouched. Budget values must be measured in §11. Lexing a
-long line must not run unbounded before discovering the limit.
+Queries produce semantic color categories such as keyword, string, function,
+type, property, and comment. Nested captures override their enclosing capture;
+later patterns win at identical ranges. Normalize them into ordered, disjoint,
+scalar-aligned ranges per logical line and validate again at the DOM boundary.
+Standalone text predicates are supported. Patterns requiring property/local-scope
+predicates are omitted and unsupported custom predicates are rejected. Locals,
+injection queries, compiler semantic analysis, and LSP remain separate work.
 
-Implementation detail: after a document-wide span overflow, plain mode stays
-active until an explicit load or language change starts a fresh pass. This
-avoids repeatedly scanning the entire document on every following keystroke.
+Default presentation limits remain 8,000 spans and 8 KiB per highlighted line.
+DOM patches run in 4 ms frame slices; parsing runs off the browser main thread.
+An additional 1 MiB parser input ceiling, bounded parser/query progress, 64,000
+capture ceiling, and 32 MiB capture-paint-work ceiling prevent unbounded parser
+work. Worker startup and request recovery timeouts are 30 and 10 seconds.
+These are failure ceilings, not typing-latency targets. Span overflow remains
+plain until explicit load or language change to avoid rescanning every keystroke.
+Unknown languages, invalid queries/ranges, worker failures, and budgets affect
+presentation without rejecting or rolling back committed edits.
 
 ### Editing commands
 
@@ -766,7 +771,7 @@ framework now.
 | C0 — Contenteditable input and lifecycle proof | Line/token DOM, DOM reader, selection mapping, scoped observer, composition protection; framework pre-detachment callback | Input commits exactly once; IME survives token changes; undo routes to Rust history; every framework removal path runs finalization while attached, before scope release |
 | C1 — Pure core | `pine-code` text, positions, state, changes, history, search, commands | Host behavior/property tests pass; core builds for host and WASM without `view` |
 | C2 — Native component | Incremental line reconciliation, scoped handle, clipboard, composition, final snapshots, limits, read-only, view recovery | Browser editing, guarded selection, read-only navigation, app submit/reset, interrupted-composition delivery, disposal, and injected rendering-failure tests pass |
-| C3 — Code presentation | Gutter, JSON/Rust tokenizers, direct token-span styling, plain-mode fallback, example search panel | Highlight patches preserve selection/IME; light/dark, forced colors, incomplete syntax, font/zoom changes pass |
+| C3 — Code presentation | Gutter, registered Tree-sitter languages and worker, direct token-span styling, plain-mode fallback, example search panel | Highlight patches preserve selection/IME; light/dark, forced colors, incomplete syntax, font/zoom changes pass |
 | C4 — Release gates | Documentation, standalone example, performance fixture, cross-target validation | All §11 gates pass and measured limits are published |
 
 Keep commits aligned to completed behavior. Browser failures in C0 must be
@@ -903,7 +908,7 @@ Proposed gates on the documented reference desktop:
   presentation mode, with working selection and undo and no lost input.
 - Highlighting respects its work budgets and cannot block text commits.
 - An ordinary edit in one line retains unaffected line DOM nodes; highlighting
-  only changes later lines when lexical invalidation requires it. No per-edit
+  only changes later lines when syntax context requires it. No per-edit
   whole-surface `innerHTML` replacement or full-DOM serialization is allowed.
 - After 100 mount/edit/unmount cycles, listeners/tasks return to baseline and
   retained editor memory shows no continuing growth after collection.
@@ -973,7 +978,8 @@ The dependency manifests reinforce the scope boundary: upstream `language`
 uses Lezer, and `commands` integrates with `language` and `view`. Referencing
 these packages does not require bringing their JavaScript dependency graph
 into Pocopine. In particular, `StreamLanguage` is backed by Lezer upstream;
-only its tokenizer/state contract informs our lighter implementation.
+its tokenizer/state contract informed the retained standalone helpers. The browser
+editor now uses registered Tree-sitter grammars and the worker pipeline in §7.
 
 All four checked-out `LICENSE` files identify the MIT license. Any later
 translation or copied tests must record the package, commit, and source paths

@@ -10,12 +10,13 @@ use web_sys::{
     MutationRecord,
 };
 
+use super::highlighting::HighlightCache;
 use super::{
     dom_reader,
     events::Events,
     view::{View, dom_error},
 };
-use crate::language::{HighlightCache, HighlightLimits, PresentationStatus};
+use crate::language::{HighlightLimits, PresentationStatus};
 use crate::{
     CodeChange, CodeError, CodeResult, CommitOutcome, DocumentLimits, DocumentRevision, EditOrigin,
     Editor, HistoryLimits, Selection, ViewStatus,
@@ -74,13 +75,11 @@ impl CodeOptions {
         Ok(())
     }
 
-    pub fn indentation(&self) -> &str {
+    pub fn indentation(&self) -> String {
         if !self.indent.is_empty() {
-            &self.indent
-        } else if self.language == "rust" {
-            "    "
+            self.indent.clone()
         } else {
-            "  "
+            super::syntax_worker::indentation(&self.language)
         }
     }
 }
@@ -178,7 +177,7 @@ pub(super) struct Runtime {
     pub final_events: Events<CodeFinalSnapshot>,
     pub presentation_events: Events<PresentationStatus>,
     pub presentation: RefCell<PresentationStatus>,
-    highlight: RefCell<HighlightCache>,
+    pub(super) highlight: RefCell<HighlightCache>,
     highlight_scheduled: Cell<bool>,
     clear_line: Cell<usize>,
     pub weak: Weak<Runtime>,
@@ -227,7 +226,7 @@ impl Runtime {
             final_events: Events::default(),
             presentation_events: Events::default(),
             presentation: RefCell::new(PresentationStatus::Plain),
-            highlight: RefCell::new(HighlightCache::new(HighlightLimits::default())),
+            highlight: RefCell::new(HighlightCache::new()),
             highlight_scheduled: Cell::new(false),
             clear_line: Cell::new(0),
             weak: weak.clone(),
@@ -980,6 +979,7 @@ impl Runtime {
         if let Some(observer) = self.observer.borrow_mut().take() {
             observer.disconnect();
         }
+        self.highlight.borrow_mut().stop();
         self.listeners.borrow_mut().clear();
         self.observer_callback.borrow_mut().take();
         self.changes.clear();
@@ -991,15 +991,36 @@ impl Runtime {
         self.drag.borrow_mut().take();
     }
 
+    pub(super) fn receive_syntax(&self, event: super::syntax_worker::WorkerEvent) {
+        if self.disposed.get() || self.finalizing.get() {
+            return;
+        }
+        let was_pending = self.highlight.borrow().status == PresentationStatus::Pending;
+        self.highlight
+            .borrow_mut()
+            .receive(event, self.editor.borrow().state().document());
+        if was_pending
+            && matches!(
+                self.highlight.borrow().status,
+                PresentationStatus::PlainFallback(_)
+            )
+        {
+            self.clear_line.set(0);
+        }
+        self.queue_highlights();
+    }
+
     fn refresh_highlights(&self, reset: bool) {
         {
             let editor = self.editor.borrow();
             let options = self.options.borrow();
             let mut cache = self.highlight.borrow_mut();
-            if reset {
-                cache.invalidate();
-            }
-            cache.update(editor.state().document(), &options.language);
+            cache.update(
+                editor.state().document(),
+                editor.state().revision(),
+                &options.language,
+                reset,
+            );
         }
         if reset
             || self.view.borrow().structure_changed
@@ -1045,6 +1066,9 @@ impl Runtime {
         if self.flush_inside().is_err() {
             return;
         }
+        self.highlight
+            .borrow_mut()
+            .submit(self.editor.borrow().state().document(), &self.weak);
         let started = web_sys::window()
             .and_then(|window| window.performance())
             .map_or(0.0, |performance| performance.now());
@@ -1056,16 +1080,13 @@ impl Runtime {
                     PresentationStatus::Pending => {
                         let step = self.highlight.borrow_mut().next_line();
                         match step {
-                            Ok(Some(step)) => {
+                            Some(step) => {
                                 patched |= self
                                     .view
                                     .borrow_mut()
                                     .patch_tokens(step.line, &step.tokens)?;
                             }
-                            Ok(None) => break,
-                            Err(_) => {
-                                self.clear_line.set(0);
-                            }
+                            None => break,
                         }
                     }
                     PresentationStatus::Plain | PresentationStatus::PlainFallback(_) => {
@@ -1102,6 +1123,14 @@ impl Runtime {
             return;
         }
         let status = self.highlight.borrow().status.clone();
+        if status == PresentationStatus::Highlighted {
+            let root = &self.view.borrow().root;
+            let _ = root.set_attribute(
+                "data-highlight-revision",
+                &self.editor.borrow().state().revision().0.to_string(),
+            );
+            let _ = root.set_attribute("data-highlight-language", &self.options.borrow().language);
+        }
         if *self.presentation.borrow() != status {
             *self.presentation.borrow_mut() = status.clone();
             let value = match &status {
@@ -1117,7 +1146,7 @@ impl Runtime {
                 .set_attribute("data-presentation", value);
             self.presentation_events.emit(&status);
         }
-        if status == PresentationStatus::Pending
+        if self.highlight.borrow().has_work()
             || (matches!(
                 status,
                 PresentationStatus::Plain | PresentationStatus::PlainFallback(_)

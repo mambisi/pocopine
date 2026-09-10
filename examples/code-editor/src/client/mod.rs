@@ -192,14 +192,46 @@ impl CodeDemo {
     }
 }
 
-#[wasm_bindgen(start)]
-pub fn main() {
+fn editor_languages() -> Result<pine_code::LanguageRegistry, pine_code::LanguageError> {
+    let mut languages = pine_code::LanguageRegistry::new();
+    languages.register(pine_code::languages::rust())?;
+    languages.register(pine_code::languages::json())?;
+    languages.register(pine_code::languages::python())?;
+    languages.register(pine_code::languages::javascript())?;
+    // A custom registration uses the same grammar with different presentation
+    // rules. Real DSLs can supply their own generated Tree-sitter grammar.
+    languages.register(pine_code::TreeSitterLanguage::new("config", tree_sitter_json::LANGUAGE)
+        .highlights("(pair key: (string) @property) (number) @number (true) @constant (false) @constant")
+        .indent_unit("    "))?;
+    Ok(languages)
+}
+
+#[wasm_bindgen]
+pub fn code_languages() -> Result<(), JsValue> {
+    pine_code::client::start_language_worker(
+        editor_languages().map_err(|e| JsValue::from_str(&e.to_string()))?,
+    )
+}
+
+#[wasm_bindgen]
+pub fn start(module_url: String) -> Result<(), JsValue> {
+    pine_code::client::configure_languages(
+        pine_code::client::LanguageWorkerConfig::new(module_url, "code_languages"),
+        &editor_languages().map_err(|e| JsValue::from_str(&e.to_string()))?,
+    )?;
     App::new()
         .register::<PineCodeEditor>()
         .register::<pine::PineInput>()
         .register::<pine::PineButton>()
+        .register::<pine::PineSelectRoot>()
+        .register::<pine::PineSelectTrigger>()
+        .register::<pine::PineSelectValue>()
+        .register::<pine::PineSelectPortal>()
+        .register::<pine::PineSelectContent>()
+        .register::<pine::PineSelectItem>()
         .register::<CodeDemo>()
         .run();
+    Ok(())
 }
 
 // Example-only probes let browser tests assert Rust state independently of the

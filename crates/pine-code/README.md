@@ -5,7 +5,9 @@ revisions, selection and undo history. A `contenteditable` surface receives
 browser input and renders direct syntax spans; the browser draws the caret
 and native selection. The default crate has no browser dependency.
 
-Enable the component with `pine-code = { workspace = true, features = ["view"] }`
+Enable the component and language packages with
+`pine-code = { workspace = true, features = ["view", "lang-rust"] }`,
+configure its language worker as shown in [the language API guide](LANGUAGES.md),
 and register `pine_code::client::PineCodeEditor` on the browser App.
 
 ```html
@@ -90,13 +92,15 @@ Check `view_status`; do not retry that edit. `on_change` fires once with the
 accepted revision and failed status. `recover_view()` reconstructs the view
 from the latest committed model without another document event.
 
-- Languages: `plain` (default), `json`, `rust`. Rust supports nested comments,
-  raw strings, character literals and lifetimes; JSON supports incomplete
-  strings and numeric forms. These are line tokenizers, not compiler parsers.
+- Languages: `plain` (default), optional Tree-sitter packages for `json`, `rust`,
+  `python`, and `javascript`, and custom registered grammars. See
+  [LANGUAGES.md](LANGUAGES.md) for setup, queries, supported captures, and bounds.
+  The browser editor uses the registered worker; the earlier public line-tokenizer
+  utilities remain available for existing standalone callers.
 - Themes: `auto`, `light`, `dark`; forced colors use system colors. Syntax
   styles change color only, preserving text metrics.
 - `tab-size`: 1–32, default 4. `indent`: empty for the language default,
-  1–32 spaces, or one tab. Rust defaults to four spaces; other modes use two.
+  1–32 spaces, or one tab. Rust/Python default to four spaces; JSON/JavaScript use two; custom languages declare their unit.
 - `tab-behavior="focus"` is the default. Opt into `indent`; Escape followed
   by Tab exits that mode. Read-only always permits Tab navigation.
 - Read-only preserves `contenteditable` for native navigation and copying,
@@ -112,12 +116,16 @@ from the latest committed model without another document event.
   change starts a fresh pass, avoiding repeated scans on each keystroke.
 
 The renderer mounts all lines and scrolls without wrapping. It does not
-provide virtualization, multiple cursors, semantic parsing, completion, LSP,
+provide virtualization, multiple cursors, semantic analysis, completion, LSP,
 collaborative editing, or rich-text document semantics. See the
 [validation report](../../examples/code-editor/VALIDATION.md) for measured
 limits and remaining manual browser checks.
 
 ## Development
+
+Install Clang/llvm-ar and configure target CFLAGS for direct library checks as
+described in [LANGUAGES.md](LANGUAGES.md). Application builds use the CLI, which
+supplies the grammar headers automatically.
 
 ```sh
 cargo test -p pine-code

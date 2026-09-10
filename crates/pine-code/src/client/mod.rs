@@ -4,11 +4,13 @@ mod dom_reader;
 mod drag;
 mod events;
 mod handle;
+mod highlighting;
 mod input;
 #[cfg(test)]
 mod lifecycle_tests;
 mod native_change;
 mod runtime;
+mod syntax_worker;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -21,3 +23,4 @@ pub use runtime::{
     CodeFinalSnapshot, CodeMetrics, CodeOptions, CodeSnapshot, CompositionStatus,
     InterruptedComposition,
 };
+pub use syntax_worker::{LanguageWorkerConfig, configure_languages, start_language_worker};
