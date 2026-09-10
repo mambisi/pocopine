@@ -100,4 +100,5 @@ Conventions:
 | 093 | [Pocopine Agenkit plan](./rfc-093-pocopine-agenkit.md) | Draft |
 | 112 | [Dynamic component rendering (`<pp-component :is>`)](./rfc-112-dynamic-component.md) | Implemented |
 | 113 | [Typed node views and external blocks for `pine-richtext`](./rfc-113-pine-richtext-typed-node-views.md) | Draft |
+| 124 | [Native code text editor (`pine-code`)](./rfc-124-pine-code-editor.md) | Draft |
 | 125 | [Typed watcher inputs and restricted state updates](./rfc-125-watch-inputs-and-updates.md) | Accepted (implemented on feature branch) |
