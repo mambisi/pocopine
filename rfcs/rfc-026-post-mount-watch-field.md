@@ -1,8 +1,10 @@
 # RFC 026 — `post_mount` lifecycle + `#[watch(field)]` sugar
 
-> Watch contract update: handlers now receive named `Change<T>` snapshots,
-> take no receiver, and may return `Update<Self>` for declared `writes(...)`.
-> The examples below describe the original design. See the current
+> The generated watch contract is superseded by
+> [RFC-125](./rfc-125-watch-inputs-and-updates.md): named `T`, `&T`, or
+> `Change<T>` inputs, no receiver, and restricted `Update<Self>` patches;
+> bare `#[watch]` observes all fields without a patch.
+> The examples below describe the original design. See the
 > [migration guide](../docs/guides/reactivity/06-readonly-watch-migration.md).
 
 

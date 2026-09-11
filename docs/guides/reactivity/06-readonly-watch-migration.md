@@ -5,6 +5,9 @@ description: "Declare watch inputs and writable outputs; return a typed multi-fi
 
 # Migrating watchers to snapshots and updates
 
+The authoritative contract is
+[RFC-125: Typed watcher inputs and restricted state updates](../../../rfcs/rfc-125-watch-inputs-and-updates.md).
+
 A watcher receives named values, borrows, or `Change<T>` snapshots and may
 return an `Update<Self>` patch. It takes no `self` receiver. `#[computed]` remains the right tool for a
 value that is always derived; a watcher can coordinate changes to several
