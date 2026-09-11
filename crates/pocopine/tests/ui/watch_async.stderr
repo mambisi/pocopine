@@ -1,0 +1,5 @@
+error: #[watch] handlers must be synchronous, safe, and non-generic
+ --> tests/ui/watch_async.rs:6:1
+  |
+6 | async fn bad(a: FieldUpdate<u32>) {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

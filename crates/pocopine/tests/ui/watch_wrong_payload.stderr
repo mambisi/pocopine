@@ -1,0 +1,16 @@
+error[E0308]: mismatched types
+ --> tests/ui/watch_wrong_payload.rs:8:63
+  |
+8 | fn bad(a: FieldUpdate<u32>) -> Update<Self> { Update::new().b("wrong") }
+  |                                                             - ^^^^^^^ expected `u32`, found `&str`
+  |                                                             |
+  |                                                             arguments to this method are incorrect
+  |
+note: method defined here
+ --> tests/ui/watch_wrong_payload.rs:7:19
+  |
+5 | #[handlers]
+  | -----------
+6 | impl State {
+7 | #[watch(a, writes(b))]
+  |                   ^

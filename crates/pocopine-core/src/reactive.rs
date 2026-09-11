@@ -273,6 +273,19 @@ pub fn current_effect() -> Option<EffectId> {
     CURRENT_EFFECT.with(|c| c.get())
 }
 
+/// Run a declared-input callback without collecting incidental dependencies.
+/// Nested effects can still collect their own dependencies normally.
+pub(crate) fn without_tracking<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<EffectId>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT_EFFECT.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(CURRENT_EFFECT.with(|c| c.replace(None)));
+    f()
+}
+
 /// Register and run an effect immediately. Returns its id so callers can
 /// later `release` it (e.g. when the owning DOM node is removed).
 pub fn effect(f: impl Fn() + 'static) -> EffectId {

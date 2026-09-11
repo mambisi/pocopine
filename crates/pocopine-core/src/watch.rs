@@ -19,24 +19,6 @@ use serde::de::DeserializeOwned;
 use crate::reactive::{EffectId, ScopeId, effect, track};
 use crate::scope::{Scope, current_scope_id};
 
-/// Invoke a generated `#[watch]` handler through a shared state borrow.
-///
-/// Keep the component context and callback safe point while avoiding the
-/// dirty sweep and model writeback performed by `Handle::update`. Initial
-/// callbacks remain deferred by the installers; removed scopes are skipped.
-/// This restricts the receiver only, not writes through separately held handles.
-#[doc(hidden)]
-pub fn invoke_watch_handler<T: 'static>(scope_id: ScopeId, cb: impl FnOnce(&T)) {
-    let Some(scope) = Scope::find(scope_id) else {
-        return;
-    };
-    let Some(state) = scope.typed::<T>() else {
-        return;
-    };
-    let _frame = crate::ComponentCallbackFrame::for_scope(scope_id);
-    crate::scope::with_current_scope_id(scope_id, || cb(&state.borrow()));
-}
-
 /// Watch `source` and call `cb` whenever its value changes.
 ///
 /// `cb` fires once on the initial run (with `previous = None`), then once
@@ -196,6 +178,33 @@ pub fn watch_scope_fields<C>(
 where
     C: Fn() + 'static,
 {
+    watch_fields_impl(scope_id, fields, label, cb, true)
+}
+
+/// Snapshot callbacks commit only declared outputs. Preserve input changes
+/// caused by queued browser events instead of suppressing them as sweep echoes.
+pub(crate) fn watch_snapshot_fields<C>(
+    scope_id: ScopeId,
+    fields: &'static [&'static str],
+    label: &'static str,
+    cb: C,
+) -> EffectId
+where
+    C: Fn() + 'static,
+{
+    watch_fields_impl(scope_id, fields, label, cb, false)
+}
+
+fn watch_fields_impl<C>(
+    scope_id: ScopeId,
+    fields: &'static [&'static str],
+    label: &'static str,
+    cb: C,
+    suppress_echo: bool,
+) -> EffectId
+where
+    C: Fn() + 'static,
+{
     let cb: Rc<dyn Fn()> = Rc::new(cb);
     // Validate once at install — reject keys the sweep can never
     // prove unchanged (see doc above). Loud, not silent: RFC-115.
@@ -273,8 +282,8 @@ where
             let now = probe(scope_id, &tracked);
             if seed_pending.get() {
                 // Coalesced initial seed, deferred one microtask —
-                // the install runs behind on_ready's live borrow and
-                // the seed re-enters the scope via `Handle::update`.
+                // the install runs behind on_ready's live borrow, so
+                // delivery must wait until that borrow has ended.
                 // Scheduled via `spawn_local` (the same cross-host
                 // microtask the flush scheduler uses) rather than
                 // `tick::next`, which needs a `window` and silently
@@ -296,9 +305,14 @@ where
                         return;
                     }
                     pending.set(false);
+                    let before = probe(scope_id, &tracked);
                     cb();
-                    *prev_probes.borrow_mut() = probe(scope_id, &tracked);
-                    if let Some(me) = self_id.get() {
+                    *prev_probes.borrow_mut() = if suppress_echo {
+                        probe(scope_id, &tracked)
+                    } else {
+                        before
+                    };
+                    if suppress_echo && let Some(me) = self_id.get() {
                         crate::reactive::dequeue_effect(me);
                     }
                 });
@@ -308,11 +322,15 @@ where
                 return;
             }
             cb();
-            // Re-probe after the callback so its own writes don't
-            // read as an external change on the next run, and drop
-            // the sweep echo our own run just queued.
-            *prev_probes.borrow_mut() = probe(scope_id, &tracked);
-            if let Some(me) = self_id.get() {
+            // Legacy low-level callbacks may mutate their inputs. Snapshot
+            // callbacks cannot, and must retain later input changes for the
+            // next invocation (including safe-point browser-event re-entry).
+            *prev_probes.borrow_mut() = if suppress_echo {
+                probe(scope_id, &tracked)
+            } else {
+                now
+            };
+            if suppress_echo && let Some(me) = self_id.get() {
                 crate::reactive::dequeue_effect(me);
             }
         }

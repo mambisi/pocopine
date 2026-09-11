@@ -1,0 +1,5 @@
+error: a watcher cannot write a watched input field
+ --> tests/ui/watch_self_write.rs:5:19
+  |
+5 | #[watch(a, writes(a))]
+  |                   ^

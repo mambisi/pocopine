@@ -1,10 +1,28 @@
-error[E0594]: cannot assign to `self.count`, which is behind a `&` reference
-  --> tests/ui/watch_mutation.rs:13:9
+error: #[watch] handlers take no self receiver; declare each input as field: FieldUpdate<T> and return Update<Self> for state changes
+  --> tests/ui/watch_mutation.rs:12:5
    |
-13 |         self.count = next + 1;
-   |         ^^^^^^^^^^^^^^^^^^^^^ `self` is a `&` reference, so it cannot be written to
-   |
-help: consider changing this to be a mutable reference
-   |
-12 |     fn on_count(&mut self, next: i32, _prev: Option<i32>) {
-   |                  +++
+12 |     fn on_count(&self, next: i32, _prev: Option<i32>) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `EditorStore: pocopine::__private::HandlerDispatch` is not satisfied
+ --> tests/ui/watch_mutation.rs:4:1
+  |
+4 | #[store(name = "watch-mutation")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `pocopine::__private::HandlerDispatch` is not implemented for `EditorStore`
+ --> tests/ui/watch_mutation.rs:5:1
+  |
+5 | struct EditorStore {
+  | ^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `store` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated item named `__pocopine_computed_install` found for struct `EditorStore` in the current scope
+ --> tests/ui/watch_mutation.rs:4:1
+  |
+4 | #[store(name = "watch-mutation")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated item not found in `EditorStore`
+5 | struct EditorStore {
+  | ------------------ associated item `__pocopine_computed_install` not found for this struct
+  |
+  = note: this error originates in the attribute macro `store` (in Nightly builds, run with -Z macro-backtrace for more info)

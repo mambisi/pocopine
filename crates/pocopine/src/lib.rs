@@ -48,6 +48,7 @@ pub use pocopine_core::{
     verify_registry, watch, watch_field, watch_field_scoped, watch_scope_field,
     watch_scope_field_now, watch_scope_field_scoped, watch_scope_fields, watch_scoped,
 };
+pub use pocopine_core::{FieldUpdate, Update};
 pub use pocopine_core::{
     animate, dom, events, focus, profiler, progress, refs, router, scroll_lock, sse, storage, text,
     tick, timers,
@@ -135,6 +136,7 @@ pub mod prelude {
         resolve_owned_content_outlet_from_root, rw_signal, signal, spawn, spawn_for_scope,
         spawn_latest, spawn_latest_for_scope, spawn_scoped, store, this, watch,
     };
+    pub use crate::{FieldUpdate, Update};
     pub use wasm_bindgen::prelude::*;
 }
 
@@ -149,7 +151,9 @@ pub mod __private {
         clear_active_phf_registry_for_test, set_active_phf_registry,
     };
     pub use pocopine_core::server::server_function_default_path;
-    pub use pocopine_core::watch::invoke_watch_handler;
+    pub use pocopine_core::watch_update::{
+        WatchField, WatchNode, WatchSpec, assert_watch_graph, install_snapshot_watch,
+    };
     pub use pocopine_core::{
         BindingKind, ClientModule, ClientModuleError, Component, ComponentMountFn, ComponentState,
         ComponentUses, ComponentVTable, ComputedTypeWitness, DynamicComponentHost,

@@ -1,4 +1,4 @@
-error: #[watch(start_time)] handler must take `&self` and `(next: V, prev: Option<V>)` — e.g. `fn on_start_time(&self, next: V, prev: Option<V>)` — or watch several fields with a no-arg handler: #[watch(a, b, c)]
+error: #[watch] handlers take no self receiver; declare each input as field: FieldUpdate<T> and return Update<Self> for state changes
   --> tests/ui/watch_no_args.rs:12:5
    |
 12 |     fn on_start_time(&self) {}

@@ -1,4 +1,4 @@
-error: multi-field #[watch] handlers take `&self` only — the coalesced call has no single (next, prev); read the fields off self
+error: #[watch] handlers take no self receiver; declare each input as field: FieldUpdate<T> and return Update<Self> for state changes
   --> tests/ui/watch_multi_with_args.rs:13:5
    |
 13 |     fn on_times(&self, _next: String, _prev: Option<String>) {}

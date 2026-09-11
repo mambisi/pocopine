@@ -1,5 +1,3 @@
-// The canonical `#[watch]` shape: `&self` + `(next: V, prev: Option<V>)`.
-// Hosted on a `#[store]` so the generated observe machinery exists.
 use pocopine::prelude::*;
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -7,18 +5,21 @@ use pocopine::prelude::*;
 struct EditorStore {
     start_time: String,
     count: i32,
+    error: Option<String>,
+    valid: bool,
 }
 
 #[handlers]
 impl EditorStore {
-    #[watch(start_time)]
-    fn on_start_time(&self, _next: String, _prev: Option<String>) {
-        let _ = self.count;
+    #[watch(start_time, writes(error, valid))]
+    fn on_start_time(start_time: FieldUpdate<String>) -> Update<Self> {
+        let valid = !start_time.current.is_empty();
+        Update::new().valid(valid).error(None)
     }
 
     #[watch(count)]
-    fn on_count(&self, next: i32, prev: Option<i32>) {
-        let _ = (next, prev);
+    fn on_count(count: FieldUpdate<i32>) {
+        let _ = (count.current, count.previous);
     }
 }
 

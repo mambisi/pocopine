@@ -1,28 +1,28 @@
-// RFC-115 — the multi-field form: two-plus fields require the
-// payload-less `&self` shape; the handler is invoked once per
-// flush when any listed field changes.
 use pocopine::prelude::*;
 
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+struct Errors(Vec<String>);
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[store(name = "editor-multi")]
-struct EditorStore {
-    start_time: String,
-    end_time: String,
-    count: i32,
+#[component(template = poco! { <div></div> })]
+struct Editor {
+    start: String,
+    end: String,
+    errors: Errors,
+    valid: bool,
 }
 
 #[handlers]
-impl EditorStore {
-    #[watch(start_time, end_time)]
-    fn on_when_changed(&self) {
-        let _ = self.count;
+impl Editor {
+    // Parameters bind by name, not position. Outputs can have private types.
+    #[watch(start, end, writes(errors, valid))]
+    fn check(end: FieldUpdate<String>, start: FieldUpdate<String>) -> Update<Self> {
+        let valid = start.current <= end.current;
+        Update::new().errors(Errors::default()).valid(valid)
     }
 
-    // The typed single-field contract coexists unchanged.
-    #[watch(count)]
-    fn on_count(&self, next: i32, prev: Option<i32>) {
-        let _ = (next, prev);
-    }
+    #[watch(valid)]
+    fn log(valid: FieldUpdate<bool>) { let _ = valid.changed(); }
 }
 
 fn main() {}

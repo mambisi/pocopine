@@ -1,0 +1,5 @@
+error[E0425]: cannot find type `missing` in module `__pocopine_watch_fields_State`
+ --> tests/ui/watch_unknown_output.rs:7:23
+  |
+7 | #[watch(value, writes(missing))]
+  |                       ^^^^^^^ not found in `__pocopine_watch_fields_State`

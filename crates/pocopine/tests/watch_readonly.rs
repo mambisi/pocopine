@@ -1,4 +1,4 @@
-//! Generated watchers borrow state immutably while preserving their scope,
+//! Generated snapshot observers preserve their scope,
 //! deferred seed, coalescing, callback safe point, and unmount cleanup.
 #![cfg(target_arch = "wasm32")]
 
@@ -40,32 +40,34 @@ impl ReadonlyWatch {
     }
 
     #[watch(a)]
-    fn on_a(&self, next: u32, prev: Option<u32>) {
+    fn on_a(a: FieldUpdate<u32>) {
+        let (next, prev) = (a.current, a.previous);
         assert_eq!(current_scope_id(), WATCH_SCOPE.with(Cell::get));
-        assert_eq!(this::<Self>().with(|state| state.a), self.a);
+        assert_eq!(this::<Self>().with(|state| state.a), next);
         SINGLE.with(|runs| runs.borrow_mut().push((next, prev)));
         if next == 7 {
             // Browser APIs may synchronously dispatch back into a component.
-            // The mutating event handler must wait until this shared borrow
-            // has ended, just as it did with the previous mutable dispatch.
+            // The mutating event handler must wait until evaluation and
+            // the callback safe point have ended.
             let button = pocopine::refs::get_on(current_scope_id().unwrap(), "button").unwrap();
             button.dyn_into::<web_sys::HtmlElement>().unwrap().click();
-            assert_eq!(self.clicks, 0);
+            assert_eq!(this::<Self>().with(|state| state.clicks), 0);
         }
     }
 
     #[watch(a, b)]
-    fn on_inputs(&self) {
+    fn on_inputs(a: FieldUpdate<u32>, b: FieldUpdate<u32>) {
         assert_eq!(current_scope_id(), WATCH_SCOPE.with(Cell::get));
         assert_eq!(
             this::<Self>().with(|state| (state.a, state.b)),
-            (self.a, self.b)
+            (a.current, b.current)
         );
-        MULTI.with(|runs| runs.borrow_mut().push((self.a, self.b)));
+        MULTI.with(|runs| runs.borrow_mut().push((a.current, b.current)));
     }
 
     fn on_click(&mut self) {
         self.clicks += 1;
+        self.a += 1;
     }
 }
 
@@ -77,7 +79,7 @@ async fn settle() {
 }
 
 #[wasm_bindgen_test]
-async fn shared_watchers_preserve_delivery_context_and_safe_reentry() {
+async fn snapshot_observers_preserve_delivery_context_and_safe_reentry() {
     SINGLE.with(|runs| runs.borrow_mut().clear());
     MULTI.with(|runs| runs.borrow_mut().clear());
     let document = web_sys::window().unwrap().document().unwrap();
@@ -115,20 +117,9 @@ async fn shared_watchers_preserve_delivery_context_and_safe_reentry() {
     flush_sync();
     assert_eq!(handle.with(|state| state.clicks), 1);
     SINGLE.with(|runs| assert_eq!(runs.borrow().last(), Some(&(7, Some(1)))));
-    MULTI.with(|runs| assert_eq!(runs.borrow().last(), Some(&(7, 2))));
     flush_sync();
-
-    // Watch dispatch does not fingerprint state or acquire a mutable borrow.
-    #[cfg(any(debug_assertions, feature = "devtools"))]
-    {
-        let fingerprints = pocopine_core::scope::fingerprint_count();
-        let shared = handle.borrow();
-        pocopine::__private::invoke_watch_handler::<ReadonlyWatch>(sid, |state| {
-            assert_eq!(state.a, shared.a);
-            assert_eq!(current_scope_id(), Some(sid));
-        });
-        assert_eq!(pocopine_core::scope::fingerprint_count(), fingerprints);
-    }
+    SINGLE.with(|runs| assert_eq!(runs.borrow().last(), Some(&(8, Some(7)))));
+    MULTI.with(|runs| assert_eq!(runs.borrow().last(), Some(&(8, 2))));
 
     // A queued callback cannot outlive its component.
     handle.update(|state| state.a = 9);
@@ -136,9 +127,6 @@ async fn shared_watchers_preserve_delivery_context_and_safe_reentry() {
     let multi_before_unmount = MULTI.with(|runs| runs.borrow().len());
     mounted.unmount();
     flush_sync();
-    pocopine::__private::invoke_watch_handler::<ReadonlyWatch>(sid, |_| {
-        panic!("removed scopes must not run watcher callbacks");
-    });
     SINGLE.with(|runs| assert_eq!(runs.borrow().len(), runs_before_unmount));
     MULTI.with(|runs| assert_eq!(runs.borrow().len(), multi_before_unmount));
     set_auto_flush(true);
