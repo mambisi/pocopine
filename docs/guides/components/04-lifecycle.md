@@ -107,7 +107,7 @@ impl Menu {
 
 `#[watch(field)]` methods are wired up here automatically — you don't call
 them; the generated `on_ready` registers each watcher. See
-[Expressions](../poco/04-expressions.md#2-watch-field-needs-self-recomputes-on-prop-change).
+[Expressions](../reactivity/06-readonly-watch-migration.md).
 
 ## `on_unmount`
 

@@ -1,5 +1,11 @@
 # RFC 026 — `post_mount` lifecycle + `#[watch(field)]` sugar
 
+> Watch contract update: handlers now receive named `FieldUpdate<T>` snapshots,
+> take no receiver, and may return `Update<Self>` for declared `writes(...)`.
+> The examples below describe the original design. See the current
+> [migration guide](../docs/guides/reactivity/06-readonly-watch-migration.md).
+
+
 | Field | Value |
 |---|---|
 | **Status** | Implemented — the `post_mount` hook shipped but was renamed `on_ready` by RFC-029; `#[watch(field)]` shipped as specified. |

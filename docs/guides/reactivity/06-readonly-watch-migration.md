@@ -1,72 +1,145 @@
 ---
-title: "Migrating mutable watchers"
-description: "Move derived values and state transitions out of #[watch] handlers."
+title: "Migrating watchers to snapshots and updates"
+description: "Declare watch inputs and writable outputs; return a typed multi-field patch."
 ---
 
-# Migrating mutable watchers
+# Migrating watchers to snapshots and updates
 
-`#[watch]` requires a shared receiver. This is a breaking change for both
-forms:
+A watcher receives `FieldUpdate<T>` snapshots and may return an `Update<Self>`
+patch. It takes no `self` receiver. `#[computed]` remains the right tool for a
+value that is always derived; a watcher can coordinate changes to several
+independently editable fields.
 
 ```rust
-#[watch(value)]
-fn on_value(&self, next: String, previous: Option<String>) {
-    // Observe the change, for example by updating a DOM property.
-}
-
-#[watch(width, height)]
-fn on_size(&self) {
-    // Read self.width and self.height; no value arguments in this form.
+#[handlers]
+impl Editor {
+    #[watch(record, writes(draft, dirty, error))]
+    fn start_edit(record: FieldUpdate<String>) -> Update<Self> {
+        Update::new()
+            .draft(record.current)
+            .dirty(false)
+            .error(None)
+    }
 }
 ```
 
-The macro rejects `&mut self` with a diagnostic directing authors to
-computed values or event/action handlers. Ordinary event and lifecycle
-handlers can still use `&mut self`.
+`draft`, `dirty`, and `error` are ordinary fields on `Editor`. The generated
+builder exposes setters only for those fields. Returning `Update::new()`
+leaves every field unchanged. Omitting `.error(...)` preserves the existing
+error; `.error(None)` explicitly clears an `Option` field.
+
+## Input contract
+
+```rust
+pub struct FieldUpdate<T> {
+    pub current: T,
+    pub previous: Option<T>,
+}
+```
+
+- Every input names a real Rust field on the component or store and uses
+  `FieldUpdate<ThatFieldType>`. Parameter order does not matter; names must
+  match the watch list exactly.
+- Inputs are cloned together under one shared borrow, which ends before
+  author code runs. Snapshot types must implement `Clone`.
+- `previous` is the value at the previous invocation of this watcher. All
+  inputs have `previous: None` on its first invocation. If only one input
+  changes, the other inputs still contain their current and previous values.
+- `changed()` is available when `T: PartialEq`; it is true on the initial
+  invocation and when the current value differs from the previous value.
+- Watchers are synchronous, safe, non-generic functions. They return `()`
+  for observation or `Update<Self>` for a patch.
+- Only declared inputs subscribe. Incidental reactive reads inside the
+  callback do not add dependencies; include every triggering field in the
+  watch list.
+
+For flattened props, watch the Rust container field and compare the relevant
+leaf in its snapshots. Flattened template aliases and computed keys are not
+Rust fields and cannot be named as watcher inputs or patch outputs.
+
+## Multi-field transitions
+
+```rust
+#[watch(first_name, last_name, writes(errors, valid))]
+fn check_errors(
+    first_name: FieldUpdate<String>,
+    last_name: FieldUpdate<String>,
+) -> Update<Self> {
+    let mut errors = Vec::new();
+    if first_name.current.trim().is_empty() {
+        errors.push("First name is required".to_string());
+    }
+    if last_name.current.trim().is_empty() {
+        errors.push("Last name is required".to_string());
+    }
+    let valid = errors.is_empty();
+    Update::new().errors(errors).valid(valid)
+}
+```
+
+The macro expands `Update<Self>` into a policy specific to that watcher.
+Its patch stores optional values for the declared outputs and its generated
+extension trait supplies the fluent setters. The runtime commits the patch
+through one component mutation and model-writeback batch after evaluation.
+Reactive observers see the completed batch, and unchanged model values do
+not emit another update event. An empty patch skips the mutation entirely.
+
+Same-flush input changes coalesce into one invocation. Initial delivery is
+deferred until after `on_ready`, and unmount releases the subscription and
+its previous snapshot. The component scope and callback safe point remain
+active while the watcher evaluates and its patch commits.
+
+## Cycle and mutation checks
+
+The macro rejects a field listed in both the inputs and `writes(...)`.
+It also checks the declared graph across watchers and computed methods in
+the handlers block, including longer cycles. Conditional compilation applies
+to the graph nodes, so inactive watchers do not create false cycles.
+
+```text
+watch(a) writes b
+watch(b) writes a    // compile error: dependency graph contains a cycle
+```
+
+During synchronous watcher evaluation, the standard handle, field-handle,
+and signal write APIs reject direct mutation before it occurs. Return a
+patch instead of calling `this().update(...)`, `store().update(...)`, mutable
+handle borrows, or a signal setter. DOM observations and animations can
+return `()`.
+
+This is an API boundary, not a Rust sandbox. Raw scope internals and
+independently scheduled asynchronous work are outside the patch contract.
+The runtime flush-cycle guard remains necessary for dependency paths across
+components, model bindings, and lower-level effects. Do not move a prohibited
+write into a deferred callback just to bypass the contract.
 
 ## Choose the owner of the behavior
 
 | Existing watcher | Migration |
 | --- | --- |
-| Computes a label, percentage, validity flag, or view model | Remove the stored output field and derive it with `#[computed]`. |
-| Updates DOM properties, starts an animation, or logs a change without writing component state | Change the receiver and any read-only helpers to `&self`. |
-| Normalizes another input, resets selection, closes a popover, or publishes a model change | Move the transition into the action accepting the input, preserving its model/event contract. |
-| Starts a request and changes loading/result state | Separate request lifecycle and result commits from read-only observation; preserve cancellation and stale-response checks. |
+| Keeps a purely derived label, percentage, or completion flag synchronized | Remove the stored output and use `#[computed]`. |
+| Resets an editable draft, clears errors, or closes a popover | Declare `writes(...)` and return a patch. |
+| Updates DOM properties, starts an animation, or logs | Take named snapshots and return `()`. |
+| Normalizes the same input that triggered the watcher | Normalize in the action accepting that input; a watcher cannot write its own inputs. |
+| Changes another scope or manages request/loading/result state | Give the transition an explicit event/action or editing-session lifecycle, preserving cancellation and stale-response checks. |
 
-For example, replace two watchers that assign `self.complete` with:
+The website [date picker](../../../examples/website/src/components/showcase/date_picker/mod.rs)
+returns a patch that closes its popover on selection. The
+[PIN/card form](../../../examples/website/src/components/showcase/pin_card/mod.rs)
+uses a computed completion flag. The animation showcase observes all motion
+inputs together without changing component fields.
 
-```rust
-#[computed]
-fn complete(card_number: &str, pin: &str) -> bool {
-    card_number.chars().count() == 16 && pin.chars().count() == 4
-}
-```
+The file-browser [size control](../../../examples/file-browser/src/components/size_control/mod.rs)
+derives its display and accepts native edits in actions. Its snapshot watcher
+only synchronizes DOM properties. The configuration action normalizes upload
+and chunk limits together; incoming bounds never silently write back to the
+parent. Dialog opening actions start keyed editing sessions initialized on
+mount; retained closed sessions allow exit animations to finish.
 
-Remove `complete` from the component struct and its constructors. The
-template can still use `pp-show="complete"`. Declared computed dependencies
-are checked for cycles at compile time.
+## Migration status
 
-Migrations involving child `pp-model` inputs need a deliberate event/action
-design. Replacing the receiver alone cannot preserve a date control that
-normalizes other inputs and writes its outputs back to a parent. Do not
-replace these watchers with `handle.update(...)` or a free-function watcher
-just to get them compiling: that retains the same implicit mutation chain.
-
-## Dispatch behavior and limits
-
-Generated watchers acquire a shared state borrow and preserve the current
-component scope, callback safe point, deferred initial notification,
-single-field previous values, multi-field coalescing, and unmount cleanup.
-They no longer run a dirty sweep or model writeback around the callback.
-
-This first patch restricts the receiver. It does not introduce a runtime
-write prohibition, restrict existing handle/signal APIs, or propagate
-read-only permissions through asynchronous work. Low-level `watch()` and
-`watch_scope_fields()` retain their existing callback contracts and cycle
-guards. Arbitrary Rust code is not made pure by `&self`.
-
-The consumer migration is a separate patch. Existing mutable watchers in
-Pine, charts, layout, icons, examples, and downstream applications will fail
-compilation until migrated. A full workspace build is therefore not a
-passing gate for the isolated contract patch; it is required after the
-consumer migration before integrating the combined change.
+The layout, website, and file-browser examples use the snapshot contract.
+The Pine, chart, layout, icon libraries and downstream applications require
+separate consumer migration. Their old watchers fail compilation, so example
+builds depending on those libraries remain blocked until they are migrated.
+A full workspace build is required before integrating the combined change.

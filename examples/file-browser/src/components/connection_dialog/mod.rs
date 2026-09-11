@@ -221,23 +221,8 @@ impl FileBrowserConnectionDialog {
 #[handlers]
 impl FileBrowserConnectionDialog {
     pub fn on_mount(&mut self) {
-        if self.connection_provider.is_empty() {
-            self.reset_to_minio_defaults();
-        }
-    }
-
-    #[watch(open)]
-    fn on_open_change(&mut self, open: bool, _prev: Option<bool>) {
-        if open {
-            self.prepare_open();
-        }
-    }
-
-    #[watch(edit_connection_id)]
-    fn on_edit_connection_change(&mut self, _next: String, _prev: Option<String>) {
-        if self.open {
-            self.prepare_open();
-        }
+        // The shell mounts a fresh keyed draft for each open/edit session.
+        self.prepare_open();
     }
 
     pub fn load_connection(&mut self, connection_id: String) {

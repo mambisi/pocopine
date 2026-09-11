@@ -2980,6 +2980,7 @@ dependencies = [
  "bytes",
  "google-cloud-auth",
  "google-cloud-storage",
+ "js-sys",
  "percent-encoding",
  "pine-icons",
  "pine-ui",
@@ -2996,6 +2997,8 @@ dependencies = [
  "tracing",
  "uuid",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 

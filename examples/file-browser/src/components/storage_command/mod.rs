@@ -37,15 +37,22 @@ pub struct FileBrowserStorageCommand {
 
 #[handlers]
 impl FileBrowserStorageCommand {
-    #[watch(open)]
-    fn on_open(&mut self, open: bool, _prev: Option<bool>) {
-        if open {
-            self.load_all_command_entries();
+    pub fn on_open_changed(&mut self, event: web_sys::CustomEvent) {
+        if let Some(open) = event.detail().as_bool() {
+            self.set_open(open);
         }
     }
 
     pub fn open_command(&mut self) {
-        self.open = true;
+        self.set_open(true);
+    }
+
+    fn set_open(&mut self, open: bool) {
+        let opening = open && !self.open;
+        self.open = open;
+        if opening {
+            self.load_all_command_entries();
+        }
     }
 
     pub fn load_all_command_entries(&mut self) {

@@ -421,8 +421,8 @@ need a long one:
 4. **Derived state stored as a field you manually keep in sync.**
    Don't write `progress_label` updates into every handler that
    touches `progress`. Use `#[computed]` for pure derivations and
-   `#[watch(field)]` for side-effecting reactions — this holds for
-   `#[store]` singletons too, not just components. The framework
+   `#[watch(...)]` with snapshots and returned patches for state transitions.
+   This holds for `#[store]` singletons too. The framework
    keeps the derived value up to date for you. Templates bind by
    name (`pp-text="progress_label"` or `$store.name.progress_label`).
    See

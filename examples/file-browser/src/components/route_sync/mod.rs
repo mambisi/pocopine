@@ -21,16 +21,8 @@ pub struct FileBrowserRoute {
 #[handlers]
 impl FileBrowserRoute {
     pub fn on_mount(&mut self) {
-        self.sync();
-    }
-
-    #[watch(connection_id)]
-    fn on_connection_change(&mut self, _next: String, _prev: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(prefix)]
-    fn on_prefix_change(&mut self, _next: String, _prev: Option<String>) {
+        // Captured route parameters are seeded before mount; a parameter
+        // change remounts this route, so each navigation syncs exactly once.
         self.sync();
     }
 

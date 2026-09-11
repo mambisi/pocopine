@@ -106,51 +106,49 @@ the macro orders the graph for you. Cycles are a compile error.
 The free function `computed()` behind this macro — for standalone derived
 values not tied to a component — lives in [Utilities](./02-utilities.md#memoized-derivations-computed).
 
-## Reacting to changes — #[watch(field)]
+## Reacting to changes — #[watch]
 
-Use `#[watch(field)]` for an effect such as updating a DOM property,
-starting an animation, or logging a change. The handler borrows state
-through `&self`; it cannot assign fields or call a method requiring
-`&mut self`. Derive values with `#[computed]` and change state in an
-event/action handler.
+Watchers receive typed snapshots and can return a restricted update affecting
+several state fields. They take no `self` receiver:
 
-The signature is a contract: `&self` plus exactly
-`(new: V, prev: Option<V>)`. The first call after mount passes `None`
-for `prev`. A mutable receiver, missing arguments, no receiver, a bare
-`#[watch]`, or stacked watch attributes produces a compile error.
+```rust
+#[watch(value, writes(error, dirty))]
+fn on_value(value: FieldUpdate<String>) -> Update<Self> {
+    if value.previous.is_none() {
+        return Update::new(); // Initial delivery is not a user edit.
+    }
+    Update::new().error(None).dirty(true)
+}
+```
+
+Declare every input by name and every writable output in `writes(...)`.
+`Update::new()` is an empty patch; omitted fields remain unchanged. The macro
+rejects writing an input and checks the declared graph for cycles. The
+runtime applies all returned fields together after the callback returns.
+
+For observation only, return `()` and omit `writes(...)`:
 
 ```rust
 #[watch(value)]
-fn on_value_change(&self, value: String, _prev: Option<String>) {
-    let Some(scope) = pocopine::current_scope_id() else { return };
-    let Some(el) = pocopine::refs::get_on(scope, "input") else { return };
-    let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else { return };
-    if input.value() != value {
-        input.set_value(&value);
-    }
+fn log_value(value: FieldUpdate<String>) {
+    tracing::info!(?value.current, ?value.previous, "value changed");
 }
 ```
 
-The example uses `wasm_bindgen::JsCast` for `dyn_into`.
-
-### Several fields, one handler — #[watch(a, b, c)]
-
-When an effect observes several fields, list them (RFC-115). Two-plus
-fields require `&self` and **no value arguments**: the coalesced callback
-has no single `(new, prev)`. Read the listed fields from `self`.
+### Several fields, one snapshot
 
 ```rust
 #[watch(width, height)]
-fn on_size_changed(&self) {
-    web_sys::console::log_1(&format!("Size: {} × {}", self.width, self.height).into());
+fn on_size(width: FieldUpdate<f64>, height: FieldUpdate<f64>) {
+    resize_canvas(width.current, height.current);
 }
 ```
 
-Several listed fields changing before a flush coalesce into one callback
-per flush pass. The callback also runs once after mount wiring. Probes
-that prove the inputs unchanged skip subsequent callbacks. Unknown keys
-and computed keys in a multi-field list are reported at mount and ignored;
-list the state inputs instead.
+Inputs are cloned together. Each `previous` describes the previous invocation,
+with `None` on the deferred initial notification. Multiple input changes in
+one flush coalesce. Unchanged inputs still carry their values. See the
+[migration guide](./06-readonly-watch-migration.md) for the full contract,
+mutation guard, and typed patch expansion.
 
 ### Derived values belong in #[computed]
 
@@ -174,15 +172,7 @@ impl PinCardDemo {
 ```
 
 The template still reads `pp-show="complete"`. Declared computed
-cycles are compile errors.
-
-This receiver restriction does not prohibit mutation through separately
-held handles, stores, signals, or asynchronous work. The existing runtime
-cycle guard still caps queued effects at 100 reruns per cascade. Do not
-migrate `self.recompute()` into `handle.update(...)` just to bypass the
-restriction; see [the migration guide](./06-readonly-watch-migration.md).
-The free-function watch family is documented in
-[Utilities](./02-utilities.md#watchers-watch-watch-field-scoped).
+dependencies are checked for cycles at compile time.
 
 ## App-wide state — #[store]
 
@@ -356,7 +346,7 @@ for the timer and scheduling primitives these build on.
 | Two-way bind your own input | `pp-model="field"` | template directive |
 | Accept two-way binding from a parent | `#[model]` field | `pocopine::prelude::*` |
 | Derive a value from other fields | `#[computed]` method | `pocopine::prelude::*` |
-| Run on a field change (with side effect) | `#[watch(field)]` method | `pocopine::prelude::*` |
+| Observe inputs or return a state patch | `#[watch(...)]` method | `pocopine::prelude::*` |
 | Share state app-wide | `#[store]` struct | `pocopine::prelude::*` |
 | Read a store in a template | `$store.<name>.<field>` | template magic |
 | Get a handle to a store | `store::<T>()` | `pocopine::prelude::*` |

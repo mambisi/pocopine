@@ -63,19 +63,24 @@ releases its backing effect on drop.
 
 ### Reacting to changes — `#[watch(field)]`
 
-`#[watch(field)]` methods take `&self` and `(new: V, prev: Option<V>)`,
-and run whenever the named field changes. The first call after mount
-passes `None` for `prev`.
+`#[watch]` methods take named `FieldUpdate<T>` snapshots with no receiver.
+They return `()` for observation or `Update<Self>` for declared writes:
 
 ```rust
 #[handlers]
 impl Editor {
-    #[watch(value)]
-    fn on_value_change(&self, new: String, _prev: Option<String>) {
-        web_sys::console::log_1(&new.into());
+    #[watch(value, writes(error))]
+    fn on_value_change(value: FieldUpdate<String>) -> Update<Self> {
+        if value.previous.is_none() {
+            return Update::new();
+        }
+        Update::new().error(None)
     }
 }
 ```
+
+The macro rejects input/output overlap and dependency cycles. See
+[the migration guide](./06-readonly-watch-migration.md).
 
 The lower-level free functions back this: `watch(source, cb)` over any
 reactive read, and `watch_field("field", cb)` plus the `*_scoped` variants

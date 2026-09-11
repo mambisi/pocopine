@@ -17,27 +17,12 @@ use serde::{Deserialize, Serialize};
 pub struct PinCardDemo {
     pub card_number: String,
     pub pin: String,
-    /// Derived mirror of `card_number.len() == 16 && pin.len() == 4`.
-    /// Kept as a plain bool so the template can `pp-show="complete"`
-    /// without reaching through the whole-string predicate in expr.
-    pub complete: bool,
 }
 
 #[handlers]
 impl PinCardDemo {
-    #[watch(card_number)]
-    fn on_card_change(&mut self, _new: String, _prev: Option<String>) {
-        self.recompute_complete();
-    }
-
-    #[watch(pin)]
-    fn on_pin_change(&mut self, _new: String, _prev: Option<String>) {
-        self.recompute_complete();
-    }
-}
-
-impl PinCardDemo {
-    fn recompute_complete(&mut self) {
-        self.complete = self.card_number.chars().count() == 16 && self.pin.chars().count() == 4;
+    #[computed]
+    fn complete(card_number: &str, pin: &str) -> bool {
+        card_number.chars().count() == 16 && pin.chars().count() == 4
     }
 }

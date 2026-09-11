@@ -1,8 +1,8 @@
 # RFC-115: Multi-field watch — `#[watch(a, b, c)]`
 
-> Receiver contract update: generated single- and multi-field watchers now
-> require `&self` and use shared-borrow dispatch without a dirty sweep.
-> The mutable examples below describe the original RFC. See the current
+> Watch contract update: handlers now receive named `FieldUpdate<T>` snapshots,
+> take no receiver, and may return `Update<Self>` for declared `writes(...)`.
+> The examples below describe the original design. See the current
 > [migration guide](../docs/guides/reactivity/06-readonly-watch-migration.md).
 
 **Status:** Implemented

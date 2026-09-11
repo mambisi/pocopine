@@ -39,3 +39,23 @@ center the rendered `.pine-dialog-portal` root with flex or grid, then
 style `.pine-dialog-content` as the card. Do not center the animated
 panel with `transform: translate(-50%, -50%)`, because the animation
 atom replaces that transform while the dialog opens and closes.
+
+## State changes and derived values
+
+Input actions accept child `pp:update:*` events when a change must also
+update another field or start a request. The view filter writes directly
+to the store, the command palette loads when its opening action runs, and
+the configuration form clamps both size settings in one action.
+
+The size control derives its amount, bounds, labels, and range style with
+`#[computed]`. Its only watcher takes typed snapshots and synchronizes native input
+DOM properties. Incoming bounds do not publish a model change; the parent
+owns normalization of its stored value.
+
+Opening a dialog starts a keyed editing session. `on_mount` initializes
+its draft; reopening or selecting another connection replaces the session.
+Closed sessions remain mounted long enough for Pine's exit animation.
+The permanent shell owns the new-folder keyboard shortcut.
+
+See [Migrating mutable watchers](../../docs/guides/reactivity/06-readonly-watch-migration.md)
+for the complete patterns and the remaining library migration status.

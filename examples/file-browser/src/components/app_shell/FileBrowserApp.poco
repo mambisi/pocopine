@@ -28,9 +28,16 @@
     <file-browser-file-detail></file-browser-file-detail>
   </div>
 
-  <file-browser-connection-dialog pp-model:open="$store.storage.modal_open"
-                                  pp-bind:edit-connection-id="$store.storage.modal_connection_id"></file-browser-connection-dialog>
-  <file-browser-config-dialog pp-model:open="$store.storage.config_modal_open"></file-browser-config-dialog>
+  <!-- Opening actions replace session keys; closed dialogs remain for their exit transition. -->
+  <template pp-for="session in $store.storage.connection_dialog_sessions" pp-key="session">
+    <file-browser-connection-dialog pp-model:open="$store.storage.modal_open"
+                                    :edit-connection-id="$store.storage.modal_connection_id"></file-browser-connection-dialog>
+  </template>
+  <template pp-for="session in $store.storage.config_dialog_sessions" pp-key="session">
+    <file-browser-config-dialog pp-model:open="$store.storage.config_modal_open"></file-browser-config-dialog>
+  </template>
   <file-browser-upload-dock></file-browser-upload-dock>
-  <file-browser-new-folder-dialog pp-model:open="$store.storage.new_folder_open"></file-browser-new-folder-dialog>
+  <template pp-for="session in $store.storage.new_folder_sessions" pp-key="session">
+    <file-browser-new-folder-dialog pp-model:open="$store.storage.new_folder_open"></file-browser-new-folder-dialog>
+  </template>
 </root>

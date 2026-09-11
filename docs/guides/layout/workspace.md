@@ -245,11 +245,10 @@ Landmark roles per region; resize handles are `role="separator"` with
 
 ## Gotchas
 
-- **Own-field reactions need `#[watch(field)]`, not
-  `watch_scope_field_scoped`** — the latter is for *cross-scope* watching
-  (a region reading the root's `breakpoint`); it does **not** fire for a
-  component's own fields. (Bit us: a `pp-model` field updated its bindings
-  but a same-scope watch never ran.)
+- **Derived visibility belongs in `#[computed]`.** Watchers receive snapshots
+  and return a patch for declared output fields. Use input actions to normalize
+  the same field being edited. Low-level watchers are not a workaround for
+  the returned-patch contract.
 - **Resize handles are clipped by `overflow: hidden`** — keep the handle
   *inside* the panel edge (`right: 0`), or the grab strip vanishes.
 - **The custom property must sit on the panel**, not the grid container —

@@ -88,24 +88,23 @@ synthetic fields. The framework recomputes them when their inputs
 change. Use this for any pure derivation: labels, formatted numbers,
 truncated strings, percent strings, derived class names.
 
-### 2. `#[watch(field)]` — observe changes with a shared receiver
+### 2. `#[watch(field)]` — observe snapshots or return state updates
 
 ```rust
 #[handlers]
 impl PineUploadItem {
     #[watch(extension)]
-    fn on_extension_change(&self, new: String, _prev: Option<String>) {
+    fn on_extension_change(extension: FieldUpdate<String>) {
+        let (new, _prev) = (extension.current, extension.previous);
         web_sys::console::log_1(&format!("Upload extension: {new}").into());
     }
 }
 ```
 
-Watchers require `&self` and receive typed `(new: V, prev: Option<V>)`
-arguments. The first call after mount passes `None` for `prev`.
-Use them for side effects such as logging or synchronizing a DOM property.
-For a derived thumbnail label, use `#[computed]` with `extension` as an
-input. Reading several fields does not require a mutable watcher: computed
-methods can declare several inputs.
+Watchers take named `FieldUpdate<T>` inputs and no receiver. The first
+invocation has `previous: None`. Return `()` for DOM effects or logging;
+return `Update<Self>` with declared `writes(...)` to change component fields.
+Use `#[computed]` for a thumbnail label derived from `extension`.
 
 ### 3. Plain handler — derives on user action
 

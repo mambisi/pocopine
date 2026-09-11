@@ -1,7 +1,7 @@
 <root class="block">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <pine-toggle-group-root type="single"
-                            pp-model:value="view"
+                            :value="$store.storage.entry_view" @pp:update:value.self="select_view"
                             class="flex flex-wrap items-center gap-1.5"
                             aria-label="Filter entries">
       <pine-toggle-group-item value="all"
