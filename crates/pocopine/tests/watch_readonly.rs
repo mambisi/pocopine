@@ -40,7 +40,7 @@ impl ReadonlyWatch {
     }
 
     #[watch(a)]
-    fn on_a(a: FieldUpdate<u32>) {
+    fn on_a(a: Change<u32>) {
         let (next, prev) = (a.current, a.previous);
         assert_eq!(current_scope_id(), WATCH_SCOPE.with(Cell::get));
         assert_eq!(this::<Self>().with(|state| state.a), next);
@@ -56,13 +56,10 @@ impl ReadonlyWatch {
     }
 
     #[watch(a, b)]
-    fn on_inputs(a: FieldUpdate<u32>, b: FieldUpdate<u32>) {
+    fn on_inputs(a: &u32, b: u32) {
         assert_eq!(current_scope_id(), WATCH_SCOPE.with(Cell::get));
-        assert_eq!(
-            this::<Self>().with(|state| (state.a, state.b)),
-            (a.current, b.current)
-        );
-        MULTI.with(|runs| runs.borrow_mut().push((a.current, b.current)));
+        assert_eq!(this::<Self>().with(|state| (state.a, state.b)), (*a, b));
+        MULTI.with(|runs| runs.borrow_mut().push((*a, b)));
     }
 
     fn on_click(&mut self) {

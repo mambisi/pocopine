@@ -14,7 +14,7 @@ help: try using a conversion method
 warning: unused variable: `value`
  --> tests/ui/watch_input_type.rs:8:8
   |
-8 | fn bad(value: FieldUpdate<String>) {}
+8 | fn bad(value: Change<String>) {}
   |        ^^^^^ help: if this is intentional, prefix it with an underscore: `_value`
   |
   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default

@@ -9,9 +9,98 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 wasm_bindgen_test_configure!(run_in_browser);
 
+#[derive(Default, Serialize, Deserialize)]
+struct Counted {
+    kind: u8,
+    value: u32,
+}
+
+impl Clone for Counted {
+    fn clone(&self) -> Self {
+        if self.kind == 1 {
+            OWNED_CLONES.with(|n| n.set(n.get() + 1));
+        }
+        Self {
+            kind: self.kind,
+            value: self.value,
+        }
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct NotClone {
+    value: u32,
+}
+
+thread_local! {
+    static OWNED_CLONES: Cell<usize> = const { Cell::new(0) };
+    static MIXED_OWNER: Cell<Option<ScopeId>> = const { Cell::new(None) };
+    static MIXED_INPUTS: RefCell<Vec<(u32, u32, u32, Option<u32>)>> = const { RefCell::new(Vec::new()) };
+    static ALL_OWNER: Cell<Option<ScopeId>> = const { Cell::new(None) };
+    static ALL_INPUTS: RefCell<Vec<(Change<u32>, Change<String>)>> = const { RefCell::new(Vec::new()) };
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "watch-mixed-fixture", template = poco! { <div></div> })]
+struct MixedFixture {
+    owned: Counted,
+    borrowed: NotClone,
+    history: Counted,
+    output: u32,
+}
+
+#[handlers]
+impl MixedFixture {
+    fn on_mount(&mut self) {
+        self.owned = Counted { kind: 1, value: 2 };
+        self.borrowed.value = 3;
+        self.history.value = 4;
+    }
+    fn on_ready(&self) {
+        MIXED_OWNER.with(|s| s.set(current_scope_id()));
+    }
+
+    #[watch(owned, borrowed, history, writes(output))]
+    fn sum(owned: Counted, borrowed: &NotClone, history: Change<Counted>) -> Update<Self> {
+        MIXED_INPUTS.with(|runs| {
+            runs.borrow_mut().push((
+                owned.value,
+                borrowed.value,
+                history.current.value,
+                history.previous.map(|v| v.value),
+            ))
+        });
+        Update::new().output(owned.value + borrowed.value + history.current.value)
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "watch-all-fixture", template = poco! { <div pp-text="doubled"></div> })]
+struct AllFixture {
+    count: u32,
+    label: String,
+    #[serde(skip)]
+    cache: NotClone,
+}
+
+#[handlers]
+impl AllFixture {
+    fn on_ready(&self) {
+        ALL_OWNER.with(|s| s.set(current_scope_id()));
+    }
+    #[computed]
+    fn doubled(count: u32) -> u32 {
+        count * 2
+    }
+    #[watch]
+    fn observe(changes: Changes<Self>) {
+        ALL_INPUTS.with(|runs| runs.borrow_mut().push((changes.count, changes.label)));
+    }
+}
+
 thread_local! {
     static OWNER: Cell<Option<ScopeId>> = const { Cell::new(None) };
-    static INPUTS: RefCell<Vec<(FieldUpdate<u32>, FieldUpdate<u32>)>> = const { RefCell::new(Vec::new()) };
+    static INPUTS: RefCell<Vec<(Change<u32>, Change<u32>)>> = const { RefCell::new(Vec::new()) };
     static OBSERVED: RefCell<Vec<(u32, String)>> = const { RefCell::new(Vec::new()) };
     static MODELS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
 }
@@ -38,7 +127,7 @@ impl Fixture {
     }
 
     #[watch(a, b, writes(total, label, issue))]
-    fn sum(b: FieldUpdate<u32>, a: FieldUpdate<u32>) -> Update<Self> {
+    fn sum(b: Change<u32>, a: Change<u32>) -> Update<Self> {
         assert!(pocopine_core::reactive::current_effect().is_none());
         INPUTS.with(|v| v.borrow_mut().push((a.clone(), b.clone())));
         if a.current == 99 {
@@ -54,13 +143,13 @@ impl Fixture {
     }
 
     #[watch(total, label)]
-    fn observe(total: FieldUpdate<u32>, label: FieldUpdate<String>) {
+    fn observe(total: Change<u32>, label: Change<String>) {
         assert!(pocopine_core::reactive::current_effect().is_none());
         OBSERVED.with(|v| v.borrow_mut().push((total.current, label.current)));
     }
 
     #[watch(total, writes(summary))]
-    fn summarize(total: FieldUpdate<u32>) -> Update<Self> {
+    fn summarize(total: Change<u32>) -> Update<Self> {
         Update::new().summary(format!("Sum = {}", total.current))
     }
 }
@@ -70,6 +159,121 @@ async fn settle() {
         let _ =
             wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&JsValue::NULL)).await;
     }
+}
+
+#[wasm_bindgen_test]
+async fn mixed_inputs_borrow_without_clone_and_retain_only_requested_history() {
+    OWNED_CLONES.with(|n| n.set(0));
+    MIXED_INPUTS.with(|runs| runs.borrow_mut().clear());
+    let doc = web_sys::window().unwrap().document().unwrap();
+    let host = doc.create_element("div").unwrap();
+    doc.body().unwrap().append_child(&host).unwrap();
+    let mounted = App::mount_subtree::<MixedFixture>(&host);
+    settle().await;
+    let sid = MIXED_OWNER.with(Cell::get).unwrap();
+    let handle = Handle::new(
+        Scope::find(sid).unwrap().typed::<MixedFixture>().unwrap(),
+        sid,
+    );
+    assert_eq!(
+        handle.with(|s| s.output),
+        9,
+        "patch commits after borrowed inputs are released"
+    );
+    MIXED_INPUTS.with(|runs| assert_eq!(*runs.borrow(), vec![(2, 3, 4, None)]));
+    assert_eq!(
+        OWNED_CLONES.with(Cell::get),
+        1,
+        "owned current-only inputs are not cloned into history"
+    );
+
+    handle.update(|s| s.borrowed.value = 7);
+    flush_sync();
+    settle().await;
+    assert_eq!(handle.with(|s| s.output), 13);
+    MIXED_INPUTS.with(|runs| assert_eq!(runs.borrow().last(), Some(&(2, 7, 4, Some(4)))));
+    assert_eq!(
+        OWNED_CLONES.with(Cell::get),
+        2,
+        "no previous snapshot is cloned for current-only inputs"
+    );
+
+    handle.update(|s| s.history.value = 8);
+    flush_sync();
+    settle().await;
+    MIXED_INPUTS.with(|runs| assert_eq!(runs.borrow().last(), Some(&(2, 7, 8, Some(4)))));
+    assert_eq!(OWNED_CLONES.with(Cell::get), 3);
+    mounted.unmount();
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn bare_observer_coalesces_fields_and_releases_queued_work() {
+    ALL_INPUTS.with(|runs| runs.borrow_mut().clear());
+    let doc = web_sys::window().unwrap().document().unwrap();
+    let host = doc.create_element("div").unwrap();
+    doc.body().unwrap().append_child(&host).unwrap();
+    let mounted = App::mount_subtree::<AllFixture>(&host);
+    settle().await;
+    let sid = ALL_OWNER.with(Cell::get).unwrap();
+    let handle = Handle::new(
+        Scope::find(sid).unwrap().typed::<AllFixture>().unwrap(),
+        sid,
+    );
+    ALL_INPUTS.with(|runs| {
+        assert_eq!(
+            *runs.borrow(),
+            vec![(
+                Change {
+                    current: 0,
+                    previous: None
+                },
+                Change {
+                    current: String::new(),
+                    previous: None
+                },
+            )]
+        )
+    });
+
+    set_auto_flush(false);
+    handle.update(|s| s.count = 1);
+    handle.update(|s| {
+        s.count = 2;
+        s.label = "two".into();
+    });
+    flush_sync();
+    ALL_INPUTS.with(|runs| {
+        assert_eq!(runs.borrow().len(), 2);
+        assert_eq!(
+            runs.borrow().last(),
+            Some(&(
+                Change {
+                    current: 2,
+                    previous: Some(0)
+                },
+                Change {
+                    current: "two".into(),
+                    previous: Some(String::new())
+                },
+            ))
+        );
+    });
+    handle.update(|s| s.cache.value = 1);
+    flush_sync();
+    ALL_INPUTS.with(|runs| {
+        assert_eq!(
+            runs.borrow().len(),
+            2,
+            "skipped fields do not trigger bare observers"
+        )
+    });
+    handle.update(|s| s.count = 3);
+    mounted.unmount();
+    flush_sync();
+    ALL_INPUTS.with(|runs| assert_eq!(runs.borrow().len(), 2));
+    set_auto_flush(true);
+    host.remove();
 }
 
 #[wasm_bindgen_test]
@@ -95,11 +299,11 @@ async fn snapshots_and_patches_preserve_coalescing_and_commit_together() {
         assert_eq!(
             *v.borrow(),
             vec![(
-                FieldUpdate {
+                Change {
                     current: 0,
                     previous: None
                 },
-                FieldUpdate {
+                Change {
                     current: 0,
                     previous: None
                 }
@@ -139,11 +343,11 @@ async fn snapshots_and_patches_preserve_coalescing_and_commit_together() {
         assert_eq!(
             v.borrow().last(),
             Some(&(
-                FieldUpdate {
+                Change {
                     current: 4,
                     previous: Some(2)
                 },
-                FieldUpdate {
+                Change {
                     current: 3,
                     previous: Some(3)
                 }

@@ -1,5 +1,5 @@
-error: #[watch] requires one named FieldUpdate<T> parameter for each watched field
+error: #[watch] requires one named T, &T, or Change<T> parameter for each watched field
  --> tests/ui/watch_missing_input.rs:6:1
   |
-6 | fn bad(a: FieldUpdate<u32>) {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+6 | fn bad(a: Change<u32>) {}
+  | ^^^^^^^^^^^^^^^^^^^^^^

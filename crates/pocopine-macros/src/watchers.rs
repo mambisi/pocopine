@@ -15,10 +15,51 @@ fn name(id: &Ident) -> String {
 fn fields_module(id: &Ident) -> Ident {
     format_ident!("__pocopine_watch_fields_{}", name(id))
 }
+fn all_fields_macro(id: &Ident) -> Ident {
+    format_ident!("__pocopine_watch_all_{}", name(id))
+}
+
+fn single_type_arg<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
+    let Type::Path(path) = ty else { return None };
+    let segment = path.path.segments.last()?;
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    if segment.ident != wrapper || args.args.len() != 1 {
+        return None;
+    }
+    match args.args.first()? {
+        GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    }
+}
+
+enum InputMode {
+    Owned,
+    Borrowed,
+    Change,
+}
+
+struct Param {
+    field: Ident,
+    ty: Type,
+    mode: InputMode,
+}
 
 pub struct Args {
     pub reads: Vec<Ident>,
     pub writes: Vec<Ident>,
+    pub all: bool,
+}
+
+impl Args {
+    pub fn all() -> Self {
+        Self {
+            reads: Vec::new(),
+            writes: Vec::new(),
+            all: true,
+        }
+    }
 }
 
 impl Parse for Args {
@@ -77,16 +118,21 @@ impl Parse for Args {
                 ));
             }
         }
-        Ok(Self { reads, writes })
+        Ok(Self {
+            reads,
+            writes,
+            all: false,
+        })
     }
 }
 
 pub struct Watch {
     pub method: Ident,
     pub args: Args,
-    params: Vec<(Ident, Type)>,
+    params: Vec<Param>,
     module: Ident,
     fields_module: Ident,
+    all_fields_macro: Ident,
     pub cfg: Vec<Attribute>,
     patch: bool,
 }
@@ -96,7 +142,7 @@ impl Watch {
         if method.sig.receiver().is_some() {
             return Err(syn::Error::new_spanned(
                 &method.sig,
-                "#[watch] handlers take no self receiver; declare each input as field: FieldUpdate<T> and return Update<Self> for state changes",
+                "#[watch] handlers take no self receiver; use named T, &T, or Change<T> inputs, or Changes<Self> for a bare #[watch]",
             ));
         }
         if method.sig.asyncness.is_some()
@@ -143,51 +189,74 @@ impl Watch {
             if pat.by_ref.is_some() || pat.subpat.is_some() || !arg.attrs.is_empty() {
                 return Err(syn::Error::new_spanned(
                     arg,
-                    "watch inputs must be named FieldUpdate<T> parameters without extractors",
+                    "watch inputs must be named parameters without extractors",
                 ));
             }
-            let Type::Path(path) = arg.ty.as_ref() else {
-                return Err(syn::Error::new_spanned(
-                    &arg.ty,
-                    "watch inputs must have type FieldUpdate<T>",
-                ));
-            };
-            let segment = path.path.segments.last().unwrap();
-            let PathArguments::AngleBracketed(generics) = &segment.arguments else {
-                return Err(syn::Error::new_spanned(
-                    &arg.ty,
-                    "watch inputs must have type FieldUpdate<T>",
-                ));
-            };
-            if segment.ident != "FieldUpdate" || generics.args.len() != 1 {
-                return Err(syn::Error::new_spanned(
-                    &arg.ty,
-                    "watch inputs must have type FieldUpdate<T>",
-                ));
+            if args.all {
+                if !matches!(single_type_arg(&arg.ty, "Changes"), Some(Type::Path(p)) if p.path.is_ident("Self"))
+                {
+                    return Err(syn::Error::new_spanned(
+                        arg,
+                        "bare #[watch] requires one Changes<Self> parameter",
+                    ));
+                }
+                continue;
             }
-            let Some(GenericArgument::Type(value_type)) = generics.args.first() else {
-                return Err(syn::Error::new_spanned(
-                    &arg.ty,
-                    "watch inputs must have type FieldUpdate<T>",
-                ));
-            };
             if !args.reads.iter().any(|f| name(f) == name(&pat.ident)) {
                 return Err(syn::Error::new_spanned(
                     &pat.ident,
                     "watch parameter must name a declared input field",
                 ));
             }
-            params.push((pat.ident.clone(), value_type.clone()));
+            let (mode, ty) = if let Some(ty) = single_type_arg(&arg.ty, "Change") {
+                (InputMode::Change, ty.clone())
+            } else if let Type::Reference(reference) = arg.ty.as_ref() {
+                if reference.mutability.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        arg,
+                        "watch inputs cannot be mutable references; return Update<Self> for state changes",
+                    ));
+                }
+                (InputMode::Borrowed, (*arg.ty).clone())
+            } else {
+                (InputMode::Owned, (*arg.ty).clone())
+            };
+            params.push(Param {
+                field: pat.ident.clone(),
+                ty,
+                mode,
+            });
         }
-        if params.len() != args.reads.len()
+        if args.all {
+            if method.sig.inputs.len() != 1 {
+                return Err(syn::Error::new_spanned(
+                    &method.sig,
+                    "bare #[watch] requires one Changes<Self> parameter",
+                ));
+            }
+            let FnArg::Typed(arg) = method.sig.inputs.first_mut().unwrap() else {
+                unreachable!()
+            };
+            // Preserve the user's path so an explicit `use pocopine::Changes`
+            // stays used after expanding the shorthand.
+            let Type::Path(path) = arg.ty.as_mut() else {
+                unreachable!()
+            };
+            let PathArguments::AngleBracketed(generics) =
+                &mut path.path.segments.last_mut().unwrap().arguments
+            else {
+                unreachable!()
+            };
+            generics.args.push(syn::parse_quote!(#module::Policy));
+        } else if params.len() != args.reads.len()
             || args
                 .reads
                 .iter()
-                .any(|r| params.iter().filter(|(p, _)| name(p) == name(r)).count() != 1)
+                .any(|r| params.iter().filter(|p| name(&p.field) == name(r)).count() != 1)
         {
             return Err(syn::Error::new_spanned(
                 &method.sig,
-                "#[watch] requires one named FieldUpdate<T> parameter for each watched field",
+                "#[watch] requires one named T, &T, or Change<T> parameter for each watched field",
             ));
         }
         let patch = match &method.sig.output {
@@ -212,6 +281,12 @@ impl Watch {
                 true
             }
         };
+        if args.all && patch {
+            return Err(syn::Error::new_spanned(
+                &method.sig.output,
+                "bare #[watch] observes every watchable field and must return (); patches are not allowed",
+            ));
+        }
         if !patch && !args.writes.is_empty() {
             return Err(syn::Error::new_spanned(
                 &method.sig,
@@ -231,6 +306,7 @@ impl Watch {
             params,
             module,
             fields_module: fields_module(owner_id),
+            all_fields_macro: all_fields_macro(owner_id),
             cfg: method
                 .attrs
                 .iter()
@@ -242,6 +318,15 @@ impl Watch {
     }
 
     pub fn definitions(&self, owner: &Type) -> TokenStream {
+        if self.args.all {
+            let Self {
+                module,
+                all_fields_macro,
+                cfg,
+                ..
+            } = self;
+            return quote! { #(#cfg)* self::#all_fields_macro!(#module); };
+        }
         if !self.patch {
             return quote! {};
         }
@@ -291,24 +376,60 @@ impl Watch {
         } = self;
         let names: Vec<_> = self.args.reads.iter().map(name).collect();
         let label = format!("{}::{}", quote!(#owner), method);
-        let (fields, types): (Vec<_>, Vec<_>) = self.params.iter().map(|(f, t)| (f, t)).unzip();
-        let indices: Vec<_> = (0..fields.len()).map(syn::Index::from).collect();
+        if self.args.all {
+            let module = &self.module;
+            return quote! {
+                #(#cfg)*
+                {
+                    let scope = ::pocopine::current_scope_id().expect("watch installed outside a lifecycle context");
+                    ::pocopine::__private::install_snapshot_watch::<#owner, <#module::Policy as ::pocopine::__private::WatchAllSpec<#owner>>::History, _>(
+                        scope, <#module::Policy as ::pocopine::__private::WatchAllSpec<#owner>>::FIELDS, #label,
+                        |state, previous| {
+                            let (changes, history) = <#module::Policy as ::pocopine::__private::WatchAllSpec<#owner>>::read(state, previous);
+                            <#owner>::#method(changes);
+                            ((), history)
+                        },
+                    );
+                }
+            };
+        }
+        let mut history_fields = Vec::new();
+        let mut history_types = Vec::new();
+        let mut inputs = Vec::new();
+        let mut values = Vec::new();
+        let mut checks = Vec::new();
+        for (i, Param { field, ty, mode }) in self.params.iter().enumerate() {
+            let local = format_ident!("__watch_input_{i}");
+            checks.push(quote! { let _: &<#fields_module::#field as ::pocopine::__private::WatchField<#owner>>::Value = &state.#field; });
+            inputs.push(match mode {
+                InputMode::Owned => quote! { let #local: #ty = state.#field.clone(); },
+                InputMode::Borrowed => quote! { let #local: #ty = &state.#field; },
+                InputMode::Change => {
+                    let index = syn::Index::from(history_fields.len());
+                    history_fields.push(field);
+                    history_types.push(ty);
+                    quote! {
+                        let #local = ::pocopine::Change::<#ty> {
+                            current: state.#field.clone(),
+                            previous: _previous.map(|p| p.#index.clone()),
+                        };
+                    }
+                }
+            });
+            values.push(local);
+        }
         quote! {
             #(#cfg)*
             {
                 let scope = ::pocopine::current_scope_id().expect("watch installed outside a lifecycle context");
-                ::pocopine::__private::install_snapshot_watch::<#owner, (#(#types,)*), _>(
+                ::pocopine::__private::install_snapshot_watch::<#owner, (#(#history_types,)*), _>(
                     scope, &[#(#names),*], #label,
-                    |state| {
-                        #(let _: &<#fields_module::#fields as ::pocopine::__private::WatchField<#owner>>::Value = &state.#fields;)*
-                        (#(state.#fields.clone(),)*)
+                    |state, _previous| {
+                        #(#checks)*
+                        #(#inputs)*
+                        let result = <#owner>::#method(#(#values),*);
+                        (result, (#(state.#history_fields.clone(),)*))
                     },
-                    |next, previous| <#owner>::#method(#(
-                        ::pocopine::FieldUpdate {
-                            current: next.#indices,
-                            previous: previous.as_ref().map(|p| p.#indices.clone()),
-                        }
-                    ),*),
                 );
             }
         }
@@ -316,6 +437,11 @@ impl Watch {
 
     pub fn graph_node(&self) -> TokenStream {
         let cfg = &self.cfg;
+        if self.args.all {
+            // All-fields observers have no outputs, so they cannot create
+            // cycles. Their runtime subscription still includes every field.
+            return quote! { #(#cfg)* ::pocopine::__private::WatchNode { reads: &[], writes: &[] } };
+        }
         let reads: Vec<_> = self.args.reads.iter().map(name).collect();
         let writes: Vec<_> = self.args.writes.iter().map(name).collect();
         quote! { #(#cfg)* ::pocopine::__private::WatchNode { reads: &[#(#reads),*], writes: &[#(#writes),*] } }
@@ -329,6 +455,18 @@ pub fn field_metadata(
     skipped: &[bool],
 ) -> TokenStream {
     let module = fields_module(owner);
+    let all_macro = all_fields_macro(owner);
+    let active: Vec<_> = fields
+        .iter()
+        .zip(skipped)
+        .filter(|(_, skip)| !**skip)
+        .map(|(field, _)| field)
+        .collect();
+    let names: Vec<_> = active.iter().map(|field| name(field)).collect();
+    let active_types: Vec<_> = active
+        .iter()
+        .map(|field| quote!(<#module::#field as ::pocopine::__private::WatchField<#owner>>::Value))
+        .collect();
     let items = fields
         .iter()
         .zip(types)
@@ -347,5 +485,38 @@ pub fn field_metadata(
         #[doc(hidden)]
         #[allow(non_snake_case, non_camel_case_types, unused_imports, dead_code)]
         mod #module { use super::*; #(#items)* }
+
+        // Generate history only when an active bare observer requests it.
+        // Components with borrowed-only watches need no Clone implementations.
+        #[allow(unused_macros)]
+        macro_rules! #all_macro {
+            ($watch_module:ident) => {
+                #[doc(hidden)]
+                #[allow(non_snake_case, unused_imports, unused_variables, dead_code)]
+                mod $watch_module {
+                    use super::*;
+                    pub struct Policy;
+                    pub struct Inputs { #(pub(super) #active: ::pocopine::Change<#active_types>,)* }
+                    pub struct History { #(#active: #active_types,)* }
+                    impl ::pocopine::__private::WatchAllSpec<#owner> for Policy {
+                        type Changes = Inputs;
+                        type History = History;
+                        const FIELDS: &'static [&'static str] = &[#(#names),*];
+                        fn read(state: &#owner, previous: Option<&History>) -> (Inputs, History) {
+                            (
+                                Inputs { #(#active: ::pocopine::Change {
+                                    current: state.#active.clone(),
+                                    previous: previous.map(|p| p.#active.clone()),
+                                },)* },
+                                History { #(#active: state.#active.clone(),)* },
+                            )
+                        }
+                    }
+                }
+            };
+        }
+        #[doc(hidden)]
+        #[allow(unused_imports)]
+        pub(crate) use #all_macro;
     }
 }

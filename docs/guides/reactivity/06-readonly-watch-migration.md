@@ -5,8 +5,8 @@ description: "Declare watch inputs and writable outputs; return a typed multi-fi
 
 # Migrating watchers to snapshots and updates
 
-A watcher receives `FieldUpdate<T>` snapshots and may return an `Update<Self>`
-patch. It takes no `self` receiver. `#[computed]` remains the right tool for a
+A watcher receives named values, borrows, or `Change<T>` snapshots and may
+return an `Update<Self>` patch. It takes no `self` receiver. `#[computed]` remains the right tool for a
 value that is always derived; a watcher can coordinate changes to several
 independently editable fields.
 
@@ -14,7 +14,7 @@ independently editable fields.
 #[handlers]
 impl Editor {
     #[watch(record, writes(draft, dirty, error))]
-    fn start_edit(record: FieldUpdate<String>) -> Update<Self> {
+    fn start_edit(record: Change<String>) -> Update<Self> {
         Update::new()
             .draft(record.current)
             .dirty(false)
@@ -30,20 +30,31 @@ error; `.error(None)` explicitly clears an `Option` field.
 
 ## Input contract
 
+Each named parameter chooses its input form:
+
+| Parameter | Current value | Previous value | Requirements |
+| --- | --- | --- | --- |
+| `T` | Owned clone | Not retained | Field type implements `Clone`. |
+| `&T` | Shared borrow for this call | Not retained | No `Clone` requirement; shared coercions such as `String` to `&str` work. |
+| `Change<T>` | Owned snapshot | Retained snapshot | Field type implements `Clone`. |
+
+These forms can be mixed in one watcher. `&mut T` is rejected. All inputs
+are read under one shared component borrow, which remains active during the
+synchronous callback and ends before its returned patch commits. Borrowed
+inputs cannot escape into asynchronous work. Only `Change<T>` inputs retain
+history between invocations.
+
 ```rust
-pub struct FieldUpdate<T> {
+pub struct Change<T> {
     pub current: T,
     pub previous: Option<T>,
 }
 ```
 
-- Every input names a real Rust field on the component or store and uses
-  `FieldUpdate<ThatFieldType>`. Parameter order does not matter; names must
-  match the watch list exactly.
-- Inputs are cloned together under one shared borrow, which ends before
-  author code runs. Snapshot types must implement `Clone`.
+- Every input names a real Rust field on the component or store. Parameter
+  order does not matter; names must match the watch list exactly.
 - `previous` is the value at the previous invocation of this watcher. All
-  inputs have `previous: None` on its first invocation. If only one input
+  `Change<T>` inputs have `previous: None` on its first invocation. If only one input
   changes, the other inputs still contain their current and previous values.
 - `changed()` is available when `T: PartialEq`; it is true on the initial
   invocation and when the current value differs from the previous value.
@@ -57,13 +68,37 @@ For flattened props, watch the Rust container field and compare the relevant
 leaf in its snapshots. Flattened template aliases and computed keys are not
 Rust fields and cannot be named as watcher inputs or patch outputs.
 
+## Observe every field
+
+Bare `#[watch]` observes all watchable Rust fields on the component or store:
+
+```rust
+#[watch]
+fn on_state(changes: Changes<Self>) {
+    tracing::info!(?changes.record.current, ?changes.record.previous, "record observed");
+}
+```
+
+The macro expands `Changes<Self>` into a generated bundle with a
+`Change<FieldType>` member for each field, accessible in the owner's module.
+Members can be moved out, and the
+component itself does not need `Clone`. Each included field does need `Clone`
+because this form retains its history. Computed keys, flattened aliases, and
+`#[serde(skip)]` fields are excluded.
+
+Bare observers must return `()`; even an empty `Update<Self>` is rejected.
+There is no `writes(...)` form because every watchable field is an input.
+Initial delivery, coalescing, mutation guards, and unmount cleanup are the
+same as for named watches. Use an explicit field list with `T` or `&T` when
+history is unnecessary.
+
 ## Multi-field transitions
 
 ```rust
 #[watch(first_name, last_name, writes(errors, valid))]
 fn check_errors(
-    first_name: FieldUpdate<String>,
-    last_name: FieldUpdate<String>,
+    first_name: Change<String>,
+    last_name: Change<String>,
 ) -> Update<Self> {
     let mut errors = Vec::new();
     if first_name.current.trim().is_empty() {
@@ -130,8 +165,9 @@ uses a computed completion flag. The animation showcase observes all motion
 inputs together without changing component fields.
 
 The file-browser [size control](../../../examples/file-browser/src/components/size_control/mod.rs)
-derives its display and accepts native edits in actions. Its snapshot watcher
-only synchronizes DOM properties. The configuration action normalizes upload
+derives its display and accepts native edits in actions. Its watcher uses
+current numeric values and a borrowed unit string to synchronize DOM
+properties without retaining history. The configuration action normalizes upload
 and chunk limits together; incoming bounds never silently write back to the
 parent. Dialog opening actions start keyed editing sessions initialized on
 mount; retained closed sessions allow exit animations to finish.

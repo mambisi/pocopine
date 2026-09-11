@@ -63,14 +63,14 @@ releases its backing effect on drop.
 
 ### Reacting to changes — `#[watch(field)]`
 
-`#[watch]` methods take named `FieldUpdate<T>` snapshots with no receiver.
+Named watchers take `T`, `&T`, or `Change<T>` inputs with no receiver.
 They return `()` for observation or `Update<Self>` for declared writes:
 
 ```rust
 #[handlers]
 impl Editor {
     #[watch(value, writes(error))]
-    fn on_value_change(value: FieldUpdate<String>) -> Update<Self> {
+    fn on_value_change(value: Change<String>) -> Update<Self> {
         if value.previous.is_none() {
             return Update::new();
         }
@@ -79,6 +79,7 @@ impl Editor {
 }
 ```
 
+Bare `#[watch]` takes `Changes<Self>` for all watchable fields and only returns `()`.
 The macro rejects input/output overlap and dependency cycles. See
 [the migration guide](./06-readonly-watch-migration.md).
 

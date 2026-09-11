@@ -34,4 +34,10 @@ fn handlers_marker_contract() {
     cases.pass("tests/ui/watch_cfg_raw_pass.rs");
     cases.compile_fail("tests/ui/watch_input_type.rs");
     cases.compile_fail("tests/ui/watch_unknown_output.rs");
+    cases.pass("tests/ui/watch_forms_pass.rs");
+    cases.pass("tests/ui/watch_all_pass.rs");
+    cases.compile_fail("tests/ui/watch_mut_input.rs");
+    cases.compile_fail("tests/ui/watch_all_patch.rs");
+    cases.compile_fail("tests/ui/watch_all_input.rs");
+    cases.compile_fail("tests/ui/watch_all_writes.rs");
 }

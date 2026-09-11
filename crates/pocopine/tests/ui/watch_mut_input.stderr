@@ -1,0 +1,5 @@
+error: watch inputs cannot be mutable references; return Update<Self> for state changes
+ --> tests/ui/watch_mut_input.rs:6:12
+  |
+6 |     fn bad(value: &mut u32) { *value = 2; }
+  |            ^^^^^^^^^^^^^^^

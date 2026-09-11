@@ -74,7 +74,7 @@ pub mod timers;
 pub mod watch;
 #[doc(hidden)]
 pub mod watch_update;
-pub use watch_update::{FieldUpdate, Update};
+pub use watch_update::{Change, Changes, Update};
 pub mod web;
 
 pub use app::{

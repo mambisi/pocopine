@@ -1,11 +1,11 @@
 error[E0599]: no method named `c` found for struct `pocopine::Update<C, W>` in the current scope
- --> tests/ui/watch_forbidden_setter.rs:8:74
+ --> tests/ui/watch_forbidden_setter.rs:8:69
   |
-8 | fn bad(a: FieldUpdate<u32>) -> Update<Self> { Update::new().b(a.current).c(3) }
-  |                                                                          ^
+8 | fn bad(a: Change<u32>) -> Update<Self> { Update::new().b(a.current).c(3) }
+  |                                                                     ^
   |
 help: there is a method `b` with a similar name
   |
-8 - fn bad(a: FieldUpdate<u32>) -> Update<Self> { Update::new().b(a.current).c(3) }
-8 + fn bad(a: FieldUpdate<u32>) -> Update<Self> { Update::new().b(a.current).b(3) }
+8 - fn bad(a: Change<u32>) -> Update<Self> { Update::new().b(a.current).c(3) }
+8 + fn bad(a: Change<u32>) -> Update<Self> { Update::new().b(a.current).b(3) }
   |

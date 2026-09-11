@@ -94,15 +94,15 @@ truncated strings, percent strings, derived class names.
 #[handlers]
 impl PineUploadItem {
     #[watch(extension)]
-    fn on_extension_change(extension: FieldUpdate<String>) {
-        let (new, _prev) = (extension.current, extension.previous);
-        web_sys::console::log_1(&format!("Upload extension: {new}").into());
+    fn on_extension_change(extension: &str) {
+        web_sys::console::log_1(&format!("Upload extension: {extension}").into());
     }
 }
 ```
 
-Watchers take named `FieldUpdate<T>` inputs and no receiver. The first
-invocation has `previous: None`. Return `()` for DOM effects or logging;
+Watchers take named `T`, `&T`, or `Change<T>` inputs and no receiver. Use
+`Change<T>` when previous values matter; its first invocation has
+`previous: None`. Return `()` for DOM effects or logging;
 return `Update<Self>` with declared `writes(...)` to change component fields.
 Use `#[computed]` for a thumbnail label derived from `extension`.
 

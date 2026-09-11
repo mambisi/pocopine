@@ -29,7 +29,7 @@ impl LayoutDemo {
     /// a breakpoint-driven reflow into drawer mode doesn't animate —
     /// only a real user toggle does.
     #[watch(nav_open)]
-    fn on_nav_open(nav_open: FieldUpdate<bool>) {
+    fn on_nav_open(nav_open: Change<bool>) {
         let (open, old) = (nav_open.current, nav_open.previous);
         // Skip the initial seed — only animate genuine toggles.
         if old.is_some() {

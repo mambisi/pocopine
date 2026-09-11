@@ -108,12 +108,13 @@ values not tied to a component — lives in [Utilities](./02-utilities.md#memoiz
 
 ## Reacting to changes — #[watch]
 
-Watchers receive typed snapshots and can return a restricted update affecting
-several state fields. They take no `self` receiver:
+Watchers receive named values (`T`), borrows (`&T`), or snapshots with history
+(`Change<T>`). They can return a restricted update affecting several state
+fields and take no `self` receiver:
 
 ```rust
 #[watch(value, writes(error, dirty))]
-fn on_value(value: FieldUpdate<String>) -> Update<Self> {
+fn on_value(value: Change<String>) -> Update<Self> {
     if value.previous.is_none() {
         return Update::new(); // Initial delivery is not a user edit.
     }
@@ -130,7 +131,7 @@ For observation only, return `()` and omit `writes(...)`:
 
 ```rust
 #[watch(value)]
-fn log_value(value: FieldUpdate<String>) {
+fn log_value(value: Change<String>) {
     tracing::info!(?value.current, ?value.previous, "value changed");
 }
 ```
@@ -139,14 +140,17 @@ fn log_value(value: FieldUpdate<String>) {
 
 ```rust
 #[watch(width, height)]
-fn on_size(width: FieldUpdate<f64>, height: FieldUpdate<f64>) {
-    resize_canvas(width.current, height.current);
+fn on_size(width: f64, height: f64) {
+    resize_canvas(width, height);
 }
 ```
 
-Inputs are cloned together. Each `previous` describes the previous invocation,
-with `None` on the deferred initial notification. Multiple input changes in
-one flush coalesce. Unchanged inputs still carry their values. See the
+Inputs are read together under a shared borrow that ends before a returned
+patch commits. Only `Change<T>` retains history; its `previous` describes the
+previous invocation, with `None` on the deferred initial notification.
+Multiple input changes in one flush coalesce. Unchanged inputs still carry
+their values. Bare `#[watch]` takes `Changes<Self>` for all watchable fields
+and must return `()`. See the
 [migration guide](./06-readonly-watch-migration.md) for the full contract,
 mutation guard, and typed patch expansion.
 

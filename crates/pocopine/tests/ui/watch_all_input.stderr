@@ -1,0 +1,5 @@
+error: bare #[watch] requires one Changes<Self> parameter
+ --> tests/ui/watch_all_input.rs:6:12
+  |
+6 |     fn bad(value: &u32) {}
+  |            ^^^^^^^^^^^

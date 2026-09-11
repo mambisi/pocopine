@@ -4041,7 +4041,12 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let mut marker_error: Option<syn::Error> = None;
         method.attrs.retain(|attr| {
             if attr.path().is_ident("watch") {
-                match attr.parse_args::<watchers::Args>() {
+                let parsed = if matches!(attr.meta, syn::Meta::Path(_)) {
+                    Ok(watchers::Args::all())
+                } else {
+                    attr.parse_args::<watchers::Args>()
+                };
+                match parsed {
                     Ok(args) => {
                         if watch_fields.replace(args).is_some() && marker_error.is_none() {
                             marker_error = Some(syn::Error::new_spanned(attr, "only one #[watch] attribute per method — list every field in one attribute"));

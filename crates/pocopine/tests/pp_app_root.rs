@@ -87,7 +87,7 @@ struct PapWatched {
 #[handlers]
 impl PapWatched {
     #[watch(value)]
-    fn value_changed(value: FieldUpdate<u32>) {
+    fn value_changed(value: Change<u32>) {
         let (_value, _previous) = (value.current, value.previous);
     }
 }

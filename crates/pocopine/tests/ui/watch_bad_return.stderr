@@ -1,5 +1,5 @@
 error: #[watch] must return Update<Self> or ()
- --> tests/ui/watch_bad_return.rs:6:32
+ --> tests/ui/watch_bad_return.rs:6:27
   |
-6 | fn bad(a: FieldUpdate<u32>) -> bool { true }
-  |                                ^^^^
+6 | fn bad(a: Change<u32>) -> bool { true }
+  |                           ^^^^

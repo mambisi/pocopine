@@ -1,0 +1,5 @@
+error: bare #[watch] observes every watchable field and must return (); patches are not allowed
+ --> tests/ui/watch_all_patch.rs:6:36
+  |
+6 |     fn bad(changes: Changes<Self>) -> Update<Self> { Update::new() }
+  |                                    ^^^^^^^^^^^^^^^

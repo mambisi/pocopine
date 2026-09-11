@@ -358,12 +358,12 @@ impl AnimationDemo {
         motion_shadow
     )]
     fn on_motion_change(
-        motion_x: FieldUpdate<f64>,
-        motion_y: FieldUpdate<f64>,
-        motion_rotate: FieldUpdate<f64>,
-        motion_scale: FieldUpdate<f64>,
-        motion_raise: FieldUpdate<f64>,
-        motion_shadow: FieldUpdate<f64>,
+        motion_x: Change<f64>,
+        motion_y: Change<f64>,
+        motion_rotate: Change<f64>,
+        motion_scale: Change<f64>,
+        motion_raise: Change<f64>,
+        motion_shadow: Change<f64>,
     ) {
         let from = state_transform(
             motion_x.previous.unwrap_or(motion_x.current),

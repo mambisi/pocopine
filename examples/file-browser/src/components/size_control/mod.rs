@@ -76,18 +76,8 @@ impl FileBrowserSizeControl {
     }
 
     #[watch(value, min, max, unit)]
-    fn on_display_change(
-        value: FieldUpdate<f64>,
-        min: FieldUpdate<f64>,
-        max: FieldUpdate<f64>,
-        unit: FieldUpdate<String>,
-    ) {
-        sync_inputs(SizeDisplay::new(
-            value.current,
-            min.current,
-            max.current,
-            &unit.current,
-        ));
+    fn on_display_change(value: f64, min: f64, max: f64, unit: &str) {
+        sync_inputs(SizeDisplay::new(value, min, max, unit));
     }
 
     pub fn set_range(&mut self, event: web_sys::Event) {

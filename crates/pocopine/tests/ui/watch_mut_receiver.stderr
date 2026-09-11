@@ -1,4 +1,4 @@
-error: #[watch] handlers take no self receiver; declare each input as field: FieldUpdate<T> and return Update<Self> for state changes
+error: #[watch] handlers take no self receiver; use named T, &T, or Change<T> inputs, or Changes<Self> for a bare #[watch]
   --> tests/ui/watch_mut_receiver.rs:11:5
    |
 11 |     fn on_start_time(&mut self, _next: String, _prev: Option<String>) {}

@@ -193,7 +193,7 @@ impl FlattenWatchChild {
     // RFC-044 §5.10.5 — one watcher for the whole flattened struct.
     // Dual-key triggering must fire it when any leaf changes.
     #[watch(common)]
-    fn on_common(common: FieldUpdate<WatchLeaves>) {
+    fn on_common(common: Change<WatchLeaves>) {
         let new = common.current;
         COMMON_FIRES.with(|c| c.set(c.get() + 1));
         LAST_COMMON_LABEL.with(|s| *s.borrow_mut() = new.label.clone());
@@ -201,7 +201,7 @@ impl FlattenWatchChild {
 
     // Snapshot watchers name the Rust container; compare a leaf to observe it selectively.
     #[watch(common)]
-    fn on_label(common: FieldUpdate<WatchLeaves>) {
+    fn on_label(common: Change<WatchLeaves>) {
         if common.previous.as_ref().map(|p| &p.label) != Some(&common.current.label) {
             LABEL_FIRES.with(|c| c.set(c.get() + 1));
         }
@@ -385,14 +385,14 @@ impl BareFlattenWatchChild {
     // the bare-flatten path, not just the explicit-list path PR #102
     // tested.
     #[watch(common)]
-    fn on_common(common: FieldUpdate<BareWatchLeaves>) {
+    fn on_common(common: Change<BareWatchLeaves>) {
         let new = common.current;
         BARE_COMMON_FIRES.with(|c| c.set(c.get() + 1));
         BARE_LAST_COMMON_LABEL.with(|s| *s.borrow_mut() = new.label.clone());
     }
 
     #[watch(common)]
-    fn on_label(common: FieldUpdate<BareWatchLeaves>) {
+    fn on_label(common: Change<BareWatchLeaves>) {
         if common.previous.as_ref().map(|p| &p.label) != Some(&common.current.label) {
             BARE_LABEL_FIRES.with(|c| c.set(c.get() + 1));
         }

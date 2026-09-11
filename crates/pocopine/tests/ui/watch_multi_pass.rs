@@ -16,13 +16,13 @@ struct Editor {
 impl Editor {
     // Parameters bind by name, not position. Outputs can have private types.
     #[watch(start, end, writes(errors, valid))]
-    fn check(end: FieldUpdate<String>, start: FieldUpdate<String>) -> Update<Self> {
+    fn check(end: Change<String>, start: Change<String>) -> Update<Self> {
         let valid = start.current <= end.current;
         Update::new().errors(Errors::default()).valid(valid)
     }
 
     #[watch(valid)]
-    fn log(valid: FieldUpdate<bool>) { let _ = valid.changed(); }
+    fn log(valid: Change<bool>) { let _ = valid.changed(); }
 }
 
 fn main() {}

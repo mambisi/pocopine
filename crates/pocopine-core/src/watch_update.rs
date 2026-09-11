@@ -11,15 +11,27 @@ use crate::{Handle, Scope};
 /// `previous` is `None` for the initial notification. Unchanged inputs in a
 /// multi-field watch still carry their current value and previous snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FieldUpdate<T> {
+pub struct Change<T> {
     pub current: T,
     pub previous: Option<T>,
 }
 
-impl<T: PartialEq> FieldUpdate<T> {
+impl<T: PartialEq> Change<T> {
     pub fn changed(&self) -> bool {
         self.previous.as_ref() != Some(&self.current)
     }
+}
+
+/// The generated bundle of field changes for a bare `#[watch]` observer.
+/// The macro supplies the policy parameter in `Changes<Self>` signatures.
+pub type Changes<C, W> = <W as WatchAllSpec<C>>::Changes;
+
+#[doc(hidden)]
+pub trait WatchAllSpec<C> {
+    type Changes;
+    type History;
+    const FIELDS: &'static [&'static str];
+    fn read(state: &C, previous: Option<&Self::History>) -> (Self::Changes, Self::History);
 }
 
 /// A watcher-specific patch. In `#[watch]` signatures, `Update<Self>` is
@@ -113,20 +125,20 @@ fn evaluate<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// One coalesced, lifecycle-bound subscription. Snapshot all inputs under one
-/// shared borrow, release it, evaluate author code, then commit behind the same
-/// callback safe point. No previous snapshot or result outlives the scope.
+/// One coalesced, lifecycle-bound subscription. Read inputs and evaluate under
+/// one shared borrow, then release it before committing the result. Generated
+/// history contains only inputs declared as `Change<T>` (or all fields for a
+/// bare observer). No retained history or result outlives the scope.
 #[doc(hidden)]
 pub fn install_snapshot_watch<C, S, R>(
     scope_id: ScopeId,
     fields: &'static [&'static str],
     label: &'static str,
-    snapshot: impl Fn(&C) -> S + 'static,
-    callback: impl Fn(S, Option<S>) -> R + 'static,
+    callback: impl Fn(&C, Option<&S>) -> (R, S) + 'static,
 ) -> EffectId
 where
     C: 'static,
-    S: Clone + 'static,
+    S: 'static,
     R: WatchResult<C> + 'static,
 {
     let previous = Rc::new(RefCell::new(None::<S>));
@@ -142,9 +154,11 @@ where
         crate::reactive::without_tracking(|| {
             let _frame = crate::ComponentCallbackFrame::for_scope(scope_id);
             crate::scope::with_current_scope_id(scope_id, || {
-                let next = snapshot(&state.borrow());
-                let prev = previous.borrow().clone();
-                let result = evaluate(|| callback(next.clone(), prev));
+                let (result, next) = {
+                    let inputs = state.borrow();
+                    let prev = previous.borrow();
+                    evaluate(|| callback(&inputs, prev.as_ref()))
+                };
                 *previous.borrow_mut() = Some(next);
                 // Evaluation can invoke browser APIs that remove the owner.
                 if Scope::find(scope_id).is_some() {

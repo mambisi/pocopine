@@ -1,5 +1,4 @@
-// A `#[watch]` handler with no `self` receiver can never be installed —
-// the generated dispatch calls it as a method.
+// Named input parameters replace the legacy next/previous argument pair.
 use pocopine::prelude::*;
 
 struct Editor {

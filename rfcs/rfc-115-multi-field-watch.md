@@ -1,6 +1,6 @@
 # RFC-115: Multi-field watch — `#[watch(a, b, c)]`
 
-> Watch contract update: handlers now receive named `FieldUpdate<T>` snapshots,
+> Watch contract update: handlers now receive named `Change<T>` snapshots,
 > take no receiver, and may return `Update<Self>` for declared `writes(...)`.
 > The examples below describe the original design. See the current
 > [migration guide](../docs/guides/reactivity/06-readonly-watch-migration.md).

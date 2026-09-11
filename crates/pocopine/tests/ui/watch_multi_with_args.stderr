@@ -1,4 +1,4 @@
-error: #[watch] handlers take no self receiver; declare each input as field: FieldUpdate<T> and return Update<Self> for state changes
+error: #[watch] handlers take no self receiver; use named T, &T, or Change<T> inputs, or Changes<Self> for a bare #[watch]
   --> tests/ui/watch_multi_with_args.rs:13:5
    |
 13 |     fn on_times(&self, _next: String, _prev: Option<String>) {}

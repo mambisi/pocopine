@@ -48,8 +48,9 @@ to the store, the command palette loads when its opening action runs, and
 the configuration form clamps both size settings in one action.
 
 The size control derives its amount, bounds, labels, and range style with
-`#[computed]`. Its only watcher takes typed snapshots and synchronizes native input
-DOM properties. Incoming bounds do not publish a model change; the parent
+`#[computed]`. Its only watcher takes current numeric values and a borrowed
+unit string, synchronizing native input DOM properties without retaining
+previous values. Incoming bounds do not publish a model change; the parent
 owns normalization of its stored value.
 
 Opening a dialog starts a keyed editing session. `on_mount` initializes

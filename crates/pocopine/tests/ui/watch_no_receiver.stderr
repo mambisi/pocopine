@@ -1,5 +1,5 @@
-error: watch inputs must have type FieldUpdate<T>
-  --> tests/ui/watch_no_receiver.rs:12:29
+error: watch parameter must name a declared input field
+  --> tests/ui/watch_no_receiver.rs:11:22
    |
-12 |     fn on_start_time(_next: String, _prev: Option<String>) {}
-   |                             ^^^^^^
+11 |     fn on_start_time(_next: String, _prev: Option<String>) {}
+   |                      ^^^^^

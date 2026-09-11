@@ -5,6 +5,6 @@ struct State { value: u32 }
 #[handlers]
 impl State {
 #[watch(value)]
-fn bad(value: FieldUpdate<String>) {}
+fn bad(value: Change<String>) {}
 }
 fn main() {}

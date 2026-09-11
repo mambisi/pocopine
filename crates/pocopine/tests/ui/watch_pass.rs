@@ -12,13 +12,13 @@ struct EditorStore {
 #[handlers]
 impl EditorStore {
     #[watch(start_time, writes(error, valid))]
-    fn on_start_time(start_time: FieldUpdate<String>) -> Update<Self> {
+    fn on_start_time(start_time: Change<String>) -> Update<Self> {
         let valid = !start_time.current.is_empty();
         Update::new().valid(valid).error(None)
     }
 
     #[watch(count)]
-    fn on_count(count: FieldUpdate<i32>) {
+    fn on_count(count: Change<i32>) {
         let _ = (count.current, count.previous);
     }
 }

@@ -1,5 +1,4 @@
-// Bare `#[watch]` (no field name) used to strip the attribute and
-// silently downgrade the method to an ordinary handler.
+// Bare observers require a Changes<Self> argument, never a receiver.
 use pocopine::prelude::*;
 
 struct Editor {
