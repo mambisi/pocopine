@@ -10,8 +10,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pocopine_assets::{ASSET_CACHE_CONTROL, AssetStore, AssetStoreConfig};
-use testcontainers::ContainerAsync;
 use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::minio::MinIO;
 use tokio::sync::OnceCell;
 
@@ -28,7 +28,9 @@ static BUCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
 async fn asset_store(prefix: &str) -> AssetStore {
     let container = MINIO
         .get_or_init(|| async {
+            // Pull from MinIO's upstream registry; the Docker Hub image is unavailable.
             MinIO::default()
+                .with_name("quay.io/minio/minio")
                 .start()
                 .await
                 .expect("start minio testcontainer")

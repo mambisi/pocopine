@@ -2,15 +2,6 @@ error[E0080]: evaluation panicked: #[watch] dependency graph contains a cycle
  --> tests/ui/watch_explicit_cycle.rs:5:1
   |
 5 | #[handlers]
-  | ^^^^^^^^^^^ evaluation of `_` failed inside this call
+  | ^^^^^^^^^^^ evaluation of `_` failed here
   |
-note: inside `pocopine::__private::assert_watch_graph::<2>`
- --> $RUST/core/src/panic.rs
-  |
-  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
-  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
-  |
- ::: $WORKSPACE/crates/pocopine-core/src/watch_update.rs
-  |
-  |         assert!(!edges[i][i], "#[watch] dependency graph contains a cycle");
-  |         ------------------------------------------------------------------- in this macro invocation
+  = note: this error originates in the attribute macro `handlers` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -287,6 +287,8 @@ const fn same(a: &str, b: &str) -> bool {
 }
 
 #[doc(hidden)]
+// Report invalid graphs at the watcher declaration, independently of rust-src.
+#[track_caller]
 pub const fn assert_watch_graph<const N: usize>(nodes: [WatchNode; N]) {
     let mut edges = [[false; N]; N];
     let mut i = 0;

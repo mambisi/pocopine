@@ -21,6 +21,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::minio::MinIO;
 
@@ -30,7 +31,9 @@ const MINIO_ROOT_PASSWORD: &str = "minioadmin";
 
 #[tokio::test]
 async fn assets_push_uploads_skips_and_reuploads_on_edit() {
+    // Pull from MinIO's upstream registry; the Docker Hub image is unavailable.
     let container = MinIO::default()
+        .with_name("quay.io/minio/minio")
         .start()
         .await
         .expect("start minio testcontainer");

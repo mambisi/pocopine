@@ -20,8 +20,8 @@ use pocopine_storage::{
     UploadBody, UploadPolicy, UploadSession, UploadStrategy, UploadedPartStatus,
 };
 use pocopine_storage_s3::S3StorageBackend;
-use testcontainers::ContainerAsync;
 use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::minio::MinIO;
 use tokio::sync::OnceCell;
 
@@ -35,7 +35,9 @@ static BUCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
 async fn minio_client() -> Client {
     let container = MINIO
         .get_or_init(|| async {
+            // Pull from MinIO's upstream registry; the Docker Hub image is unavailable.
             MinIO::default()
+                .with_name("quay.io/minio/minio")
                 .start()
                 .await
                 .expect("start minio testcontainer")
