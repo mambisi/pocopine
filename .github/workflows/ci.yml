@@ -161,11 +161,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy-wasm
+      - name: install WASM C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm
       # Raw Cargo checks do not pass through the CLI's WASM C setup. Supply
       # the locked Tree-sitter package's mini-sysroot to grammar build scripts.
       - name: configure Tree-sitter WASM headers
         run: |
           set -euo pipefail
+          command -v clang llvm-ar
           tree_sitter_headers="$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown |
             jq -er '.packages[] | select(.name == "tree-sitter-language") | .manifest_path | sub("/Cargo.toml$"; "/wasm/include")')"
           test -f "$tree_sitter_headers/stdlib.h"
