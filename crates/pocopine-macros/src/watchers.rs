@@ -26,11 +26,13 @@ fn marker(id: &Ident) -> Ident {
             word
         })
         .collect();
-    if pascal.starts_with(|c: char| c.is_ascii_digit()) {
-        pascal.insert(0, '_');
-    }
     if pascal == "Self" {
         pascal.push('_');
+    }
+    // Removing a leading underscore may expose a digit or combining mark,
+    // both valid continuations in Rust identifiers but invalid starts.
+    if !pascal.is_empty() && syn::parse_str::<Ident>(&pascal).is_err() {
+        pascal.insert(0, '_');
     }
     // A Rust field may consist entirely of underscores. Keep its marker a
     // valid identifier and let the owner check for normalization collisions.
@@ -681,5 +683,27 @@ pub fn field_metadata(
         #[doc(hidden)]
         #[allow(unused_imports)]
         pub(crate) use #all_macro;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_marker_names_remain_valid_rust_identifiers() {
+        for (field, expected) in [
+            ("draft_text", "DraftText"),
+            ("r#type", "Type"),
+            ("self_", "Self_"),
+            ("_1", "_1"),
+            ("_١", "_١"),
+            ("_\u{301}value", "_\u{301}value"),
+        ] {
+            let field: Ident = syn::parse_str(field).unwrap();
+            let result = marker(&field);
+            assert_eq!(result.to_string(), expected);
+            assert!(syn::parse_str::<Type>(&format!("Self::{result}")).is_ok());
+        }
     }
 }
