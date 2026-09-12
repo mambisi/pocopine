@@ -474,8 +474,7 @@ pub fn field_metadata(
         .filter(|(_, skip)| !**skip)
         .map(|((field, ty), _)| {
             quote! {
-                pub(super) enum #field {}
-                impl ::pocopine::__private::WatchField<#owner> for #field {
+                impl ::pocopine::__private::WatchField<#owner> for #module::#field {
                     type Value = #ty;
                     fn set(state: &mut #owner, value: Self::Value) { state.#field = value; }
                 }
@@ -484,7 +483,11 @@ pub fn field_metadata(
     quote! {
         #[doc(hidden)]
         #[allow(non_snake_case, non_camel_case_types, unused_imports, dead_code)]
-        mod #module { use super::*; #(#items)* }
+        mod #module { #(pub(super) enum #active {})* }
+        // Resolve field types where the owner was declared. Moving them into
+        // the marker module would shadow paths like `theme::Theme` with the
+        // `theme` marker and change the meaning of `self::`/`super::` paths.
+        #(#items)*
 
         // Generate history only when an active bare observer requests it.
         // Components with borrowed-only watches need no Clone implementations.

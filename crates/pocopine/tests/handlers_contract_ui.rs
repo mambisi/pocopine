@@ -36,6 +36,7 @@ fn handlers_marker_contract() {
     cases.compile_fail("tests/ui/watch_unknown_output.rs");
     cases.pass("tests/ui/watch_forms_pass.rs");
     cases.pass("tests/ui/watch_all_pass.rs");
+    cases.pass("tests/ui/watch_field_module_shadow_pass.rs");
     cases.compile_fail("tests/ui/watch_mut_input.rs");
     cases.compile_fail("tests/ui/watch_all_patch.rs");
     cases.compile_fail("tests/ui/watch_all_input.rs");
