@@ -121,7 +121,9 @@ instead — see [Essentials](./01-essentials.md).
 
 ## Watchers — `watch` / `watch_field` / `*_scoped`
 
-The `watch` family is the free-function form of `#[watch(field)]`. Each calls a
+The `watch` family provides low-level subscriptions, separate from the
+snapshot-and-patch contract of generated `#[watch]` handlers. Do not use it
+to bypass a watcher's declared write set. Each calls a
 callback with `(new, prev: Option<&T>)` — `prev` is `None` on the first run,
 then `Some` on each distinct subsequent value (equality checked with
 `PartialEq`).

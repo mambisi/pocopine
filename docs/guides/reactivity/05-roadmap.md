@@ -63,19 +63,25 @@ releases its backing effect on drop.
 
 ### Reacting to changes — `#[watch(field)]`
 
-`#[watch(field)]` methods take `&mut self` and `(new: V, prev: Option<V>)`,
-and run whenever the named field changes. The first call after mount
-passes `None` for `prev`.
+Named watchers take `T`, `&T`, or `Change<T>` inputs with no receiver.
+They return `()` for observation or an `Update` with declared output fields:
 
 ```rust
 #[handlers]
-impl Calendar {
+impl Editor {
     #[watch(value)]
-    fn on_value_change(&mut self, new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
+    fn on_value_change(value: Change<String>) -> Update<Self, (Self::Error,)> {
+        if value.previous.is_none() {
+            return Update::new();
+        }
+        Update::new().error(None)
     }
 }
 ```
+
+Bare `#[watch]` takes `Changes<Self>` for all watchable fields and only returns `()`.
+The macro rejects input/output overlap and dependency cycles. See
+[the migration guide](./06-readonly-watch-migration.md).
 
 The lower-level free functions back this: `watch(source, cb)` over any
 reactive read, and `watch_field("field", cb)` plus the `*_scoped` variants
