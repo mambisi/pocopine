@@ -1,11 +1,13 @@
 {
-  "recorded_at": "2026-09-12T00:49:43.033Z",
+  "recorded_at": "2026-09-12T03:57:35.150Z",
+  "base_commit": "a3c55fbb0ada3dc3faec44561792a62affbd6ec0",
+  "source_commit": "e7f16410",
   "profile": "release",
-  "bundle": "code_editor_example_bg.5d51e60f.wasm",
+  "bundle": "code_editor_example_bg.a329a228.wasm",
   "suite": "tests/playwright/code-editor.spec.mjs",
   "stats": {
-    "startTime": "2026-09-12T00:49:43.033Z",
-    "duration": 54497.984,
+    "startTime": "2026-09-12T03:57:35.150Z",
+    "duration": 52941.327,
     "expected": 84,
     "skipped": 0,
     "unexpected": 0,

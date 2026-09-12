@@ -4,6 +4,11 @@ Implementation: RFC-124, branch `feat/pine-code-editor`. This report separates
 automated evidence from manual release checks. The code editor is implemented;
 release acceptance remains pending the manual checks below.
 
+After rebasing onto `origin/main` at `a3c55fbb` on 2026-09-12, the 28 host
+tests, 84 browser checks, and full workspace formatting/WASM Clippy/build
+checks were rerun. The Firefox WASM library tests and performance measurements
+below remain evidence from the preceding implementation runs.
+
 ## Automated checks
 
 - Pure Rust: 28 tests covering Unicode offsets, normalized lines, change
@@ -32,7 +37,7 @@ custom configuration grammar. Tests also cover language changes and stale
 results, worker startup failure and recovery, worker disposal/remounting, and
 the native language picker with language-specific indentation.
 The release CLI build passes. The example bundle used for this run is
-`code_editor_example_bg.5d51e60f.wasm`.
+`code_editor_example_bg.a329a228.wasm`.
 
 The refreshed run verifies each actual browser engine and records its version
 in the [engine-check artifact](validation/browser-engines.json). Validation
@@ -48,6 +53,10 @@ package versions were replaced. Results describe headless Linux browser
 engines; they do not substitute for testing Safari on macOS or iOS.
 
 ## Measured performance and default limits
+
+These measurements describe the preceding
+`code_editor_example_bg.5d51e60f.wasm` release bundle; they were not repeated
+as part of rebase verification.
 
 Recorded 2026-09-10 on an Intel Core Ultra 9 275HX (24 logical CPUs,
 65,743,953,920 bytes RAM), Linux 6.17.0-41-generic, Chromium 148.0.7778.96.
@@ -124,12 +133,15 @@ WASM dependency graph. CI includes these five crates in its WASM check, and
 253 affected host tests passed, including the storage emulator integrations.
 Clippy still reports existing workspace warnings.
 
-`cargo test --workspace` did not complete. The 2026-09-12 rerun with socket access failed
-compiling `pocopine-live` at `src/lib.rs:1820`, with incompatible `http` type
-identities at `RequestContext::from_parts`. A preceding run also reported
-missing compiled collaboration/realtime crates. These broad host failures have
-not been attributed to a source regression in this change; a clean full
-workspace host run remains outstanding.
+`cargo test --workspace` did not complete. After rebasing onto `a3c55fbb` on
+2026-09-12, it failed with incompatible compiled `pocopine_core` identities and
+a missing `pocopine_server` dependency. Clearing build artifacts for the core,
+live, server and sync packages and retrying still reported colliding
+`libpocopine_core` output filenames, then failed to load `pocopine_sync` from
+`pocopine-sync-query/src/client.rs:20`. Earlier attempts failed at
+`pocopine-live/src/lib.rs:1820` with incompatible `http` type identities.
+These workspace host build failures remain unresolved; no complete host
+workspace pass is claimed.
 
 ## Manual release checks still required
 

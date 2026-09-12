@@ -4,6 +4,11 @@ Recorded 2026-09-12 on branch `feat/pine-code-editor`. The rich-text fixes are
 implemented and pass the automated checks below. Physical phone keyboard
 acceptance remains pending.
 
+Browser, focused host, formatting, and workspace WASM checks were refreshed
+after rebasing onto `origin/main` at `a3c55fbb`. The Firefox WASM library tests
+and scoped Clippy check with warnings denied below were recorded before this
+rebase; those two focused checks were not repeated.
+
 ## Behavior corrected
 
 Autocomplete and IME can change the DOM even when the editor cannot cancel
@@ -30,7 +35,7 @@ DOM-to-document importer; arbitrary native structural edits are not accepted.
 ## Automated evidence
 
 The demo was built and served through the Pocopine CLI in the debug profile.
-All browser checks used `richtext.e241088b.js` / `richtext_bg.e241088b.wasm`.
+All browser checks used `richtext.64241049.js` / `richtext_bg.64241049.wasm`.
 
 | Project | Actual engine and version | Native-input checks |
 | --- | --- | ---: |
@@ -101,9 +106,10 @@ and export or save. Confirm the saved text agrees with the visible text and
 that formatting and caret placement survive. Touch selection and screen-reader
 acceptance also remain open.
 
-The full host `cargo test --workspace` attempt on 2026-09-12 is blocked while
-compiling `pocopine-live/src/lib.rs:1820`: incompatible `http` type identities
-at `RequestContext::from_parts`. No complete host workspace pass is claimed.
+The full host `cargo test --workspace` attempts on 2026-09-12 remain blocked
+by compiled dependency identity/output collisions, including after clearing
+the affected packages' build artifacts and retrying on the rebased branch.
+No complete host workspace pass is claimed.
 The separate `mio` WASM blocker has been resolved by host-gating CLI, asset,
 and cloud-storage implementations and dependencies; see the
 [workspace validation report](../code-editor/VALIDATION.md#workspace-wide-blockers).
