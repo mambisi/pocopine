@@ -119,34 +119,39 @@ impl PineChartResponsive {
         });
     }
 
-    #[watch(width)]
-    fn on_width(&mut self, _: String, _: Option<String>) {
-        self.recompute_style();
-    }
-
-    #[watch(height)]
-    fn on_height(&mut self, _: String, _: Option<String>) {
-        self.recompute_style();
-    }
-
-    #[watch(aspect_ratio)]
-    fn on_aspect_ratio(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_style();
-    }
-
-    #[watch(min_width)]
-    fn on_min_width(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_style();
-    }
-
-    #[watch(min_height)]
-    fn on_min_height(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_style();
-    }
-
-    #[watch(style)]
-    fn on_style(&mut self, _: String, _: Option<String>) {
-        self.recompute_style();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        width,
+        height,
+        aspect_ratio,
+        min_width,
+        min_height,
+        style,
+        ready,
+        measured_height
+    )]
+    fn on_style_change(
+        width: &str,
+        height: &str,
+        aspect_ratio: f64,
+        min_width: f64,
+        min_height: f64,
+        style: &str,
+        ready: bool,
+        measured_height: f64,
+    ) -> Update<Self, (Self::ContainerStyle, Self::FrameStyle)> {
+        let derives_height = (height.trim().is_empty() || height.trim() == "auto")
+            && aspect_ratio.is_finite()
+            && aspect_ratio > 0.0;
+        let resolved_height = (ready && derives_height).then_some(measured_height);
+        Update::new()
+            .container_style(responsive_container_style(width, min_width, style))
+            .frame_style(responsive_frame_style(
+                height,
+                aspect_ratio,
+                min_height,
+                resolved_height,
+            ))
     }
 }
 

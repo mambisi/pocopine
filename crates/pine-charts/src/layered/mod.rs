@@ -327,29 +327,88 @@ impl PineLayerChart {
         self.recompute();
     }
 
-    #[watch(animate)]
-    fn on_animate(&mut self, _: bool, _: Option<bool>) {
-        self.update_animation_style();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(width, height, animate, animation_duration, animation_easing)]
+    fn on_geometry_change(
+        width: f64,
+        height: f64,
+        animate: bool,
+        animation_duration: f64,
+        animation_easing: String,
+    ) -> Update<
+        Self,
+        (
+            Self::State,
+            Self::ViewBox,
+            Self::SvgGuides,
+            Self::SvgLines,
+            Self::SvgMarkers,
+            Self::SvgReferenceBackgroundDots,
+            Self::SvgReferenceForegroundDots,
+            Self::SvgLabels,
+            Self::SvgIcons,
+            Self::Error,
+            Self::Ready,
+            Self::Empty,
+            Self::Invalid,
+        ),
+    > {
+        // Read the child configuration registered by owning actions, then compute
+        // a detached render. Only the returned fields commit to the scope.
+        let mut next = this::<Self>().with(Clone::clone);
+
+        next.width = width;
+        next.height = height;
+        next.animate = animate;
+        next.animation_duration = animation_duration;
+        next.animation_easing = animation_easing;
+        next.recompute();
+        Update::new()
+            .state(next.state)
+            .view_box(next.view_box)
+            .svg_guides(next.svg_guides)
+            .svg_lines(next.svg_lines)
+            .svg_markers(next.svg_markers)
+            .svg_reference_background_dots(next.svg_reference_background_dots)
+            .svg_reference_foreground_dots(next.svg_reference_foreground_dots)
+            .svg_labels(next.svg_labels)
+            .svg_icons(next.svg_icons)
+            .error(next.error)
+            .ready(next.ready)
+            .empty(next.empty)
+            .invalid(next.invalid)
     }
 
-    #[watch(animation_duration)]
-    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
-        self.update_animation_style();
+    #[watch(animation_duration, animation_easing)]
+    fn on_animation_change(
+        animation_duration: f64,
+        animation_easing: &str,
+    ) -> Update<Self, (Self::AnimationStyle,)> {
+        Update::new().animation_style(animation_style(animation_duration, animation_easing))
     }
 
-    #[watch(animation_easing)]
-    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
-        self.update_animation_style();
+    pub fn apply_icon(&mut self, config: ChartLayerIcon) {
+        self.upsert_icon(config);
     }
 
-    #[watch(width)]
-    fn on_width(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_label(&mut self, config: ChartLayerLabel) {
+        self.upsert_label(config);
     }
 
-    #[watch(height)]
-    fn on_height(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_reference_dot(&mut self, config: ChartLayerReferenceDot) {
+        self.upsert_reference_dot(config);
+    }
+
+    pub fn apply_marker(&mut self, config: ChartLayerMarker) {
+        self.upsert_marker(config);
+    }
+
+    pub fn apply_line(&mut self, config: ChartLayerLine) {
+        self.upsert_line(config);
+    }
+
+    pub fn apply_guide(&mut self, config: ChartLayerGuide) {
+        self.upsert_guide(config);
     }
 }
 
@@ -542,24 +601,19 @@ impl PineChartGuide {
         update_root(|root| root.remove_guide(&self.component_key));
     }
 
-    #[watch(x1)]
-    fn on_x1(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y1)]
-    fn on_y1(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(x2)]
-    fn on_x2(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y2)]
-    fn on_y2(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, x1, y1, x2, y2)]
+    fn on_config_change(component_key: String, x1: f64, y1: f64, x2: f64, y2: f64) {
+        let guide = ChartLayerGuide {
+            key: component_key,
+            x1,
+            y1,
+            x2,
+            y2,
+        };
+        dispatch_root("apply_guide", &guide);
     }
 }
 
@@ -620,24 +674,25 @@ impl PineChartLine {
         update_root(|root| root.remove_line(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(color)]
-    fn on_color(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke_width)]
-    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(points)]
-    fn on_points(&mut self, _: Vec<ChartLayerPoint>, _: Option<Vec<ChartLayerPoint>>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, label, color, stroke_width, points)]
+    fn on_config_change(
+        component_key: String,
+        label: String,
+        color: String,
+        stroke_width: f64,
+        points: Vec<ChartLayerPoint>,
+    ) {
+        let line = ChartLayerLine {
+            key: component_key,
+            label,
+            color,
+            stroke_width,
+            points,
+        };
+        dispatch_root("apply_line", &line);
     }
 }
 
@@ -707,39 +762,31 @@ impl PineChartMarker {
         update_root(|root| root.remove_marker(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(x)]
-    fn on_x(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(radius)]
-    fn on_radius(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(fill)]
-    fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke)]
-    fn on_stroke(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke_width)]
-    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, label, x, y, radius, fill, stroke, stroke_width)]
+    fn on_config_change(
+        component_key: String,
+        label: String,
+        x: f64,
+        y: f64,
+        radius: f64,
+        fill: String,
+        stroke: String,
+        stroke_width: f64,
+    ) {
+        let marker = ChartLayerMarker {
+            key: component_key,
+            label,
+            x,
+            y,
+            radius,
+            fill,
+            stroke,
+            stroke_width,
+        };
+        dispatch_root("apply_marker", &marker);
     }
 }
 
@@ -815,44 +862,33 @@ impl PineChartReferenceDot {
         update_root(|root| root.remove_reference_dot(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(x)]
-    fn on_x(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(radius)]
-    fn on_radius(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(fill)]
-    fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke)]
-    fn on_stroke(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke_width)]
-    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(layer)]
-    fn on_layer(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, label, x, y, radius, fill, stroke, stroke_width, layer)]
+    fn on_config_change(
+        component_key: String,
+        label: String,
+        x: f64,
+        y: f64,
+        radius: f64,
+        fill: String,
+        stroke: String,
+        stroke_width: f64,
+        layer: String,
+    ) {
+        let dot = ChartLayerReferenceDot {
+            key: component_key,
+            label,
+            x,
+            y,
+            radius,
+            fill,
+            stroke,
+            stroke_width,
+            layer: layer_or_context(&layer, "reference-background"),
+        };
+        dispatch_root("apply_reference_dot", &dot);
     }
 }
 
@@ -932,49 +968,46 @@ impl PineChartLabel {
         update_root(|root| root.remove_label(&self.component_key));
     }
 
-    #[watch(text)]
-    fn on_text(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(x)]
-    fn on_x(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(dx)]
-    fn on_dx(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(dy)]
-    fn on_dy(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(angle)]
-    fn on_angle(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(fill)]
-    fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(text_anchor)]
-    fn on_text_anchor(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(font_weight)]
-    fn on_font_weight(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        component_key,
+        text,
+        x,
+        y,
+        dx,
+        dy,
+        angle,
+        fill,
+        text_anchor,
+        font_weight
+    )]
+    fn on_config_change(
+        component_key: String,
+        text: String,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+        angle: f64,
+        fill: String,
+        text_anchor: String,
+        font_weight: String,
+    ) {
+        let label = ChartLayerLabel {
+            key: component_key,
+            text,
+            x,
+            y,
+            dx,
+            dy,
+            angle,
+            fill,
+            text_anchor,
+            font_weight,
+        };
+        dispatch_root("apply_label", &label);
     }
 }
 
@@ -1043,29 +1076,27 @@ impl PineChartIcon {
         update_root(|root| root.remove_icon(&self.component_key));
     }
 
-    #[watch(kind)]
-    fn on_kind(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(x)]
-    fn on_x(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(scale)]
-    fn on_scale(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(fill)]
-    fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, kind, x, y, scale, fill)]
+    fn on_config_change(
+        component_key: String,
+        kind: String,
+        x: f64,
+        y: f64,
+        scale: f64,
+        fill: String,
+    ) {
+        let icon = ChartLayerIcon {
+            key: component_key,
+            kind,
+            x,
+            y,
+            scale,
+            fill,
+        };
+        dispatch_root("apply_icon", &icon);
     }
 }
 
@@ -1331,6 +1362,54 @@ fn icon_resolution(value: &str) -> (&'static str, &'static str) {
     match value.trim() {
         "plane" => ("plane", PLANE_ICON_PATH),
         _ => ("custom", ""),
+    }
+}
+
+/// Cross-component configuration is an explicit owning action. Scope::invoke
+/// queues named handlers during watcher evaluation, so child snapshots never
+/// borrow or mutate the parent while they are being evaluated.
+fn dispatch_root<T: Serialize>(action: &str, config: &T) {
+    let Some(root) = ROOT.inject().and_then(|root| Scope::find(root.scope_id())) else {
+        return;
+    };
+    let config = pocopine::__private::serde_wasm_bindgen::to_value(config)
+        .expect("chart configuration is serializable");
+    root.invoke(action, &js_sys::Array::of1(&config));
+}
+
+impl pocopine_core::FromHandlerArg for ChartLayerIcon {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for ChartLayerLabel {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for ChartLayerReferenceDot {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for ChartLayerMarker {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for ChartLayerLine {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for ChartLayerGuide {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
     }
 }
 

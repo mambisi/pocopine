@@ -500,89 +500,201 @@ impl PineRadialBarChart {
         self.recompute();
     }
 
-    #[watch(animate)]
-    fn on_animate(&mut self, _: bool, _: Option<bool>) {
-        self.update_animation_style();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        data,
+        width,
+        height,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left,
+        inner_radius,
+        ring_gap,
+        start_angle,
+        end_angle,
+        animate,
+        animation_duration,
+        animation_easing
+    )]
+    fn on_geometry_change(
+        data: Vec<ChartRadialBar>,
+        width: f64,
+        height: f64,
+        margin_top: f64,
+        margin_right: f64,
+        margin_bottom: f64,
+        margin_left: f64,
+        inner_radius: f64,
+        ring_gap: f64,
+        start_angle: f64,
+        end_angle: f64,
+        animate: bool,
+        animation_duration: f64,
+        animation_easing: String,
+    ) -> Update<
+        Self,
+        (
+            Self::AnimationGeneration,
+            Self::AnimatingBars,
+            Self::BarAnimations,
+            Self::AnimationStartedAtMs,
+            Self::State,
+            Self::ViewBox,
+            Self::Bars,
+            Self::LegendItems,
+            Self::CenterX,
+            Self::CenterY,
+            Self::OuterRadiusPx,
+            Self::InnerRadiusPx,
+            Self::HoverVisible,
+            Self::FocusedKey,
+            Self::SelectedKey,
+            Self::Error,
+            Self::Ready,
+            Self::Empty,
+            Self::Invalid,
+        ),
+    > {
+        // Work on a detached render snapshot so selection and animation history
+        // survive a prop change. Only the returned fields commit to the scope.
+        let mut next = this::<Self>().with(Clone::clone);
+
+        next.data = data;
+        next.width = width;
+        next.height = height;
+        next.margin_top = margin_top;
+        next.margin_right = margin_right;
+        next.margin_bottom = margin_bottom;
+        next.margin_left = margin_left;
+        next.inner_radius = inner_radius;
+        next.ring_gap = ring_gap;
+        next.start_angle = start_angle;
+        next.end_angle = end_angle;
+        next.animate = animate;
+        next.animation_duration = animation_duration;
+        next.animation_easing = animation_easing;
+        crate::events::with_chart_event_target(|| next.recompute());
+        Update::new()
+            .animation_generation(next.animation_generation)
+            .animating_bars(next.animating_bars)
+            .bar_animations(next.bar_animations)
+            .animation_started_at_ms(next.animation_started_at_ms)
+            .state(next.state)
+            .view_box(next.view_box)
+            .bars(next.bars)
+            .legend_items(next.legend_items)
+            .center_x(next.center_x)
+            .center_y(next.center_y)
+            .outer_radius_px(next.outer_radius_px)
+            .inner_radius_px(next.inner_radius_px)
+            .hover_visible(next.hover_visible)
+            .focused_key(next.focused_key)
+            .selected_key(next.selected_key)
+            .error(next.error)
+            .ready(next.ready)
+            .empty(next.empty)
+            .invalid(next.invalid)
     }
 
-    #[watch(animation_duration)]
-    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
-        self.update_animation_style();
+    #[watch(animation_duration, animation_easing)]
+    fn on_animation_change(
+        animation_duration: f64,
+        animation_easing: &str,
+    ) -> Update<Self, (Self::AnimationStyle,)> {
+        Update::new().animation_style(animation_style(animation_duration, animation_easing))
     }
 
-    #[watch(animation_easing)]
-    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
-        self.update_animation_style();
+    #[watch(tooltip, hover_visible)]
+    fn on_tooltip_change(
+        tooltip: &str,
+        hover_visible: bool,
+    ) -> Update<Self, (Self::TooltipMode, Self::TooltipAriaHidden)> {
+        let mode = crate::cartesian::tooltip_mode(tooltip);
+        Update::new()
+            .tooltip_mode(mode.into())
+            .tooltip_aria_hidden(crate::cartesian::tooltip_aria_hidden(mode, hover_visible).into())
     }
 
-    #[watch(tooltip)]
-    fn on_tooltip(&mut self, _: String, _: Option<String>) {
-        self.sync_tooltip_state();
+    #[allow(clippy::type_complexity)]
+    #[watch(hover_visible)]
+    fn on_hover_visibility(
+        hover_visible: bool,
+    ) -> Update<
+        Self,
+        (
+            Self::HoverBar,
+            Self::HoverKey,
+            Self::HoverLabel,
+            Self::HoverValue,
+            Self::HoverValueLabel,
+            Self::HoverPercentage,
+            Self::HoverPercentageLabel,
+            Self::HoverAriaLabel,
+            Self::HoverPlacementX,
+            Self::HoverPlacementY,
+            Self::HoverStyle,
+        ),
+    > {
+        if hover_visible {
+            return Update::new();
+        }
+        Update::new()
+            .hover_bar(Default::default())
+            .hover_key(Default::default())
+            .hover_label(Default::default())
+            .hover_value(Default::default())
+            .hover_value_label(Default::default())
+            .hover_percentage(Default::default())
+            .hover_percentage_label(Default::default())
+            .hover_aria_label(Default::default())
+            .hover_placement_x("right".into())
+            .hover_placement_y("above".into())
+            .hover_style(Default::default())
     }
 
-    #[watch(data)]
-    fn on_data(&mut self, _: Vec<ChartRadialBar>, _: Option<Vec<ChartRadialBar>>) {
-        self.recompute();
-    }
-
-    #[watch(width)]
-    fn on_width(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(height)]
-    fn on_height(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_top)]
-    fn on_margin_top(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_right)]
-    fn on_margin_right(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_bottom)]
-    fn on_margin_bottom(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_left)]
-    fn on_margin_left(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(inner_radius)]
-    fn on_inner_radius(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(ring_gap)]
-    fn on_ring_gap(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(start_angle)]
-    fn on_start_angle(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(end_angle)]
-    fn on_end_angle(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(center_label)]
-    fn on_center_label(&mut self, _: String, _: Option<String>) {
-        self.update_center_visibility();
-    }
-
-    #[watch(center_value)]
-    fn on_center_value(&mut self, _: String, _: Option<String>) {
-        self.update_center_visibility();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        center_label,
+        center_value,
+        center_y,
+        inner_radius_px,
+        start_angle,
+        end_angle
+    )]
+    fn on_center_change(
+        center_label: String,
+        center_value: String,
+        center_y: f64,
+        inner_radius_px: f64,
+        start_angle: f64,
+        end_angle: f64,
+    ) -> Update<
+        Self,
+        (
+            Self::CenterVisible,
+            Self::CenterLabelText,
+            Self::CenterValueText,
+            Self::CenterLabelY,
+            Self::CenterValueY,
+        ),
+    > {
+        let mut next = Self {
+            center_label,
+            center_value,
+            center_y,
+            inner_radius_px,
+            start_angle,
+            end_angle,
+            ..Default::default()
+        };
+        next.update_center_visibility();
+        Update::new()
+            .center_visible(next.center_visible)
+            .center_label_text(next.center_label_text)
+            .center_value_text(next.center_value_text)
+            .center_label_y(next.center_label_y)
+            .center_value_y(next.center_value_y)
     }
 
     pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {

@@ -476,64 +476,280 @@ impl PineCartesianChart {
         self.recompute();
     }
 
-    #[watch(animate)]
-    fn on_animate(&mut self, _: bool, _: Option<bool>) {
-        self.update_animation_style();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        width,
+        height,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left,
+        x_min,
+        x_max,
+        y_min,
+        y_max,
+        padding_inner,
+        padding_outer,
+        series_padding_inner,
+        grid,
+        x_axis_config,
+        y_axis_config,
+        series,
+        bar_series,
+        area_series,
+        scatter_series,
+        reference_lines,
+        reference_dots,
+        reference_labels
+    )]
+    fn on_geometry_change(
+        width: f64,
+        height: f64,
+        margin_top: f64,
+        margin_right: f64,
+        margin_bottom: f64,
+        margin_left: f64,
+        x_min: Option<f64>,
+        x_max: Option<f64>,
+        y_min: Option<f64>,
+        y_max: Option<f64>,
+        padding_inner: f64,
+        padding_outer: f64,
+        series_padding_inner: f64,
+        grid: Option<CartesianGridConfig>,
+        x_axis_config: Option<CartesianAxisConfig>,
+        y_axis_config: Option<CartesianAxisConfig>,
+        series: Vec<CartesianLineSeriesConfig>,
+        bar_series: Vec<CartesianBarSeriesConfig>,
+        area_series: Vec<CartesianAreaSeriesConfig>,
+        scatter_series: Vec<CartesianScatterSeriesConfig>,
+        reference_lines: Vec<CartesianReferenceLineConfig>,
+        reference_dots: Vec<CartesianReferenceDotConfig>,
+        reference_labels: Vec<CartesianReferenceLabelConfig>,
+    ) -> Update<
+        Self,
+        (
+            Self::State,
+            Self::ViewBox,
+            Self::Bars,
+            Self::Areas,
+            Self::LineSeries,
+            Self::ScatterPoints,
+            Self::Markers,
+            Self::ReferenceBackgroundLines,
+            Self::ReferenceForegroundLines,
+            Self::ReferenceBackgroundDots,
+            Self::ReferenceForegroundDots,
+            Self::SvgReferenceLabels,
+            Self::PlotX,
+            Self::PlotY,
+            Self::PlotRight,
+            Self::PlotBottom,
+            Self::XGrid,
+            Self::YGrid,
+            Self::XTickLabels,
+            Self::YTickLabels,
+            Self::XAxisLabel,
+            Self::YAxisLabel,
+            Self::XAxis,
+            Self::YAxis,
+            Self::Error,
+            Self::Ready,
+            Self::Empty,
+            Self::Invalid,
+        ),
+    > {
+        // Preserve the previous render while computing a detached replacement.
+        // Only the declared output fields are committed to the live component.
+        let mut next = this::<Self>().with(Clone::clone);
+        next.width = width;
+        next.height = height;
+        next.margin_top = margin_top;
+        next.margin_right = margin_right;
+        next.margin_bottom = margin_bottom;
+        next.margin_left = margin_left;
+        next.x_min = x_min;
+        next.x_max = x_max;
+        next.y_min = y_min;
+        next.y_max = y_max;
+        next.padding_inner = padding_inner;
+        next.padding_outer = padding_outer;
+        next.series_padding_inner = series_padding_inner;
+        next.grid = grid;
+        next.x_axis_config = x_axis_config;
+        next.y_axis_config = y_axis_config;
+        next.series = series;
+        next.bar_series = bar_series;
+        next.area_series = area_series;
+        next.scatter_series = scatter_series;
+        next.reference_lines = reference_lines;
+        next.reference_dots = reference_dots;
+        next.reference_labels = reference_labels;
+        next.recompute();
+        Update::new()
+            .state(next.state)
+            .view_box(next.view_box)
+            .bars(next.bars)
+            .areas(next.areas)
+            .line_series(next.line_series)
+            .scatter_points(next.scatter_points)
+            .markers(next.markers)
+            .reference_background_lines(next.reference_background_lines)
+            .reference_foreground_lines(next.reference_foreground_lines)
+            .reference_background_dots(next.reference_background_dots)
+            .reference_foreground_dots(next.reference_foreground_dots)
+            .svg_reference_labels(next.svg_reference_labels)
+            .plot_x(next.plot_x)
+            .plot_y(next.plot_y)
+            .plot_right(next.plot_right)
+            .plot_bottom(next.plot_bottom)
+            .x_grid(next.x_grid)
+            .y_grid(next.y_grid)
+            .x_tick_labels(next.x_tick_labels)
+            .y_tick_labels(next.y_tick_labels)
+            .x_axis_label(next.x_axis_label)
+            .y_axis_label(next.y_axis_label)
+            .x_axis(next.x_axis)
+            .y_axis(next.y_axis)
+            .error(next.error)
+            .ready(next.ready)
+            .empty(next.empty)
+            .invalid(next.invalid)
     }
 
-    #[watch(animation_duration)]
-    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
-        self.update_animation_style();
+    #[watch(animation_duration, animation_easing)]
+    fn on_animation_change(
+        animation_duration: f64,
+        animation_easing: &str,
+    ) -> Update<Self, (Self::AnimationStyle,)> {
+        Update::new().animation_style(animation_style(animation_duration, animation_easing))
     }
 
-    #[watch(animation_easing)]
-    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
-        self.update_animation_style();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        ready,
+        x_axis_config,
+        y_axis_config,
+        x_grid,
+        y_grid,
+        bars,
+        areas,
+        scatter_points,
+        markers,
+        reference_background_lines,
+        reference_background_dots,
+        reference_foreground_lines,
+        reference_foreground_dots,
+        svg_reference_labels
+    )]
+    fn on_visibility_change(
+        ready: bool,
+        x_axis_config: &Option<CartesianAxisConfig>,
+        y_axis_config: &Option<CartesianAxisConfig>,
+        x_grid: &[SvgLine],
+        y_grid: &[SvgLine],
+        bars: &[CartesianBarRender],
+        areas: &[CartesianAreaSeriesRender],
+        scatter_points: &[CartesianScatterPointRender],
+        markers: &[CartesianMarkerRender],
+        reference_background_lines: &[CartesianReferenceLineRender],
+        reference_background_dots: &[CartesianReferenceDotRender],
+        reference_foreground_lines: &[CartesianReferenceLineRender],
+        reference_foreground_dots: &[CartesianReferenceDotRender],
+        svg_reference_labels: &[CartesianReferenceLabelRender],
+    ) -> Update<
+        Self,
+        (
+            Self::ShowGrid,
+            Self::ShowXAxis,
+            Self::ShowYAxis,
+            Self::ShowBars,
+            Self::ShowAreas,
+            Self::ShowScatter,
+            Self::ShowMarkers,
+            Self::ShowReferenceBackground,
+            Self::ShowReferenceForeground,
+            Self::ShowReferenceLabels,
+            Self::XLabel,
+            Self::YLabel,
+        ),
+    > {
+        let update = Update::new()
+            .show_grid(ready && (!x_grid.is_empty() || !y_grid.is_empty()))
+            .show_x_axis(ready && (x_axis_config.is_some()))
+            .show_y_axis(ready && (y_axis_config.is_some()))
+            .show_bars(ready && (!bars.is_empty()))
+            .show_areas(ready && (!areas.is_empty()))
+            .show_scatter(ready && (!scatter_points.is_empty()))
+            .show_markers(ready && (!markers.is_empty()))
+            .show_reference_background(
+                ready
+                    && (!reference_background_lines.is_empty()
+                        || !reference_background_dots.is_empty()),
+            )
+            .show_reference_foreground(
+                ready
+                    && (!reference_foreground_lines.is_empty()
+                        || !reference_foreground_dots.is_empty()),
+            )
+            .show_reference_labels(ready && (!svg_reference_labels.is_empty()));
+        if ready {
+            update
+                .x_label(
+                    x_axis_config
+                        .as_ref()
+                        .map(|axis| axis.label.clone())
+                        .unwrap_or_default(),
+                )
+                .y_label(
+                    y_axis_config
+                        .as_ref()
+                        .map(|axis| axis.label.clone())
+                        .unwrap_or_default(),
+                )
+        } else {
+            update
+        }
     }
 
-    #[watch(width)]
-    fn on_width(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_reference_label(&mut self, config: CartesianReferenceLabelConfig) {
+        self.upsert_reference_label(config);
     }
 
-    #[watch(height)]
-    fn on_height(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_reference_dot(&mut self, config: CartesianReferenceDotConfig) {
+        self.upsert_reference_dot(config);
     }
 
-    #[watch(margin_top)]
-    fn on_margin_top(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_reference_line(&mut self, config: CartesianReferenceLineConfig) {
+        self.upsert_reference_line(config);
     }
 
-    #[watch(margin_right)]
-    fn on_margin_right(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_scatter_series(&mut self, config: CartesianScatterSeriesConfig) {
+        self.upsert_scatter_series(config);
     }
 
-    #[watch(margin_bottom)]
-    fn on_margin_bottom(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_area_series(&mut self, config: CartesianAreaSeriesConfig) {
+        self.upsert_area_series(config);
     }
 
-    #[watch(margin_left)]
-    fn on_margin_left(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_bar_series(&mut self, config: CartesianBarSeriesConfig) {
+        self.upsert_bar_series(config);
     }
 
-    #[watch(padding_inner)]
-    fn on_padding_inner(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_line_series(&mut self, config: CartesianLineSeriesConfig) {
+        self.upsert_line_series(config);
     }
 
-    #[watch(padding_outer)]
-    fn on_padding_outer(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_y_axis(&mut self, config: CartesianAxisConfig) {
+        self.set_y_axis(config);
     }
 
-    #[watch(series_padding_inner)]
-    fn on_series_padding_inner(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    pub fn apply_x_axis(&mut self, config: CartesianAxisConfig) {
+        self.set_x_axis(config);
+    }
+
+    pub fn apply_grid(&mut self, config: CartesianGridConfig) {
+        self.set_grid(config);
     }
 }
 
@@ -900,14 +1116,17 @@ impl PineChartGrid {
         update_root(|root| root.remove_grid(&self.component_key));
     }
 
-    #[watch(x)]
-    fn on_x(&mut self, _: bool, _: Option<bool>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: bool, _: Option<bool>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, x, y)]
+    fn on_config_change(component_key: String, x: bool, y: bool) {
+        let config = CartesianGridConfig {
+            key: component_key,
+            x,
+            y,
+        };
+        dispatch_root("apply_grid", &config);
     }
 }
 
@@ -944,9 +1163,16 @@ impl PineXAxis {
         update_root(|root| root.remove_x_axis(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, label)]
+    fn on_config_change(component_key: String, label: String) {
+        let config = CartesianAxisConfig {
+            key: component_key,
+            label,
+        };
+        dispatch_root("apply_x_axis", &config);
     }
 }
 
@@ -982,9 +1208,16 @@ impl PineYAxis {
         update_root(|root| root.remove_y_axis(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, label)]
+    fn on_config_change(component_key: String, label: String) {
+        let config = CartesianAxisConfig {
+            key: component_key,
+            label,
+        };
+        dispatch_root("apply_y_axis", &config);
     }
 }
 
@@ -1073,34 +1306,39 @@ impl PineLineSeries {
     // One watcher for every flattened `SeriesCommon` leaf — RFC-044
     // §5.10.5 dual-key triggering fires it when `label` / `color` /
     // `visible` change. Replaces three per-leaf handlers.
-    #[watch(common)]
-    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
-        self.sync();
-    }
-
-    #[watch(stroke_width)]
-    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(show_markers)]
-    fn on_show_markers(&mut self, _: bool, _: Option<bool>) {
-        self.sync();
-    }
-
-    #[watch(marker_radius)]
-    fn on_marker_radius(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(points)]
-    fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
-        self.sync();
-    }
-
-    #[watch(data)]
-    fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        component_key,
+        common,
+        stroke_width,
+        show_markers,
+        marker_radius,
+        points,
+        data
+    )]
+    fn on_config_change(
+        component_key: String,
+        common: SeriesCommon,
+        stroke_width: f64,
+        show_markers: bool,
+        marker_radius: f64,
+        points: Vec<ChartPoint>,
+        data: Vec<ChartBar>,
+    ) {
+        let config = CartesianLineSeriesConfig {
+            key: component_key,
+            label: common.label.clone(),
+            color: color_or_current(&common.color),
+            stroke_width,
+            show_markers,
+            marker_radius,
+            points,
+            data,
+            visible: common.visible,
+        };
+        dispatch_root("apply_line_series", &config);
     }
 }
 
@@ -1145,14 +1383,19 @@ impl PineBarSeries {
 
     // RFC-044 §5.10.5 — one watcher for the flattened `SeriesCommon`
     // leaves (`label` / `color` / `visible`).
-    #[watch(common)]
-    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
-        self.sync();
-    }
-
-    #[watch(data)]
-    fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, common, data)]
+    fn on_config_change(component_key: String, common: SeriesCommon, data: Vec<ChartBar>) {
+        let config = CartesianBarSeriesConfig {
+            key: component_key,
+            label: common.label.clone(),
+            color: color_or_current(&common.color),
+            data,
+            visible: common.visible,
+        };
+        dispatch_root("apply_bar_series", &config);
     }
 }
 
@@ -1209,24 +1452,27 @@ impl PineAreaSeries {
 
     // RFC-044 §5.10.5 — one watcher for the flattened `SeriesCommon`
     // leaves (`label` / `color` / `visible`).
-    #[watch(common)]
-    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
-        self.sync();
-    }
-
-    #[watch(fill)]
-    fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke_width)]
-    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(points)]
-    fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, common, fill, stroke_width, points)]
+    fn on_config_change(
+        component_key: String,
+        common: SeriesCommon,
+        fill: String,
+        stroke_width: f64,
+        points: Vec<ChartPoint>,
+    ) {
+        let config = CartesianAreaSeriesConfig {
+            key: component_key,
+            label: common.label.clone(),
+            fill: color_or_current(&fill),
+            color: color_or_current(&common.color),
+            stroke_width,
+            points,
+            visible: common.visible,
+        };
+        dispatch_root("apply_area_series", &config);
     }
 }
 
@@ -1282,19 +1528,25 @@ impl PineScatterSeries {
 
     // RFC-044 §5.10.5 — one watcher for the flattened `SeriesCommon`
     // leaves (`label` / `color` / `visible`).
-    #[watch(common)]
-    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
-        self.sync();
-    }
-
-    #[watch(point_radius)]
-    fn on_point_radius(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(points)]
-    fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, common, point_radius, points)]
+    fn on_config_change(
+        component_key: String,
+        common: SeriesCommon,
+        point_radius: f64,
+        points: Vec<ChartPoint>,
+    ) {
+        let config = CartesianScatterSeriesConfig {
+            key: component_key,
+            label: common.label.clone(),
+            color: color_or_current(&common.color),
+            point_radius,
+            points,
+            visible: common.visible,
+        };
+        dispatch_root("apply_scatter_series", &config);
     }
 }
 
@@ -1362,39 +1614,40 @@ impl PineCartesianReferenceLine {
         update_root(|root| root.remove_reference_line(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(x)]
-    fn on_x(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
-        self.sync();
-    }
-
-    #[watch(color)]
-    fn on_color(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke_width)]
-    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(stroke_dasharray)]
-    fn on_stroke_dasharray(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(layer)]
-    fn on_layer(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        component_key,
+        label,
+        x,
+        y,
+        color,
+        stroke_width,
+        stroke_dasharray,
+        layer
+    )]
+    fn on_config_change(
+        component_key: String,
+        label: String,
+        x: Option<f64>,
+        y: Option<f64>,
+        color: String,
+        stroke_width: f64,
+        stroke_dasharray: String,
+        layer: String,
+    ) {
+        let config = CartesianReferenceLineConfig {
+            key: component_key,
+            label,
+            x,
+            y,
+            color: color_or_current(&color),
+            stroke_width,
+            stroke_dasharray,
+            layer,
+        };
+        dispatch_root("apply_reference_line", &config);
     }
 }
 
@@ -1467,44 +1720,33 @@ impl PineCartesianReferenceDot {
         update_root(|root| root.remove_reference_dot(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(x)]
-    fn on_x(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(radius)]
-    fn on_radius(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(fill)]
-    fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke)]
-    fn on_stroke(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(stroke_width)]
-    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(layer)]
-    fn on_layer(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(component_key, label, x, y, radius, fill, stroke, stroke_width, layer)]
+    fn on_config_change(
+        component_key: String,
+        label: String,
+        x: f64,
+        y: f64,
+        radius: f64,
+        fill: String,
+        stroke: String,
+        stroke_width: f64,
+        layer: String,
+    ) {
+        let config = CartesianReferenceDotConfig {
+            key: component_key,
+            label,
+            x,
+            y,
+            radius,
+            fill: color_or_current(&fill),
+            stroke: color_or(&stroke, "none"),
+            stroke_width,
+            layer,
+        };
+        dispatch_root("apply_reference_dot", &config);
     }
 }
 
@@ -1581,49 +1823,46 @@ impl PineCartesianReferenceLabel {
         update_root(|root| root.remove_reference_label(&self.component_key));
     }
 
-    #[watch(text)]
-    fn on_text(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(x)]
-    fn on_x(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(y)]
-    fn on_y(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(dx)]
-    fn on_dx(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(dy)]
-    fn on_dy(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(angle)]
-    fn on_angle(&mut self, _: f64, _: Option<f64>) {
-        self.sync();
-    }
-
-    #[watch(fill)]
-    fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(text_anchor)]
-    fn on_text_anchor(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(font_weight)]
-    fn on_font_weight(&mut self, _: String, _: Option<String>) {
-        self.sync();
+    /// Submit this part's configuration to its owning chart action. Named
+    /// dispatch commits after watcher evaluation, before the next render.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        component_key,
+        text,
+        x,
+        y,
+        dx,
+        dy,
+        angle,
+        fill,
+        text_anchor,
+        font_weight
+    )]
+    fn on_config_change(
+        component_key: String,
+        text: String,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+        angle: f64,
+        fill: String,
+        text_anchor: String,
+        font_weight: String,
+    ) {
+        let config = CartesianReferenceLabelConfig {
+            key: component_key,
+            text,
+            x,
+            y,
+            dx,
+            dy,
+            angle,
+            fill: color_or_current(&fill),
+            text_anchor,
+            font_weight,
+        };
+        dispatch_root("apply_reference_label", &config);
     }
 }
 
@@ -2626,6 +2865,72 @@ fn reference_layer(value: &str, field: &'static str) -> ChartResult<&'static str
             field,
             value: value.into(),
         }),
+    }
+}
+
+/// Cross-component configuration is an explicit owning action. Scope::invoke
+/// queues named handlers during watcher evaluation, so child snapshots never
+/// borrow or mutate the parent while they are being evaluated.
+fn dispatch_root<T: Serialize>(action: &str, config: &T) {
+    let Some(root) = ROOT.inject().and_then(|root| Scope::find(root.scope_id())) else {
+        return;
+    };
+    let config = pocopine::__private::serde_wasm_bindgen::to_value(config)
+        .expect("chart configuration is serializable");
+    root.invoke(action, &js_sys::Array::of1(&config));
+}
+
+impl pocopine_core::FromHandlerArg for CartesianReferenceLabelConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianReferenceDotConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianReferenceLineConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianScatterSeriesConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianAreaSeriesConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianBarSeriesConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianLineSeriesConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianAxisConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
+    }
+}
+
+impl pocopine_core::FromHandlerArg for CartesianGridConfig {
+    fn from_handler_arg(value: wasm_bindgen::JsValue) -> Option<Self> {
+        pocopine::__private::serde_wasm_bindgen::from_value(value).ok()
     }
 }
 

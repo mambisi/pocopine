@@ -8,6 +8,15 @@ pub const CHART_HOVER_EVENT: &str = "pp:chart:hover";
 pub const CHART_HOVER_END_EVENT: &str = "pp:chart:hover-end";
 pub const LEGEND_TOGGLE_EVENT: &str = "pp:chart:legend-toggle";
 
+/// Geometry observers have no directive element. Bind the owning chart while
+/// shared render helpers emit selection/hover end events for removed data.
+pub(crate) fn with_chart_event_target<R>(f: impl FnOnce() -> R) -> R {
+    match pocopine::current_scope_id().and_then(pocopine_core::model_runtime::emit_target) {
+        Some(element) => pocopine_core::scope::with_current_el(&element, f),
+        None => f(),
+    }
+}
+
 const KIND_XY: &str = "xy";
 const KIND_CATEGORY: &str = "category";
 const KIND_SHARE: &str = "share";
