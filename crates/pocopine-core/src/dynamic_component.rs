@@ -3,7 +3,7 @@
 //! The template compiler already emits custom-element mount sites and
 //! child-host binding effects. `pp-component` reuses that ABI: the mount site
 //! installs a region on the sentinel host, while its compiled `:is` / prop
-//! bindings call [`set_binding`]. Router outlets call [`render`] directly with
+//! bindings call [`install_bindings`]. Router outlets call [`render`] directly with
 //! the matched component name and route params. Both paths therefore share
 //! component lookup, prop seeding, lifecycle teardown, keep-alive caching, and
 //! transition handling.
@@ -30,9 +30,45 @@ thread_local! {
 #[derive(Clone)]
 struct MountedComponent {
     name: &'static str,
+    key: ComponentKey,
     element: Element,
     scope_id: Option<ScopeId>,
 }
+
+/// Value identity, deliberately distinct from a child's ordinary `:key` prop.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+enum ComponentKey {
+    #[default]
+    None,
+    String(String),
+    Number(String),
+    Bool(bool),
+}
+
+impl ComponentKey {
+    fn from_value(value: &JsValue) -> Option<Self> {
+        if value.is_null() || value.is_undefined() {
+            Some(Self::None)
+        } else if let Some(value) = value.as_string() {
+            Some(Self::String(value))
+        } else if let Some(value) = value.as_bool() {
+            Some(Self::Bool(value))
+        } else {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .map(|value| {
+                    Self::Number(if value == 0.0 {
+                        "0".into()
+                    } else {
+                        value.to_string()
+                    })
+                })
+        }
+    }
+}
+
+type BindingEvaluator = (&'static str, Rc<dyn Fn(&JsValue) -> JsValue>);
 
 #[derive(Clone, Copy)]
 struct ErasedComponentRef {
@@ -45,7 +81,8 @@ struct Region {
     host: Element,
     expected_host: Option<String>,
     current: Option<MountedComponent>,
-    cache: HashMap<&'static str, MountedComponent>,
+    key: ComponentKey,
+    cache: HashMap<(&'static str, ComponentKey), MountedComponent>,
     leaving: HashMap<u64, MountedComponent>,
     next_leave_id: u64,
     props: HashMap<String, JsValue>,
@@ -84,74 +121,83 @@ pub(crate) fn configure_host(host: &Element, expected_host: &str) {
     ensure_region(host).borrow_mut().expected_host = Some(expected_host.to_owned());
 }
 
-/// Install one compiled binding on a `<pp-component>` host.
-///
-/// Non-`is` bindings are installed before `:is` by the template-plan helper,
-/// so the first child mount receives every authored prop during setup.
-pub(crate) fn install_binding(
+/// Install one effect for the region's selection, identity, and forwarded props.
+/// Evaluate every expression before mounting or updating a child; otherwise a
+/// key change can run setup with props from the preceding identity.
+pub(crate) fn install_bindings(
     host: &Element,
     parent_proxy: &JsValue,
-    arg: &'static str,
-    evaluator: Rc<dyn Fn(&JsValue) -> JsValue>,
+    bindings: Vec<BindingEvaluator>,
 ) {
     let owner = host.clone();
     let host = host.clone();
     let proxy = parent_proxy.clone();
     let id = effect(move || {
-        let value = evaluator(&proxy);
-        set_binding(&host, arg, value);
+        let values: Vec<_> = bindings
+            .iter()
+            .map(|(arg, eval)| (*arg, eval(&proxy)))
+            .collect();
+        crate::reactive::without_tracking(|| set_bindings(&host, values));
     });
     mount::track_effect_on(&owner, id);
 }
 
-/// Update one reactive `pp-component` binding while preserving its JsValue
-/// shape (objects/arrays are not stringified through a DOM attribute).
-pub(crate) fn set_binding(host: &Element, arg: &str, value: JsValue) {
+fn set_bindings(host: &Element, values: Vec<(&str, JsValue)>) {
     let region = ensure_region(host);
-    match arg {
-        "is" => match component_ref_from_value(&value) {
-            Ok(Some(selection)) => {
-                let expected_host = region.borrow().expected_host.clone();
-                if expected_host.as_deref() == Some(selection.host) {
-                    set_component(&region, Some(selection.name));
-                } else {
-                    web_sys::console::error_1(&JsValue::from_str(&format!(
-                        "pocopine: dynamic selection for host `{}` cannot be used by `<pp-component>` owned by `{}`; construct it with `ComponentRef::of::<Child>()` in a `ComponentRef<Host>` context for this host",
-                        selection.host,
-                        expected_host.as_deref().unwrap_or("<unknown>"),
-                    )));
-                    set_component(&region, None);
+    let mut selection = JsValue::UNDEFINED;
+    let mut key = Some(ComponentKey::None);
+    let mut changed_props = HashMap::new();
+    {
+        let mut state = region.borrow_mut();
+        for (arg, value) in values {
+            match arg {
+                "is" => selection = value,
+                "pp-key" => key = ComponentKey::from_value(&value),
+                "keep-alive" => state.keep_alive = binding_truthy(&value),
+                _ => {
+                    let prop = normalize_prop_name(arg);
+                    if state.props.get(&prop) != Some(&value) {
+                        changed_props.insert(prop.clone(), value.clone());
+                        state.props.insert(prop, value);
+                    }
                 }
             }
-            Ok(None) => {
-                set_component(&region, None);
-            }
-            Err(error) => {
+        }
+        if let Some(key) = &key {
+            state.key = key.clone();
+        }
+    }
+    if key.is_none() {
+        web_sys::console::error_1(&JsValue::from_str(
+            "pocopine: `<pp-component pp-key>` requires a string, finite number, boolean, or null; derive a stable scalar key for composite identities",
+        ));
+        set_component(&region, None);
+        return;
+    }
+    match component_ref_from_value(&selection) {
+        Ok(Some(selection)) => {
+            let expected_host = region.borrow().expected_host.clone();
+            if expected_host.as_deref() == Some(selection.host) {
+                set_component_with_props(&region, Some(selection.name), Some(&changed_props));
+            } else {
                 web_sys::console::error_1(&JsValue::from_str(&format!(
-                    "pocopine: `<pp-component :is>` requires `ComponentRef<Host>` or \
-                         `Option<ComponentRef<Host>>`; raw component-name strings are rejected. \
-                         Construct typed selections with \
-                         `ComponentRef::of::<Child>()` in a typed \
-                         `ComponentRef<Host>` context, or \
-                         validate external names with \
-                         `ComponentRef::<Host>::from_registered_name(...)`: {error}",
+                    "pocopine: dynamic selection for host `{}` cannot be used by `<pp-component>` owned by `{}`; construct it with `ComponentRef::of::<Child>()` in a `ComponentRef<Host>` context for this host",
+                    selection.host,
+                    expected_host.as_deref().unwrap_or("<unknown>"),
                 )));
                 set_component(&region, None);
             }
-        },
-        "keep-alive" => {
-            region.borrow_mut().keep_alive = binding_truthy(&value);
         }
-        _ => {
-            let key = normalize_prop_name(arg);
-            let current = {
-                let mut region = region.borrow_mut();
-                region.props.insert(key.clone(), value.clone());
-                region.current.clone()
-            };
-            if let Some(current) = current {
-                write_prop(&current, &key, &value);
-            }
+        Ok(None) => set_component(&region, None),
+        Err(error) => {
+            web_sys::console::error_1(&JsValue::from_str(&format!(
+                "pocopine: `<pp-component :is>` requires `ComponentRef<Host>` or \
+                 `Option<ComponentRef<Host>>`; raw component-name strings are rejected. \
+                 Construct typed selections with `ComponentRef::of::<Child>()` in a typed \
+                 `ComponentRef<Host>` context, or validate external names with \
+                 `ComponentRef::<Host>::from_registered_name(...)`: {error}",
+            )));
+            set_component(&region, None);
         }
     }
 }
@@ -168,6 +214,7 @@ pub(crate) fn render(
         let mut region = region.borrow_mut();
         region.keep_alive = host.has_attribute("keep-alive");
         region.props = props.clone();
+        region.key = ComponentKey::None;
     }
     set_component(&region, component_name);
     current_info_for(&region)
@@ -241,6 +288,7 @@ fn ensure_region(host: &Element) -> Rc<RefCell<Region>> {
         host: host.clone(),
         expected_host: None,
         current: None,
+        key: ComponentKey::None,
         cache: HashMap::new(),
         leaving: HashMap::new(),
         next_leave_id: 1,
@@ -271,6 +319,14 @@ fn region_id(host: &Element) -> Option<u64> {
 }
 
 fn set_component(region: &Rc<RefCell<Region>>, requested: Option<&str>) {
+    set_component_with_props(region, requested, None);
+}
+
+fn set_component_with_props(
+    region: &Rc<RefCell<Region>>,
+    requested: Option<&str>,
+    changed_props: Option<&HashMap<String, JsValue>>,
+) {
     let canonical = requested
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -288,19 +344,24 @@ fn set_component(region: &Rc<RefCell<Region>>, requested: Option<&str>) {
 
     let (outgoing, incoming) = {
         let mut state = region.borrow_mut();
-        if state.current.as_ref().map(|mounted| mounted.name) == canonical {
+        if state
+            .current
+            .as_ref()
+            .map(|mounted| (mounted.name, &mounted.key))
+            == canonical.map(|name| (name, &state.key))
+        {
             if let Some(current) = state.current.as_ref() {
-                apply_props(current, &state.props);
+                apply_props(current, changed_props.unwrap_or(&state.props));
             }
             return;
         }
 
         let outgoing = state.current.take().map(|mounted| {
             if state.keep_alive {
-                let name = mounted.name;
+                let identity = (mounted.name, mounted.key.clone());
                 let element = mounted.element.clone();
-                state.cache.insert(name, mounted);
-                Outgoing::Cached { name, element }
+                state.cache.insert(identity.clone(), mounted);
+                Outgoing::Cached { identity, element }
             } else {
                 let leave_id = state.next_leave_id;
                 state.next_leave_id = state.next_leave_id.wrapping_add(1).max(1);
@@ -311,9 +372,10 @@ fn set_component(region: &Rc<RefCell<Region>>, requested: Option<&str>) {
         });
 
         let incoming = canonical.and_then(|name| {
-            let mounted = match state.cache.remove(name) {
+            let identity = (name, state.key.clone());
+            let mounted = match state.cache.remove(&identity) {
                 Some(cached) => cached,
-                None => mount_new(&state.host, name, &state.props)?,
+                None => mount_new(&state.host, name, state.key.clone(), &state.props)?,
             };
             apply_props(&mounted, &state.props);
             let element = mounted.element.clone();
@@ -335,7 +397,7 @@ fn set_component(region: &Rc<RefCell<Region>>, requested: Option<&str>) {
 
 enum Outgoing {
     Cached {
-        name: &'static str,
+        identity: (&'static str, ComponentKey),
         element: Element,
     },
     Remove {
@@ -346,7 +408,7 @@ enum Outgoing {
 
 fn start_leave(region: &Rc<RefCell<Region>>, outgoing: Outgoing) {
     match outgoing {
-        Outgoing::Cached { name, element } => {
+        Outgoing::Cached { identity, element } => {
             let region_id = region.borrow().id;
             let element_for_done = element.clone();
             crate::directives::transition::leave(&element, move || {
@@ -357,8 +419,12 @@ fn start_leave(region: &Rc<RefCell<Region>>, outgoing: Outgoing) {
                 };
                 let should_hide = {
                     let state = region.borrow();
-                    state.current.as_ref().map(|current| current.name) != Some(name)
-                        && state.cache.contains_key(name)
+                    state
+                        .current
+                        .as_ref()
+                        .map(|current| (current.name, &current.key))
+                        != Some((identity.0, &identity.1))
+                        && state.cache.contains_key(&identity)
                 };
                 if should_hide {
                     let _ = element_for_done.set_attribute("hidden", "");
@@ -390,6 +456,7 @@ fn finish_remove(region_id: u64, leave_id: u64) {
 fn mount_new(
     host: &Element,
     name: &'static str,
+    key: ComponentKey,
     props: &HashMap<String, JsValue>,
 ) -> Option<MountedComponent> {
     let doc = host.owner_document()?;
@@ -403,6 +470,7 @@ fn mount_new(
     mount::finalize_compiled_subtree(&element);
     Some(MountedComponent {
         name,
+        key,
         scope_id: mount::host_child_scope_id_of(&element),
         element,
     })

@@ -102,9 +102,31 @@ remounting it.
 The values stay as `JsValue`s through the forwarding path; objects and arrays
 are not reduced to display strings.
 
+## Component instance identity
+
+Use `pp-key` when changing an input should create a fresh instance of the same
+component type, for example when an editor switches to another account:
+
+```html
+<pp-component :is="active" pp-key="account_id" :account-id="account_id"></pp-component>
+```
+
+The instance identity is the selected component type plus the key. Keeping both
+the same updates props while preserving local state. Changing either mounts a
+new instance with the complete current prop set available in `on_setup`, and
+releases the outgoing instance through normal transition and unmount cleanup.
+Scope-owned tasks are cancelled when that instance unmounts.
+
+Keys may be strings, finite numbers, booleans, or null. Number `1` and string
+`"1"` are distinct; null (or an omitted key) uses the default identity. For a
+composite identity, derive one stable scalar key in Rust. Objects and arrays
+are rejected. `pp-key` is region metadata, while `:key` remains an ordinary
+forwarded child prop. A one-item `Vec` and `pp-for` are unnecessary for this
+single-component lifetime. On lists, keep using `pp-for` with its existing key.
+
 ## Preserving state
 
-Add `keep-alive` to cache each selected component by its canonical identity:
+Add `keep-alive` to cache each selected component by its type and `pp-key` (if supplied):
 
 ```html
 <pp-component :is="active" keep-alive></pp-component>
