@@ -12,7 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use js_sys::{JSON, Reflect};
+use js_sys::Reflect;
 use wasm_bindgen::JsValue;
 use web_sys::Element;
 
@@ -37,7 +37,7 @@ struct MountedComponent {
 
 /// Value identity, deliberately distinct from a child's ordinary `:key` prop.
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
-enum ComponentKey {
+pub(crate) enum ComponentKey {
     #[default]
     None,
     String(String),
@@ -46,7 +46,7 @@ enum ComponentKey {
 }
 
 impl ComponentKey {
-    fn from_value(value: &JsValue) -> Option<Self> {
+    pub(crate) fn from_value(value: &JsValue) -> Option<Self> {
         if value.is_null() || value.is_undefined() {
             Some(Self::None)
         } else if let Some(value) = value.as_string() {
@@ -462,11 +462,8 @@ fn mount_new(
     let doc = host.owner_document()?;
     let element = doc.create_element(name).ok()?;
     copy_forwarded_attributes(host, &element);
-    for (key, value) in props {
-        set_initial_prop_attribute(&element, key, value);
-    }
     host.append_child(element.as_ref()).ok()?;
-    mount::mount_child_component(&element, name);
+    mount::mount_child_component_seeded(&element, name, None, props);
     mount::finalize_compiled_subtree(&element);
     Some(MountedComponent {
         name,
@@ -491,26 +488,6 @@ fn copy_forwarded_attributes(host: &Element, child: &Element) {
         }
         let _ = child.set_attribute(&name, &attr.value());
     }
-}
-
-fn set_initial_prop_attribute(child: &Element, key: &str, value: &JsValue) {
-    if value.is_null() || value.is_undefined() {
-        let _ = child.remove_attribute(key);
-        return;
-    }
-    let serialized = if let Some(value) = value.as_string() {
-        value
-    } else if let Some(value) = value.as_f64() {
-        value.to_string()
-    } else if let Some(value) = value.as_bool() {
-        value.to_string()
-    } else {
-        JSON::stringify(value)
-            .ok()
-            .and_then(|value| value.as_string())
-            .unwrap_or_default()
-    };
-    let _ = child.set_attribute(key, &serialized);
 }
 
 fn apply_props(mounted: &MountedComponent, props: &HashMap<String, JsValue>) {

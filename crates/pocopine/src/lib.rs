@@ -198,10 +198,10 @@ pub mod __private {
     // and registers it via `register_template_plan` alongside the
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{
-        CondBranch, IfBodyFn, MatchCase, StaticChildHostBinding, StaticChildHostListener,
-        StaticChildHostModel, StaticChildHostShow, StaticChildMount, StaticCondPlan, StaticForPlan,
-        StaticInterp, StaticMatchPlan, StaticNativeModel, StaticOpaqueDirective, StaticRef,
-        StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
+        CondBranch, IfBodyFn, MatchCase, StaticChildHostBinding, StaticChildHostKey,
+        StaticChildHostListener, StaticChildHostModel, StaticChildHostShow, StaticChildMount,
+        StaticCondPlan, StaticForPlan, StaticInterp, StaticMatchPlan, StaticNativeModel,
+        StaticOpaqueDirective, StaticRef, StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::directives::interp::PlannedSegment;
     // RFC-116 — `poco!` expands to a `PocoTemplate::__new(...)` call through

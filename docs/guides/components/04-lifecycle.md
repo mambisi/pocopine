@@ -49,6 +49,11 @@ Runs once, before the template is walked. The rendered DOM doesn't exist
 yet, so this is for **state**, not the DOM: seed fields that other fields
 or the template derive from.
 
+For a form whose whole editing lifetime belongs to a record, put
+`pp-key="record_id"` on its component tag. Changing the key creates a new
+instance, seeds current bound props before setup, and runs normal cleanup on
+the outgoing instance. See [component instance identity](./07-dynamic-components.md#component-instance-identity).
+
 ```rust
 #[handlers]
 impl Counter {

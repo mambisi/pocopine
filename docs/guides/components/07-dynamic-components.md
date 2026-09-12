@@ -1,6 +1,6 @@
 ---
 title: "Dynamic components"
-description: "Select a registered component reactively with a typed ComponentRef, forward props, preserve instances, and handle data-driven component names."
+description: "Select components with a typed ComponentRef, key static or dynamic component instances, forward props, and preserve state."
 ---
 
 # Dynamic components
@@ -104,8 +104,21 @@ are not reduced to display strings.
 
 ## Component instance identity
 
-Use `pp-key` when changing an input should create a fresh instance of the same
-component type, for example when an editor switches to another account:
+Use `pp-key` on an ordinary component tag when changing an input should create
+a fresh instance, for example when an editor switches to another account:
+
+```html
+<account-editor pp-key="account_id" :account-id="account_id"></account-editor>
+```
+
+Declare `AccountEditor` in the parent's `uses` as usual. The type is already
+known from the tag, so no computed selector, `ComponentRef`, or one-item list is
+needed. The replacement receives current bound props and model values before
+`on_setup`; slots, event handlers, model bindings, and `pp-ref` attach to the
+replacement host. The rendered component stays a direct child of its authored
+parent, without a dynamic-component wrapper.
+
+When the type itself can change, use the same key on `<pp-component>`:
 
 ```html
 <pp-component :is="active" pp-key="account_id" :account-id="account_id"></pp-component>
@@ -117,16 +130,21 @@ new instance with the complete current prop set available in `on_setup`, and
 releases the outgoing instance through normal transition and unmount cleanup.
 Scope-owned tasks are cancelled when that instance unmounts.
 
+Choose a key when the entire editing session belongs to the input identity.
+For updates within the same session, retain the key and use ordinary prop
+bindings, computed values, and watchers. Keys do not replace that state flow.
+
 Keys may be strings, finite numbers, booleans, or null. Number `1` and string
 `"1"` are distinct; null (or an omitted key) uses the default identity. For a
 composite identity, derive one stable scalar key in Rust. Objects and arrays
-are rejected. `pp-key` is region metadata, while `:key` remains an ordinary
-forwarded child prop. A one-item `Vec` and `pp-for` are unnecessary for this
-single-component lifetime. On lists, keep using `pp-for` with its existing key.
+are rejected. `pp-key` is lifetime metadata, while `:key` remains an ordinary
+forwarded child prop. On lists, keep using `pp-for` with its existing key.
+Native HTML elements do not gain keyed replacement behavior from `pp-key`.
 
 ## Preserving state
 
-Add `keep-alive` to cache each selected component by its type and `pp-key` (if supplied):
+On `<pp-component>`, add `keep-alive` to cache each selected component by its
+type and `pp-key` (if supplied):
 
 ```html
 <pp-component :is="active" keep-alive></pp-component>

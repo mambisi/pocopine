@@ -1941,11 +1941,14 @@ fn run_keyed(
                 .parent_node()
                 .map(|p| p.is_same_node(Some(parent_node_ref)))
                 .unwrap_or(false);
-            let expected_next: &Node = if i + 1 < fresh.len() {
-                fresh[i + 1].element.as_ref()
-            } else {
-                &anchor
-            };
+            let next_root = fresh.get(i + 1).map(|entry| {
+                if row_plan.is_none() {
+                    crate::keyed_component::first_node(&entry.element)
+                } else {
+                    entry.element.clone().into()
+                }
+            });
+            let expected_next = next_root.as_ref().unwrap_or(&anchor);
             let correct_next = next_non_leaving(entry.element.next_sibling())
                 .map(|n| n.is_same_node(Some(expected_next)))
                 .unwrap_or(false);
@@ -2000,11 +2003,14 @@ fn run_keyed(
                             .parent_node()
                             .map(|p| p.is_same_node(Some(parent_node_ref)))
                             .unwrap_or(false);
-                        let expected_next: &Node = if i + 1 < fresh.len() {
-                            fresh[i + 1].element.as_ref()
-                        } else {
-                            &anchor
-                        };
+                        let next_root = fresh.get(i + 1).map(|entry| {
+                            if row_plan.is_none() {
+                                crate::keyed_component::first_node(&entry.element)
+                            } else {
+                                entry.element.clone().into()
+                            }
+                        });
+                        let expected_next = next_root.as_ref().unwrap_or(&anchor);
                         let correct_next = next_non_leaving(entry.element.next_sibling())
                             .map(|n| n.is_same_node(Some(expected_next)))
                             .unwrap_or(false);
@@ -2058,18 +2064,29 @@ fn run_keyed(
                         .parent_node()
                         .map(|p| p.is_same_node(Some(parent_node_ref)))
                         .unwrap_or(false);
-                    let insert_anchor: &Node = if i + 1 < fresh.len() {
-                        fresh[i + 1].element.as_ref()
-                    } else {
-                        &anchor
-                    };
+                    let next_root = fresh.get(i + 1).map(|entry| {
+                        if row_plan.is_none() {
+                            crate::keyed_component::first_node(&entry.element)
+                        } else {
+                            entry.element.clone().into()
+                        }
+                    });
+                    let insert_anchor = next_root.as_ref().unwrap_or(&anchor);
                     let already_here = was_in_place
                         && next_non_leaving(entry.element.next_sibling())
                             .map(|n| n.is_same_node(Some(insert_anchor)))
                             .unwrap_or(false);
                     if !already_here {
-                        let _ =
-                            parent_node.insert_before(entry.element.as_ref(), Some(insert_anchor));
+                        if row_plan.is_none() {
+                            let _ = crate::keyed_component::insert_before(
+                                &parent_node,
+                                &entry.element,
+                                insert_anchor,
+                            );
+                        } else {
+                            let _ = parent_node
+                                .insert_before(entry.element.as_ref(), Some(insert_anchor));
+                        }
                     }
                     if !was_in_place {
                         new_indices.push(i);

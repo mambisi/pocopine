@@ -168,6 +168,17 @@ pub struct StaticChildMount {
     pub bindings: &'static [StaticChildHostBinding],
     pub listeners: &'static [StaticChildHostListener],
     pub models: &'static [StaticChildHostModel],
+    /// Instance identity on a statically selected component. The cleaned HTML
+    /// stores its prototype in a template; the controller mounts one copy.
+    pub key: Option<StaticChildHostKey>,
+}
+
+#[doc(hidden)]
+pub struct StaticChildHostKey {
+    pub expr_src: &'static str,
+    pub compiled: Option<&'static expr::StaticExpr>,
+    /// This ref belongs to each live replacement, not the inert prototype.
+    pub ref_name: Option<&'static str>,
 }
 
 /// Parent-scope `pp-show` planned on a child-component host. Installed after
