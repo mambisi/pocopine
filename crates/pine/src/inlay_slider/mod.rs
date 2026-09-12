@@ -110,19 +110,9 @@ impl PineInlaySliderRoot {
         ROOT.provide(this::<Self>());
     }
 
-    #[watch(value)]
-    fn on_value(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_percent();
-    }
-
-    #[watch(min)]
-    fn on_min(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_percent();
-    }
-
-    #[watch(max)]
-    fn on_max(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_percent();
+    #[watch(value, min, max)]
+    fn on_range_change(value: f64, min: f64, max: f64) -> Update<Self, (Self::Percent,)> {
+        Update::new().percent(value_percent(value, min, max))
     }
 
     fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
@@ -168,9 +158,7 @@ impl PineInlaySliderRoot {
 
 impl PineInlaySliderRoot {
     fn recompute_percent(&mut self) {
-        let span = (self.max - self.min).max(f64::EPSILON);
-        let pct = ((self.value - self.min) / span) * 100.0;
-        self.percent = pct.clamp(0.0, 100.0);
+        self.percent = value_percent(self.value, self.min, self.max);
     }
 
     /// Clamp + snap to the nearest `step` and commit.
@@ -193,6 +181,11 @@ impl PineInlaySliderRoot {
 }
 
 // ── geometry ──────────────────────────────────────────────────────
+
+fn value_percent(value: f64, min: f64, max: f64) -> f64 {
+    let span = (max - min).max(f64::EPSILON);
+    (((value - min) / span) * 100.0).clamp(0.0, 100.0)
+}
 
 /// Parse a CSS length like `"4px"` to its numeric value.
 fn px(v: &str) -> f64 {

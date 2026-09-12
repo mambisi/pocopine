@@ -70,13 +70,16 @@ pub struct StorageBrowserStore {
     pub pending_search_query: String,
 
     pub modal_open: bool,
+    pub modal_session: u64,
     pub config_modal_open: bool,
+    pub config_modal_session: u64,
 
     pub upload_dock_open: bool,
     pub upload_dock_expanded: bool,
     pub upload_metadata: BTreeMap<String, String>,
 
     pub new_folder_open: bool,
+    pub new_folder_session: u64,
 
     pub detail_open: bool,
     pub detail_loading: bool,
@@ -146,13 +149,16 @@ impl Default for StorageBrowserStore {
             pending_search_query: String::new(),
 
             modal_open: false,
+            modal_session: 0,
             config_modal_open: false,
+            config_modal_session: 0,
 
             upload_dock_open: false,
             upload_dock_expanded: false,
             upload_metadata: BTreeMap::new(),
 
             new_folder_open: false,
+            new_folder_session: 0,
 
             detail_open: false,
             detail_loading: false,
@@ -167,6 +173,32 @@ impl Default for StorageBrowserStore {
 
 #[handlers]
 impl StorageBrowserStore {
+    // Keep the closed session mounted so Pine can finish its exit transition.
+    // Opening actions replace its key to initialize a fresh draft on mount.
+    #[computed]
+    fn connection_dialog_sessions(modal_session: u64) -> Vec<u64> {
+        (modal_session != 0)
+            .then_some(modal_session)
+            .into_iter()
+            .collect()
+    }
+
+    #[computed]
+    fn config_dialog_sessions(config_modal_session: u64) -> Vec<u64> {
+        (config_modal_session != 0)
+            .then_some(config_modal_session)
+            .into_iter()
+            .collect()
+    }
+
+    #[computed]
+    fn new_folder_sessions(new_folder_session: u64) -> Vec<u64> {
+        (new_folder_session != 0)
+            .then_some(new_folder_session)
+            .into_iter()
+            .collect()
+    }
+
     pub fn sync_route(&mut self, connection_id: String, prefix: String) {
         let prefix = normalize_prefix_value(&prefix);
         if !connection_id.is_empty()
@@ -236,6 +268,9 @@ impl StorageBrowserStore {
     }
 
     pub fn edit_connection(&mut self, connection_id: String) {
+        if !self.modal_open || self.modal_connection_id != connection_id {
+            self.modal_session = self.modal_session.wrapping_add(1).max(1);
+        }
         self.modal_connection_id = connection_id;
         self.modal_open = true;
     }
@@ -334,6 +369,9 @@ impl StorageBrowserStore {
     }
 
     pub fn open_connection_modal(&mut self) {
+        if !self.modal_open || !self.modal_connection_id.is_empty() {
+            self.modal_session = self.modal_session.wrapping_add(1).max(1);
+        }
         self.modal_connection_id.clear();
         self.modal_open = true;
     }
@@ -344,6 +382,9 @@ impl StorageBrowserStore {
     }
 
     pub fn open_config_dialog(&mut self) {
+        if !self.config_modal_open {
+            self.config_modal_session = self.config_modal_session.wrapping_add(1).max(1);
+        }
         self.config_modal_open = true;
     }
 
@@ -409,6 +450,9 @@ impl StorageBrowserStore {
         if self.selected_connection_id.is_empty() {
             self.error = "select a storage connection before creating a folder".to_string();
             return;
+        }
+        if !self.new_folder_open {
+            self.new_folder_session = self.new_folder_session.wrapping_add(1).max(1);
         }
         self.new_folder_open = true;
     }

@@ -889,8 +889,8 @@ impl PineDropdownMenuCheckboxItem {
     /// Mirror `state` → `checked` reactively so any nested
     /// ItemIndicator's pp-if re-evaluates on state changes.
     #[watch(state)]
-    fn on_state_change(&mut self, state: String, _prev: Option<String>) {
-        self.checked = state != "unchecked";
+    fn on_state_change(state: &str) -> Update<Self, (Self::Checked,)> {
+        Update::new().checked(state != "unchecked")
     }
 
     pub fn on_select(&mut self) {

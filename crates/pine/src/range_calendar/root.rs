@@ -97,43 +97,63 @@ impl PineRangeCalendarRoot {
         self.reflow();
     }
 
-    #[watch(start)]
-    fn on_start_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(end)]
-    fn on_end_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(placeholder)]
-    fn on_placeholder_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(min_value)]
-    fn on_min_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(max_value)]
-    fn on_max_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(fixed_weeks)]
-    fn on_fixed_change(&mut self, _new: bool, _prev: Option<bool>) {
-        self.reflow();
-    }
-    #[watch(number_of_months)]
-    fn on_months_change(&mut self, _new: u32, _prev: Option<u32>) {
-        self.reflow();
-    }
-    #[watch(week_starts_on)]
-    fn on_week_starts_change(&mut self, _new: u32, _prev: Option<u32>) {
-        self.reflow();
-    }
-    #[watch(focused)]
-    fn on_focused_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        // Focus changes don't rebuild the grid — only the preview
-        // flags on the cells. Cheap enough to re-run reflow().
-        self.reflow();
+    #[allow(clippy::too_many_arguments)]
+    #[watch(
+        placeholder,
+        start,
+        week_starts_on,
+        end,
+        focused,
+        min_value,
+        max_value,
+        fixed_weeks,
+        number_of_months,
+        paged_navigation,
+        disabled
+    )]
+    fn on_view_change(
+        placeholder: Option<DateValue>,
+        start: Option<DateValue>,
+        week_starts_on: u32,
+        end: Option<DateValue>,
+        focused: Option<DateValue>,
+        min_value: Option<DateValue>,
+        max_value: Option<DateValue>,
+        fixed_weeks: bool,
+        number_of_months: u32,
+        paged_navigation: bool,
+        disabled: bool,
+    ) -> Update<
+        Self,
+        (
+            Self::Heading,
+            Self::Weekdays,
+            Self::PrevDisabled,
+            Self::NextDisabled,
+            Self::Invalid,
+            Self::Cells,
+        ),
+    > {
+        let state = state_from_inputs(
+            placeholder,
+            start,
+            week_starts_on,
+            end,
+            focused,
+            min_value,
+            max_value,
+            fixed_weeks,
+            number_of_months,
+            paged_navigation,
+            disabled,
+        );
+        Update::new()
+            .heading(format_heading(&state))
+            .weekdays(weekday_labels(week_starts_on.min(6) as u8))
+            .prev_disabled(state.cal.is_prev_button_disabled())
+            .next_disabled(state.cal.is_next_button_disabled())
+            .invalid(state.is_invalid())
+            .cells(build_cells(&state))
     }
 
     pub fn next_page(&mut self) {
@@ -205,22 +225,19 @@ impl PineRangeCalendarRoot {
 
 impl PineRangeCalendarRoot {
     fn build_state(&self) -> RangeCalendarState {
-        let placeholder = self
-            .placeholder
-            .or(self.start)
-            .unwrap_or_else(fallback_today);
-        let week_starts_on = self.week_starts_on.min(6) as u8;
-        RangeCalendarState::new(placeholder)
-            .with_start(self.start)
-            .with_end(self.end)
-            .with_focused(self.focused)
-            .with_min(self.min_value)
-            .with_max(self.max_value)
-            .with_fixed_weeks(self.fixed_weeks)
-            .with_number_of_months(self.number_of_months.max(1))
-            .with_week_starts_on(week_starts_on)
-            .with_paged_navigation(self.paged_navigation)
-            .with_disabled(self.disabled)
+        state_from_inputs(
+            self.placeholder,
+            self.start,
+            self.week_starts_on,
+            self.end,
+            self.focused,
+            self.min_value,
+            self.max_value,
+            self.fixed_weeks,
+            self.number_of_months,
+            self.paged_navigation,
+            self.disabled,
+        )
     }
 
     fn reflow(&mut self) {
@@ -324,4 +341,33 @@ fn fallback_today() -> DateValue {
         }
     }
     DateValue::new(1970, 1, 1).expect("epoch")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn state_from_inputs(
+    placeholder: Option<DateValue>,
+    start: Option<DateValue>,
+    week_starts_on: u32,
+    end: Option<DateValue>,
+    focused: Option<DateValue>,
+    min_value: Option<DateValue>,
+    max_value: Option<DateValue>,
+    fixed_weeks: bool,
+    number_of_months: u32,
+    paged_navigation: bool,
+    disabled: bool,
+) -> RangeCalendarState {
+    let anchor = placeholder.or(start).unwrap_or_else(fallback_today);
+    let week_starts_on = week_starts_on.min(6) as u8;
+    RangeCalendarState::new(anchor)
+        .with_start(start)
+        .with_end(end)
+        .with_focused(focused)
+        .with_min(min_value)
+        .with_max(max_value)
+        .with_fixed_weeks(fixed_weeks)
+        .with_number_of_months(number_of_months.max(1))
+        .with_week_starts_on(week_starts_on)
+        .with_paged_navigation(paged_navigation)
+        .with_disabled(disabled)
 }

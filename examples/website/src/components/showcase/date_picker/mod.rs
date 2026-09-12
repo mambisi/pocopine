@@ -64,20 +64,14 @@ impl DatePickerDemo {
         }
     }
 
-    /// Fires whenever the calendar writes back through
-    /// `pp-model:value`. Used for the close-on-select behavior
-    /// plus keeping the trigger label in sync.
+    /// Selection is editable state; closing the popover is a separate transition.
     #[watch(value)]
-    fn on_value_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
-        // Ignore the no-op initial flow — only close when the
-        // user actually picked a non-empty date.
-        if new.is_none() {
-            return;
+    fn on_value_change(value: Change<Option<DateValue>>) -> Update<Self, (Self::Open,)> {
+        if value.current.is_some() && value.changed() {
+            Update::new().open(false)
+        } else {
+            Update::new()
         }
-        if prev == Some(new) {
-            return;
-        }
-        self.open = false;
     }
 
     pub fn clear(&mut self) {

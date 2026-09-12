@@ -80,7 +80,7 @@ impl PineText {
         // Apply the clamp style synchronously — the scope is live
         // in on_ready. Measurement defers because `handle.update`
         // inside on_ready is the RefCell double-borrow trap.
-        let Some(html_el) = self.resolve_root() else {
+        let Some(html_el) = Self::resolve_root() else {
             return;
         };
         apply_clamp_style(&html_el, self.lines);
@@ -91,32 +91,26 @@ impl PineText {
         });
     }
 
-    #[watch(lines)]
-    fn on_lines_change(&mut self, new: u32, _prev: Option<u32>) {
-        let Some(html_el) = self.resolve_root() else {
+    #[watch(lines, max_width, line_height)]
+    fn on_layout_change(lines: u32, max_width: f64, line_height: f64) {
+        // Measurement runs after DOM layout and reads the latest constraints.
+        let _ = (max_width, line_height);
+        let Some(html_el) = Self::resolve_root() else {
             return;
         };
-        apply_clamp_style(&html_el, new);
-        self.schedule_measure(html_el);
-    }
-
-    #[watch(max_width)]
-    fn on_max_width_change(&mut self, _new: f64, _prev: Option<f64>) {
-        let Some(html_el) = self.resolve_root() else {
-            return;
-        };
-        self.schedule_measure(html_el);
+        apply_clamp_style(&html_el, lines);
+        Self::schedule_measure(html_el);
     }
 }
 
 impl PineText {
-    fn resolve_root(&self) -> Option<HtmlElement> {
+    fn resolve_root() -> Option<HtmlElement> {
         let scope = current_scope_id()?;
         let el = refs::get_on(scope, "root")?;
         el.dyn_into::<HtmlElement>().ok()
     }
 
-    fn schedule_measure(&self, html_el: HtmlElement) {
+    fn schedule_measure(html_el: HtmlElement) {
         let handle = this::<Self>();
         tick::next(move || {
             handle.update(|s| s.measure_now(&html_el));

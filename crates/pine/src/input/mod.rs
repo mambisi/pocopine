@@ -119,20 +119,21 @@ impl PineInput {
     /// Guarded so round-tripping a user keystroke doesn't
     /// clobber cursor position.
     #[watch(value)]
-    fn on_value_change(&mut self, value: String, _prev: Option<String>) {
+    fn on_value_change(value: &str) -> Update<Self, (Self::Filled,)> {
+        let update = Update::new().filled(!value.is_empty());
         let Some(scope) = current_scope_id() else {
-            return;
+            return update;
         };
         let Some(el) = refs::get_on(scope, "root") else {
-            return;
+            return update;
         };
         let Ok(input) = el.dyn_into::<HtmlInputElement>() else {
-            return;
+            return update;
         };
         if input.value() != value {
-            input.set_value(&value);
+            input.set_value(value);
         }
-        self.filled = !value.is_empty();
+        update
     }
 
     pub fn on_focus(&mut self) {

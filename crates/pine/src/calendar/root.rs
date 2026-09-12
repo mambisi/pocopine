@@ -153,33 +153,71 @@ impl PineCalendarRoot {
         self.reflow();
     }
 
-    #[watch(placeholder)]
-    fn on_placeholder_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(value)]
-    fn on_value_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(min_value)]
-    fn on_min_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(max_value)]
-    fn on_max_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.reflow();
-    }
-    #[watch(fixed_weeks)]
-    fn on_fixed_weeks_change(&mut self, _new: bool, _prev: Option<bool>) {
-        self.reflow();
-    }
-    #[watch(number_of_months)]
-    fn on_months_change(&mut self, _new: u32, _prev: Option<u32>) {
-        self.reflow();
-    }
-    #[watch(week_starts_on)]
-    fn on_week_starts_on_change(&mut self, _new: u32, _prev: Option<u32>) {
-        self.reflow();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        placeholder,
+        value,
+        week_starts_on,
+        min_value,
+        max_value,
+        fixed_weeks,
+        number_of_months,
+        paged_navigation,
+        prevent_deselect,
+        disabled
+    )]
+    fn on_view_change(
+        placeholder: Option<DateValue>,
+        value: Option<DateValue>,
+        week_starts_on: u32,
+        min_value: Option<DateValue>,
+        max_value: Option<DateValue>,
+        fixed_weeks: bool,
+        number_of_months: u32,
+        paged_navigation: bool,
+        prevent_deselect: bool,
+        disabled: bool,
+    ) -> Update<
+        Self,
+        (
+            Self::Heading,
+            Self::Weekdays,
+            Self::PrevDisabled,
+            Self::NextDisabled,
+            Self::Invalid,
+            Self::Cells,
+            Self::Months,
+        ),
+    > {
+        let state = state_from_inputs(
+            placeholder,
+            value,
+            week_starts_on,
+            min_value,
+            max_value,
+            fixed_weeks,
+            number_of_months,
+            paged_navigation,
+            prevent_deselect,
+            disabled,
+        );
+        let months = build_months(&state);
+        let cells = months
+            .iter()
+            .flat_map(|month| month.weeks.iter().flatten().cloned())
+            .collect();
+        Update::new()
+            .heading(format_heading(&state))
+            .weekdays(weekday_labels(week_starts_on.min(6) as u8))
+            .prev_disabled(state.is_prev_button_disabled())
+            .next_disabled(state.is_next_button_disabled())
+            .invalid(
+                state
+                    .selected
+                    .is_some_and(|date| state.is_date_out_of_bounds(&date)),
+            )
+            .cells(cells)
+            .months(months)
     }
 
     /// Advance one page forward.
@@ -230,21 +268,18 @@ impl PineCalendarRoot {
     /// enough to rebuild in every handler — the grid construction
     /// is O(months × 42) scalar ops.
     fn build_state(&self) -> CalendarState {
-        let placeholder = self
-            .placeholder
-            .or(self.value)
-            .unwrap_or_else(fallback_today);
-        let week_starts_on = (self.week_starts_on.min(6)) as u8;
-        CalendarState::new(placeholder)
-            .with_selected(self.value)
-            .with_min(self.min_value)
-            .with_max(self.max_value)
-            .with_fixed_weeks(self.fixed_weeks)
-            .with_number_of_months(self.number_of_months.max(1))
-            .with_week_starts_on(week_starts_on)
-            .with_paged_navigation(self.paged_navigation)
-            .with_prevent_deselect(self.prevent_deselect)
-            .with_disabled(self.disabled)
+        state_from_inputs(
+            self.placeholder,
+            self.value,
+            self.week_starts_on,
+            self.min_value,
+            self.max_value,
+            self.fixed_weeks,
+            self.number_of_months,
+            self.paged_navigation,
+            self.prevent_deselect,
+            self.disabled,
+        )
     }
 
     /// Re-derive every view-model field (heading, months,
@@ -381,4 +416,31 @@ fn fallback_today() -> DateValue {
         }
     }
     DateValue::new(1970, 1, 1).expect("epoch")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn state_from_inputs(
+    placeholder: Option<DateValue>,
+    value: Option<DateValue>,
+    week_starts_on: u32,
+    min_value: Option<DateValue>,
+    max_value: Option<DateValue>,
+    fixed_weeks: bool,
+    number_of_months: u32,
+    paged_navigation: bool,
+    prevent_deselect: bool,
+    disabled: bool,
+) -> CalendarState {
+    let anchor = placeholder.or(value).unwrap_or_else(fallback_today);
+    let week_starts_on = (week_starts_on.min(6)) as u8;
+    CalendarState::new(anchor)
+        .with_selected(value)
+        .with_min(min_value)
+        .with_max(max_value)
+        .with_fixed_weeks(fixed_weeks)
+        .with_number_of_months(number_of_months.max(1))
+        .with_week_starts_on(week_starts_on)
+        .with_paged_navigation(paged_navigation)
+        .with_prevent_deselect(prevent_deselect)
+        .with_disabled(disabled)
 }

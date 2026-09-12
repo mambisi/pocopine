@@ -7,7 +7,7 @@
     <span class="hidden shrink-0 rounded border border-line bg-surface px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-normal text-ink-50 sm:inline">Cmd K</span>
   </button>
 
-  <pine-command-root shortcut="Mod+k" pp-model:open="open">
+  <pine-command-root shortcut="Mod+k" :open="open" @pp:update:open.self="on_open_changed">
     <pine-command-portal>
       <pine-command-overlay class="fixed inset-0 z-50 bg-[oklch(0.18_0.02_285/0.45)] backdrop-blur-sm"></pine-command-overlay>
       <pine-command-content class="fixed inset-x-4 top-24 z-50 mx-auto flex max-h-96 max-w-2xl flex-col overflow-hidden rounded-lg border border-line bg-surface text-ink-100 shadow-2xl">

@@ -117,28 +117,27 @@ impl PineDateRangePicker {
     /// closes once the second click lands a non-empty `end` on
     /// top of a non-empty `start`.
     ///
-    /// The `self.open` guard keeps initial pp-model flow from
-    /// tripping the close on mount, e.g. when the author seeds
-    /// `start` / `end` with defaults — the watcher fires once
-    /// but `open` is still `false`, so it's a no-op.
-    #[watch(end)]
-    fn on_end_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
-        self.recompute_label();
-        if !self.close_on_select || !self.open {
-            return;
+    #[watch(start, end, close_on_select)]
+    fn on_range_change(
+        start: Option<DateValue>,
+        end: Change<Option<DateValue>>,
+        close_on_select: bool,
+    ) -> Update<Self, (Self::Open,)> {
+        if close_on_select && start.is_some() && end.current.is_some() && end.changed() {
+            Update::new().open(false)
+        } else {
+            Update::new()
         }
-        if self.start.is_none() || new.is_none() {
-            return;
-        }
-        if prev == Some(new) {
-            return;
-        }
-        self.open = false;
     }
 
-    #[watch(start)]
-    fn on_start_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        self.recompute_label();
+    #[watch(start, end, placeholder_text, separator)]
+    fn on_label_change(
+        start: Option<DateValue>,
+        end: Option<DateValue>,
+        placeholder_text: &str,
+        separator: &str,
+    ) -> Update<Self, (Self::DisplayLabel,)> {
+        Update::new().display_label(range_label(start, end, placeholder_text, separator))
     }
 }
 
@@ -147,11 +146,25 @@ impl PineDateRangePicker {
         // Rendered via `pp-text` bound to `display_label` on the
         // trigger below; keeps the two branches (empty / one-
         // endpoint / full range) in one place.
-        self.display_label = match (self.start, self.end) {
-            (None, None) => self.placeholder_text.clone(),
-            (Some(s), None) => format!("{}{}…", s, self.separator),
-            (None, Some(e)) => format!("…{}{}", self.separator, e),
-            (Some(s), Some(e)) => format!("{}{}{}", s, self.separator, e),
-        };
+        self.display_label = range_label(
+            self.start,
+            self.end,
+            &self.placeholder_text,
+            &self.separator,
+        );
+    }
+}
+
+fn range_label(
+    start: Option<DateValue>,
+    end: Option<DateValue>,
+    placeholder_text: &str,
+    separator: &str,
+) -> String {
+    match (start, end) {
+        (None, None) => placeholder_text.to_owned(),
+        (Some(start), None) => format!("{start}{separator}…"),
+        (None, Some(end)) => format!("…{separator}{end}"),
+        (Some(start), Some(end)) => format!("{start}{separator}{end}"),
     }
 }

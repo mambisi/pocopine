@@ -39,13 +39,13 @@
               <file-browser-size-control label="Upload cap"
                                          min="1"
                                          max="1024"
-                                         pp-model:value="upload_max_mib"
+                                         :value="upload_max_mib" @pp:update:value.self="set_upload_max"
                                          :disabled="loading_config || saving_config"></file-browser-size-control>
 
               <file-browser-size-control label="Chunk size"
                                          min="1"
                                          :max="preferred_chunk_max_mib"
-                                         pp-model:value="preferred_chunk_mib"
+                                         :value="preferred_chunk_mib" @pp:update:value.self="set_preferred_chunk"
                                          :disabled="loading_config || saving_config"></file-browser-size-control>
             </div>
           </div>

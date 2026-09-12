@@ -5,10 +5,8 @@ use pine::{
     PineDialogRoot, PineDialogTitle,
 };
 use pine_icons::PineIcon;
-use pocopine::events::{self, ev};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use web_sys::KeyboardEvent;
 
 use crate::StorageBrowserStore;
 
@@ -38,31 +36,6 @@ pub struct FileBrowserNewFolderDialog {
 
 #[handlers]
 impl FileBrowserNewFolderDialog {
-    fn on_ready(&self) {
-        let Some(doc) = web_sys::window().and_then(|window| window.document()) else {
-            return;
-        };
-        events::on_scoped(&doc, ev::keydown, move |ev: KeyboardEvent| {
-            if ev.key().to_ascii_lowercase() == "n"
-                && (ev.meta_key() || ev.ctrl_key())
-                && !ev.shift_key()
-                && !ev.alt_key()
-            {
-                ev.prevent_default();
-                pocopine::store::<StorageBrowserStore>()
-                    .update(StorageBrowserStore::open_new_folder_dialog);
-            }
-        });
-    }
-
-    #[watch(open)]
-    fn on_open_change(&mut self, open: bool, _prev: Option<bool>) {
-        if open {
-            self.folder_name.clear();
-            self.error.clear();
-        }
-    }
-
     pub fn close(&mut self) {
         if self.creating {
             return;

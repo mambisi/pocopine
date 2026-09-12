@@ -13,9 +13,9 @@
 //! value (always `JsValue::UNDEFINED`). So `pp-html="svg()"` can't
 //! read a method result directly. Instead the component holds a
 //! computed `svg` *field*, recomputed from the props via
-//! `#[watch(name)]` / `#[watch(variant)]`. The template binds
+//! `#[watch(name, variant)]`. The template binds
 //! `pp-html="svg"` — a reactive field read that re-renders
-//! whenever the watchers overwrite it.
+//! whenever the watcher commits a changed SVG.
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -48,13 +48,6 @@ pub struct PineIcon {
     /// Kept as a field (not a method) because the handler
     /// dispatch discards return values.
     pub svg: String,
-    /// Precomputed FNV-1a hash of the currently rendered SVG.
-    /// Skips the full string compare when deciding whether a
-    /// prop change actually resolved to a new SVG — O(1)
-    /// instead of O(n), meaningful when an app registers
-    /// illustration-sized icons and flips between them.
-    #[serde(skip)]
-    pub svg_hash: u64,
     /// Computed inline-style for the sized box.
     pub size_style: String,
 }
@@ -66,66 +59,38 @@ impl PineIcon {
         self.refresh_size_style();
     }
 
-    // Name and variant both influence which SVG to look up, but
-    // the resulting string often doesn't actually change — e.g.,
-    // typing a name that's still an unregistered miss leaves
-    // `svg` at `""`. The guard inside `refresh_svg` skips the
-    // proxy write in that case, which avoids redundantly firing
-    // every effect that reads `svg` (`pp-html`, devtools, etc.).
-    #[watch(name)]
-    fn on_name_change(&mut self, _new: String, _old: Option<String>) {
-        self.refresh_svg();
-    }
-
-    #[watch(variant)]
-    fn on_variant_change(&mut self, _new: String, _old: Option<String>) {
-        self.refresh_svg();
+    // Compare resolved entries before allocating an owned SVG. Different
+    // names or variants can resolve to the same registered entry or miss.
+    #[watch(name, variant)]
+    fn on_icon_change(name: Change<String>, variant: Change<String>) -> Update<Self, (Self::Svg,)> {
+        let (svg, hash) = resolve_icon(&name.current, &variant.current);
+        if let (Some(name), Some(variant)) = (name.previous, variant.previous) {
+            let variant = if variant.is_empty() {
+                "outline"
+            } else {
+                &variant
+            };
+            let (_, previous_hash) =
+                crate::lookup_with_hash(variant, &name).unwrap_or(crate::EMPTY_ICON);
+            if hash == previous_hash {
+                return Update::new();
+            }
+        }
+        Update::new().svg(svg.to_string())
     }
 
     // Size only feeds `size_style`; no need to re-run the lookup.
     #[watch(size)]
-    fn on_size_change(&mut self, _new: u32, _old: Option<u32>) {
-        self.refresh_size_style();
+    fn on_size_change(size: u32) -> Update<Self, (Self::SizeStyle,)> {
+        Update::new().size_style(size_style(size))
     }
 }
 
 impl PineIcon {
-    /// Resolve `name` + `variant` to an SVG string and store it.
-    /// Uses the compile-time FNV-1a hash carried on each
-    /// registered entry for O(1) change detection — avoids a
-    /// byte-by-byte string compare and, critically, avoids the
-    /// `to_string()` allocation when the resolved icon didn't
-    /// actually change (e.g. typing into a filter that still
-    /// resolves to the same name, or toggling between props
-    /// that happen to pick the same icon).
+    /// Seed the SVG before the first template render. Subsequent updates
+    /// compare registered hashes using the watcher's previous inputs.
     fn refresh_svg(&mut self) {
-        let v = if self.variant.is_empty() {
-            "outline"
-        } else {
-            self.variant.as_str()
-        };
-        let (next_svg, next_hash) = match crate::lookup_with_hash(v, &self.name) {
-            Some(pair) => pair,
-            None => {
-                if cfg!(debug_assertions) && !self.name.is_empty() {
-                    ::web_sys::console::warn_1(
-                        &format!(
-                            "pine-icons: `{v}/{}` not registered — add it to `register_icons![…]`",
-                            self.name
-                        )
-                        .into(),
-                    );
-                }
-                crate::EMPTY_ICON
-            }
-        };
-        if next_hash != self.svg_hash {
-            // Only allocate on an actual value change. &'static str
-            // → owned String because the proxy-reactive `svg` field
-            // is owned — we can't point proxies at static borrows.
-            self.svg = next_svg.to_string();
-            self.svg_hash = next_hash;
-        }
+        self.svg = resolve_icon(&self.name, &self.variant).0.to_string();
     }
 
     /// Recompute the inline `width/height` style. Unset (`0`)
@@ -135,14 +100,39 @@ impl PineIcon {
     /// no-op guard pattern — resizing a primitive without actually
     /// changing `size` shouldn't retrigger downstream effects.
     fn refresh_size_style(&mut self) {
-        let next = if self.size == 0 {
-            String::new()
-        } else {
-            let s = self.size;
-            format!("width:{s}px;height:{s}px")
-        };
+        let next = size_style(self.size);
         if self.size_style != next {
             self.size_style = next;
+        }
+    }
+}
+
+fn size_style(size: u32) -> String {
+    if size == 0 {
+        String::new()
+    } else {
+        format!("width:{size}px;height:{size}px")
+    }
+}
+
+fn resolve_icon(name: &str, variant: &str) -> (&'static str, u64) {
+    let variant = if variant.is_empty() {
+        "outline"
+    } else {
+        variant
+    };
+    match crate::lookup_with_hash(variant, name) {
+        Some(pair) => pair,
+        None => {
+            if cfg!(debug_assertions) && !name.is_empty() {
+                ::web_sys::console::warn_1(
+                    &format!(
+                        "pine-icons: `{variant}/{name}` not registered — add it to `register_icons![…]`"
+                    )
+                    .into(),
+                );
+            }
+            crate::EMPTY_ICON
         }
     }
 }

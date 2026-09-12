@@ -42,7 +42,6 @@ pub struct FileBrowserConfigDialog {
     pub config_path: String,
     pub upload_max_mib: f64,
     pub preferred_chunk_mib: f64,
-    pub preferred_chunk_max_mib: f64,
 }
 
 impl Default for FileBrowserConfigDialog {
@@ -56,7 +55,6 @@ impl Default for FileBrowserConfigDialog {
             config_path: String::new(),
             upload_max_mib: 25.0,
             preferred_chunk_mib: 1.0,
-            preferred_chunk_max_mib: 25.0,
         }
     }
 }
@@ -75,7 +73,7 @@ impl FileBrowserConfigDialog {
 
     fn config_input(&self) -> StorageBrowserConfigInput {
         let upload_max_mib = mib_value(self.upload_max_mib);
-        let preferred_chunk_mib = mib_value(self.preferred_chunk_mib).min(upload_max_mib);
+        let preferred_chunk_mib = mib_value(self.preferred_chunk_mib).min(upload_max_mib.min(64));
         StorageBrowserConfigInput {
             upload_max_bytes: upload_max_mib.saturating_mul(MIB),
             preferred_chunk_bytes: preferred_chunk_mib.saturating_mul(MIB),
@@ -84,31 +82,37 @@ impl FileBrowserConfigDialog {
 
     fn sync_size_values(&mut self) {
         self.upload_max_mib = mib_value(self.upload_max_mib) as f64;
-        self.preferred_chunk_max_mib = self.upload_max_mib.min(64.0).max(1.0);
+        let chunk_max = Self::preferred_chunk_max_mib(self.upload_max_mib);
         self.preferred_chunk_mib = mib_value(self.preferred_chunk_mib) as f64;
-        if self.preferred_chunk_mib > self.preferred_chunk_max_mib {
-            self.preferred_chunk_mib = self.preferred_chunk_max_mib;
+        if self.preferred_chunk_mib > chunk_max {
+            self.preferred_chunk_mib = chunk_max;
         }
     }
 }
 
 #[handlers]
 impl FileBrowserConfigDialog {
-    #[watch(open)]
-    fn on_open_change(&mut self, open: bool, _prev: Option<bool>) {
-        if open {
-            self.load_config();
+    #[computed]
+    fn preferred_chunk_max_mib(upload_max_mib: f64) -> f64 {
+        (mib_value(upload_max_mib) as f64).clamp(1.0, 64.0)
+    }
+
+    pub fn on_mount(&mut self) {
+        self.load_config();
+    }
+
+    pub fn set_upload_max(&mut self, event: web_sys::CustomEvent) {
+        if let Some(value) = event.detail().as_f64() {
+            self.upload_max_mib = value;
+            self.sync_size_values();
         }
     }
 
-    #[watch(upload_max_mib)]
-    fn on_upload_max_mib_change(&mut self, _next: f64, _prev: Option<f64>) {
-        self.sync_size_values();
-    }
-
-    #[watch(preferred_chunk_mib)]
-    fn on_preferred_chunk_mib_change(&mut self, _next: f64, _prev: Option<f64>) {
-        self.sync_size_values();
+    pub fn set_preferred_chunk(&mut self, event: web_sys::CustomEvent) {
+        if let Some(value) = event.detail().as_f64() {
+            self.preferred_chunk_mib = value;
+            self.sync_size_values();
+        }
     }
 
     pub fn load_config(&mut self) {
@@ -116,6 +120,9 @@ impl FileBrowserConfigDialog {
         self.config_error.clear();
         self.config_status.clear();
         dispatch!(crate::get_storage_browser_config().await, |s, result| {
+            if !s.open {
+                return;
+            }
             s.loading_config = false;
             match result {
                 Ok(config) => s.populate_config(config),
@@ -186,6 +193,9 @@ mod tests {
         dialog.sync_size_values();
 
         assert_eq!(dialog.preferred_chunk_mib, 2.0);
-        assert_eq!(dialog.preferred_chunk_max_mib, 2.0);
+        assert_eq!(
+            FileBrowserConfigDialog::preferred_chunk_max_mib(dialog.upload_max_mib),
+            2.0
+        );
     }
 }

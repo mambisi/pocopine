@@ -324,13 +324,14 @@ struct MemberPickerWatch {
 #[handlers]
 impl MemberPickerWatch {
     #[watch(search)]
-    fn on_search(&mut self, new: String, _prev: Option<String>) {
+    fn on_search(search: &str) -> Update<Self, (Self::Count,)> {
         let all = ["alice", "bob", "scott", "scarlett", "sam", "dave"];
-        let q = new.trim().to_lowercase();
-        self.count = all
+        let q = search.trim().to_lowercase();
+        let count = all
             .iter()
             .filter(|m| q.is_empty() || m.to_lowercase().contains(&q))
             .count();
+        Update::new().count(count)
     }
 }
 

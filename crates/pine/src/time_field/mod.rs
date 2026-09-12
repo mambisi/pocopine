@@ -107,18 +107,36 @@ impl PineTimeField {
         self.sync_display(&segs);
     }
 
-    #[watch(value)]
-    fn on_value_change(&mut self, new: String, _prev: Option<String>) {
-        let segs = TimeSegments::parse(&new);
-        self.sync_display(&segs);
-    }
-
-    #[watch(step)]
-    fn on_step_change(&mut self, new: f64, _prev: Option<f64>) {
-        self.has_seconds = seconds_visible(new);
-        // Re-derive filled/invalid for the new granularity.
-        let segs = TimeSegments::parse(&self.value);
-        self.sync_display(&segs);
+    #[watch(value, step, min_value, max_value)]
+    fn on_value_change(
+        value: &str,
+        step: f64,
+        min_value: &str,
+        max_value: &str,
+    ) -> Update<
+        Self,
+        (
+            Self::HourDisplay,
+            Self::MinuteDisplay,
+            Self::SecondDisplay,
+            Self::HasSeconds,
+            Self::Filled,
+            Self::Invalid,
+        ),
+    > {
+        let has_seconds = seconds_visible(step);
+        let segs = TimeSegments::parse(value);
+        let invalid = segs.to_value(has_seconds).is_some_and(|value| {
+            (!min_value.is_empty() && value.as_str() < min_value)
+                || (!max_value.is_empty() && value.as_str() > max_value)
+        });
+        Update::new()
+            .hour_display(segs.display(TimePart::Hour))
+            .minute_display(segs.display(TimePart::Minute))
+            .second_display(segs.display(TimePart::Second))
+            .has_seconds(has_seconds)
+            .filled(segs.is_complete(has_seconds))
+            .invalid(invalid)
     }
 
     // ── focus bookkeeping ──────────────────────────────────────

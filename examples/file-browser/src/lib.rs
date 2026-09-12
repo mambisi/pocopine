@@ -27,7 +27,9 @@ pub use storage_browser::{
 };
 pub use store::StorageBrowserStore;
 
+#[cfg(not(test))]
 use pine_icons::PineIcon;
+#[cfg(not(test))]
 use pocopine::prelude::*;
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -50,8 +52,9 @@ pub(crate) fn format_size(bytes: u64) -> String {
     }
 }
 
+#[cfg(not(test))]
 #[wasm_bindgen(start)]
-pub fn main() {
+pub fn start() {
     pine_icons::register_icons![
         "alert-circle",
         "arrow-up",

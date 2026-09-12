@@ -95,24 +95,36 @@ impl PineOtpField {
     fn on_ready(&self) {
         // Slot `<input>`s exist now — mirror the initial value
         // onto their `.value` properties.
-        self.sync_slot_display();
+        Self::sync_slot_display(&self.value, self.length, self.mask);
     }
 
-    #[watch(value)]
-    fn on_value_change(&mut self, _: String, _: Option<String>) {
-        self.sync_slot_display();
+    #[watch(value, mask, slots)]
+    fn on_display_change(value: &str, mask: bool, slots: &[OtpSlot]) {
+        Self::sync_slot_display(value, slots.len() as u32, mask);
     }
+
     #[watch(length)]
-    fn on_length_change(&mut self, _: u32, _: Option<u32>) {
-        self.rebuild_slots();
+    fn on_length_change(length: u32) -> Update<Self, (Self::Slots,)> {
+        Update::new().slots(
+            (0..length)
+                .map(|index| OtpSlot {
+                    index,
+                    aria_label: format!("Digit {}", index + 1),
+                })
+                .collect(),
+        )
     }
+
     #[watch(r#type)]
-    fn on_type_change(&mut self, _: String, _: Option<String>) {
-        self.refresh_mode();
-    }
-    #[watch(mask)]
-    fn on_mask_change(&mut self, _: bool, _: Option<bool>) {
-        self.sync_slot_display();
+    fn on_type_change(r#type: &str) -> Update<Self, (Self::InputMode, Self::Pattern)> {
+        let (input_mode, pattern) = if r#type == "alphanumeric" {
+            ("text", "[a-zA-Z0-9]*")
+        } else {
+            ("numeric", "[0-9]*")
+        };
+        Update::new()
+            .input_mode(input_mode.into())
+            .pattern(pattern.into())
     }
 
     /// `@input` on each slot. The browser has already written the
@@ -128,7 +140,7 @@ impl PineOtpField {
         };
         let typed = el.value();
         let focus_target = self.apply_input(index as usize, &typed).unwrap_or(index);
-        self.sync_slot_display();
+        Self::sync_slot_display(&self.value, self.length, self.mask);
         // Always re-focus: the reactive flush after a handler run
         // has `pp-for` re-emit `insert_before` on every keyed clone,
         // which blurs whichever slot we're on. Targeting the intended
@@ -155,7 +167,7 @@ impl PineOtpField {
         }
         ev.prevent_default();
         let target = self.apply_backspace(index as usize).unwrap_or(index);
-        self.sync_slot_display();
+        Self::sync_slot_display(&self.value, self.length, self.mask);
         self.focus_slot(target);
     }
 
@@ -203,15 +215,15 @@ impl PineOtpField {
     /// `.value` DOM *property* (not the `value` attribute) because
     /// after a user types, the property and the attribute diverge
     /// and only the property is what the browser renders.
-    fn sync_slot_display(&self) {
+    fn sync_slot_display(value: &str, length: u32, mask: bool) {
         let Some(scope) = current_scope_id() else {
             return;
         };
         let Some(root_el) = refs::get_on(scope, "root") else {
             return;
         };
-        let value_chars: Vec<char> = self.value.chars().collect();
-        let len = self.length as usize;
+        let value_chars: Vec<char> = value.chars().collect();
+        let len = length as usize;
         for i in 0..len {
             let ch = value_chars
                 .get(i)
@@ -219,7 +231,7 @@ impl PineOtpField {
                 .map(|c| c.to_string())
                 .unwrap_or_default();
             let filled = !ch.is_empty();
-            let display = if self.mask && filled {
+            let display = if mask && filled {
                 "\u{2022}".to_string()
             } else {
                 ch

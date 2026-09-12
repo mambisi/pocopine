@@ -41,7 +41,8 @@ available to logic, not just CSS.
   `<pine-grid-item>` — the headless structural primitives.
 - [`pine-motion`](../../crates/pine-motion) — the drawer slide is a
   `pine_motion::animate(&sidebar, …, Spring::gentle())` fired from a
-  `#[watch(nav_open)]` (see `src/lib.rs`).
+  `#[watch(nav_open)]` handler taking `Change<bool>` (see `src/lib.rs`).
+  It starts the animation without changing component state.
 
 ## Notes
 

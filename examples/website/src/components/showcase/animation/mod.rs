@@ -349,71 +349,42 @@ impl AnimationDemo {
         self.stagger_origin = "last".into();
     }
 
-    #[watch(motion_x)]
-    fn on_motion_x(&mut self, _: f64, prev: Option<f64>) {
-        let from = self.state_transform_with(
-            prev.unwrap_or(self.motion_x),
-            self.motion_y,
-            self.motion_rotate,
-            self.motion_scale,
-            self.motion_raise,
+    #[watch(
+        motion_x,
+        motion_y,
+        motion_rotate,
+        motion_scale,
+        motion_raise,
+        motion_shadow
+    )]
+    fn on_motion_change(
+        motion_x: Change<f64>,
+        motion_y: Change<f64>,
+        motion_rotate: Change<f64>,
+        motion_scale: Change<f64>,
+        motion_raise: Change<f64>,
+        motion_shadow: Change<f64>,
+    ) {
+        let from = state_transform(
+            motion_x.previous.unwrap_or(motion_x.current),
+            motion_y.previous.unwrap_or(motion_y.current),
+            motion_rotate.previous.unwrap_or(motion_rotate.current),
+            effective_scale(motion_scale.previous.unwrap_or(motion_scale.current)),
+            motion_raise.previous.unwrap_or(motion_raise.current),
         );
-        self.animate_state_box(from, None);
-    }
-
-    #[watch(motion_y)]
-    fn on_motion_y(&mut self, _: f64, prev: Option<f64>) {
-        let from = self.state_transform_with(
-            self.motion_x,
-            prev.unwrap_or(self.motion_y),
-            self.motion_rotate,
-            self.motion_scale,
-            self.motion_raise,
+        let to = state_transform(
+            motion_x.current,
+            motion_y.current,
+            motion_rotate.current,
+            effective_scale(motion_scale.current),
+            motion_raise.current,
         );
-        self.animate_state_box(from, None);
-    }
-
-    #[watch(motion_rotate)]
-    fn on_motion_rotate(&mut self, _: f64, prev: Option<f64>) {
-        let from = self.state_transform_with(
-            self.motion_x,
-            self.motion_y,
-            prev.unwrap_or(self.motion_rotate),
-            self.motion_scale,
-            self.motion_raise,
+        animate_state_box(
+            from,
+            to,
+            state_shadow(motion_shadow.previous.unwrap_or(motion_shadow.current)),
+            state_shadow(motion_shadow.current),
         );
-        self.animate_state_box(from, None);
-    }
-
-    #[watch(motion_scale)]
-    fn on_motion_scale(&mut self, _: f64, prev: Option<f64>) {
-        let from = self.state_transform_with(
-            self.motion_x,
-            self.motion_y,
-            self.motion_rotate,
-            prev.unwrap_or(self.motion_scale),
-            self.motion_raise,
-        );
-        self.animate_state_box(from, None);
-    }
-
-    #[watch(motion_raise)]
-    fn on_motion_raise(&mut self, _: f64, prev: Option<f64>) {
-        let from = self.state_transform_with(
-            self.motion_x,
-            self.motion_y,
-            self.motion_rotate,
-            self.motion_scale,
-            prev.unwrap_or(self.motion_raise),
-        );
-        self.animate_state_box(from, None);
-    }
-
-    #[watch(motion_shadow)]
-    fn on_motion_shadow(&mut self, _: f64, prev: Option<f64>) {
-        let from_transform = self.state_transform();
-        let from_shadow = state_shadow(prev.unwrap_or(self.motion_shadow));
-        self.animate_state_box(from_transform, Some(from_shadow));
     }
 
     pub fn reset_state_motion(&mut self) {
@@ -438,43 +409,22 @@ impl AnimationDemo {
     }
 
     fn state_transform(&self) -> String {
-        self.state_transform_with(
+        state_transform(
             self.motion_x,
             self.motion_y,
             self.motion_rotate,
-            self.motion_scale,
+            effective_scale(self.motion_scale),
             self.motion_raise,
         )
     }
 
-    fn state_transform_with(&self, x: f64, y: f64, rotate: f64, scale: f64, raise: f64) -> String {
-        state_transform(x, y, rotate, effective_scale(scale), raise)
-    }
-
     fn animate_state_box(&self, from_transform: String, from_shadow: Option<String>) {
-        let to_transform = self.state_transform();
-        let from_shadow = from_shadow.unwrap_or_else(|| state_shadow(self.motion_shadow));
-        let to_shadow = state_shadow(self.motion_shadow);
-        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-            return;
-        };
-        let Ok(Some(el)) = doc.query_selector(".pm-state-box") else {
-            return;
-        };
-        STATE_ANIMATION_HANDLE.with(|slot| {
-            if let Some(handle) = slot.borrow_mut().take() {
-                handle.cancel();
-            }
-            let handle = animate(
-                &el,
-                &[
-                    ("transform", &from_transform, &to_transform),
-                    ("boxShadow", &from_shadow, &to_shadow),
-                ],
-                Spring::wobbly(),
-            );
-            *slot.borrow_mut() = Some(handle);
-        });
+        animate_state_box(
+            from_transform,
+            self.state_transform(),
+            from_shadow.unwrap_or_else(|| state_shadow(self.motion_shadow)),
+            state_shadow(self.motion_shadow),
+        );
     }
 
     pub fn on_setup(&mut self) {
@@ -587,4 +537,32 @@ fn pop_box(selector: &str, spring: Spring) {
         return;
     };
     animate(&el, &[("transform", "scale(0.6)", "scale(1)")], spring);
+}
+
+fn animate_state_box(
+    from_transform: String,
+    to_transform: String,
+    from_shadow: String,
+    to_shadow: String,
+) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Ok(Some(el)) = doc.query_selector(".pm-state-box") else {
+        return;
+    };
+    STATE_ANIMATION_HANDLE.with(|slot| {
+        if let Some(handle) = slot.borrow_mut().take() {
+            handle.cancel();
+        }
+        let handle = animate(
+            &el,
+            &[
+                ("transform", &from_transform, &to_transform),
+                ("boxShadow", &from_shadow, &to_shadow),
+            ],
+            Spring::wobbly(),
+        );
+        *slot.borrow_mut() = Some(handle);
+    });
 }
