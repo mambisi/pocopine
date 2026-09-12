@@ -172,15 +172,19 @@ impl WorkspaceDemo {
 
 The **sidebar's auto-rail is built in** (it watches the workspace breakpoint
 and rails below `collapse_below`). For other responsive policy — e.g. hide
-the outer panels on narrow — drive it from the app with a `#[watch(bp)]`
-(the `bp` field is bound via `pp-model:breakpoint`):
+the outer panels on narrow — derive a read-only visibility value from the
+`bp` field bound via `pp-model:breakpoint`:
 
 ```rust
-#[watch(bp)]
-fn on_bp(&mut self, bp: String, _: Option<String>) {
-    self.panel_open = !matches!(bp.as_str(), "base" | "sm" | "md");
+#[computed]
+fn panel_visible(bp: &str) -> bool {
+    !matches!(bp, "base" | "sm" | "md")
 }
 ```
+
+Use `panel_visible` in a read-only binding such as `pp-show`. If the panel
+also has user-controlled open state, derive visibility from both inputs;
+computed values are not writable `pp-model` targets.
 
 ## A minimal workspace
 
@@ -241,11 +245,10 @@ Landmark roles per region; resize handles are `role="separator"` with
 
 ## Gotchas
 
-- **Own-field reactions need `#[watch(field)]`, not
-  `watch_scope_field_scoped`** — the latter is for *cross-scope* watching
-  (a region reading the root's `breakpoint`); it does **not** fire for a
-  component's own fields. (Bit us: a `pp-model` field updated its bindings
-  but a same-scope watch never ran.)
+- **Derived visibility belongs in `#[computed]`.** Watchers receive snapshots
+  and return a patch for declared output fields. Use input actions to normalize
+  the same field being edited. Low-level watchers are not a workaround for
+  the returned-patch contract.
 - **Resize handles are clipped by `overflow: hidden`** — keep the handle
   *inside* the panel edge (`right: 0`), or the grab strip vanishes.
 - **The custom property must sit on the panel**, not the grid container —

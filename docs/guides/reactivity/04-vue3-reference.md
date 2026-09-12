@@ -96,7 +96,11 @@ the escape hatch is the right call.
 
 Derived values that Vue would write as `computed(() => ...)` are `#[computed]` methods; reactions
 Vue would write as `watch(...)` / `watchEffect(...)` are `#[watch(field)]` methods or the
-`watch` / `effect` free functions.
+`watch` / `effect` free functions. Generated watchers take named
+`T`, `&T`, or `Change<T>` inputs and no receiver. Bare `#[watch]` observes
+all watchable fields through `Changes<Self>` and returns `()`. For state transitions, return
+`Update<Self, (Self::Field, ...)>`, or use `updates(...)` with `Update<Self>`; see the
+[migration guide](./06-readonly-watch-migration.md).
 
 ## Where Vue 3 maps to shipped features
 

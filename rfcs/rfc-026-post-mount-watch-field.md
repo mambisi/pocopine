@@ -1,5 +1,13 @@
 # RFC 026 — `post_mount` lifecycle + `#[watch(field)]` sugar
 
+> The generated watch contract is superseded by
+> [RFC-125](./rfc-125-watch-inputs-and-updates.md): named `T`, `&T`, or
+> `Change<T>` inputs, no receiver, and restricted `Update<Self>` patches;
+> bare `#[watch]` observes all fields without a patch.
+> The examples below describe the original design. See the
+> [migration guide](../docs/guides/reactivity/06-readonly-watch-migration.md).
+
+
 | Field | Value |
 |---|---|
 | **Status** | Implemented — the `post_mount` hook shipped but was renamed `on_ready` by RFC-029; `#[watch(field)]` shipped as specified. |

@@ -1,5 +1,12 @@
 # RFC-115: Multi-field watch — `#[watch(a, b, c)]`
 
+> The generated watch contract is superseded by
+> [RFC-125](./rfc-125-watch-inputs-and-updates.md): named `T`, `&T`, or
+> `Change<T>` inputs, no receiver, and restricted `Update<Self>` patches;
+> bare `#[watch]` observes all fields without a patch.
+> The examples below describe the original design. See the
+> [migration guide](../docs/guides/reactivity/06-readonly-watch-migration.md).
+
 **Status:** Implemented
 **Crates:** `pocopine-macros` (`#[handlers]`), `pocopine-core` (reactive watch primitives, flush-cascade cycle guard)
 **Relates to:** RFC-026 (`#[watch(field)]` sugar), RFC-036 (watch install machinery), RFC-044 §5.10.5 (flattened-container watch), PR #279 (watch signature contract)

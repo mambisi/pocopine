@@ -79,7 +79,7 @@ link down.
 | Report an event child → parent | `emit(name, detail)` + `@event` listener | [Essentials](./01-essentials.md) |
 | Share state app-wide | `#[store]` (read `$store.<name>`, write `store::<T>()`) | [Essentials](./01-essentials.md) |
 | Derive display state | `#[computed]` (static, deps-as-params) | [Essentials](./01-essentials.md) |
-| React to a field changing | `#[watch(field)]` `(new, prev)` | [Essentials](./01-essentials.md) |
+| React to a field changing | `#[watch(...)]` snapshots and returned patches | [Essentials](./01-essentials.md) |
 | Update from Rust (async, lifecycle) | `dispatch!` / `this::<T>()` / `Handle::update` | [Essentials](./01-essentials.md) |
 | Run a standalone effect / timer / schedule work | `effect` · `timers` · `tick` · `batch` | [Utilities](./02-utilities.md) |
 | Keep standalone reactive state (rare) | `signal` / `rw_signal` (escape hatch) | [Utilities](./02-utilities.md) |
@@ -116,5 +116,7 @@ planned to lift them is in [Roadmap](./05-roadmap.md).
 - [Vue 3 reference](./04-vue3-reference.md) — convergence and divergence
   with Vue 3's reactivity.
 - [Roadmap](./05-roadmap.md) — what's shipped and what's next.
+- [Migrating mutable watchers](./06-readonly-watch-migration.md) — the snapshot
+  and restricted patch contract and moving derivations and state transitions to their owners.
 - [API reference](./06-api-reference.md) — generated signatures for the
   full reactive surface.

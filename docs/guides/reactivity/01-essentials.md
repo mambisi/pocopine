@@ -106,52 +106,58 @@ the macro orders the graph for you. Cycles are a compile error.
 The free function `computed()` behind this macro — for standalone derived
 values not tied to a component — lives in [Utilities](./02-utilities.md#memoized-derivations-computed).
 
-## Reacting to changes — #[watch(field)]
+## Reacting to changes — #[watch]
 
-When a change needs `self` or has a side effect (mirror into another
-field, kick off an animation, reset a buffer), use `#[watch(field)]`. The
-method takes `(new, prev)` where `prev` is `None` on the first call after
-mount, and runs whenever `field` changes.
-
-The signature is a contract: `&mut self` plus exactly
-`(new: V, prev: Option<V>)`. Any other shape — no args, a missing
-`prev`, no receiver, a bare `#[watch]` — is a compile error, as is
-stacking two `#[watch]` attributes on one method (list the fields in
-one attribute instead — below).
-
-### Several fields, one handler — #[watch(a, b, c)]
-
-When the same recompute reacts to many fields, list them (RFC-115).
-Two-plus fields flip the contract: the handler takes `&mut self` and
-**nothing else** — with heterogeneous field types there is no single
-`(new, prev)`, and the coalesced call has no one triggering value.
-Read whatever you need off `self`.
+Watchers receive named values (`T`), borrows (`&T`), or snapshots with history
+(`Change<T>`). They can return a restricted update affecting several state
+fields and take no `self` receiver:
 
 ```rust
-#[watch(preset, mode, start_date, start_day, start_time)]
-fn on_when_changed(&mut self) {
-    self.recompute();
+#[watch(value)]
+fn on_value(value: Change<String>) -> Update<Self, (Self::Error, Self::Dirty)> {
+    if value.previous.is_none() {
+        return Update::new(); // Initial delivery is not a user edit.
+    }
+    Update::new().error(None).dirty(true)
 }
 ```
 
-Multi-field semantics differ from the typed form in three ways:
+Declare every input by name and every output in the return tuple. The
+`updates(error, dirty)` shorthand supplies that tuple for `Update<Self>`.
+`Update::new()` is an empty patch; omitted fields remain unchanged. The macro
+rejects writing an input and checks the declared graph for cycles. The
+runtime applies all returned fields together after the callback returns.
 
-* **Coalesced** — several listed fields changing in one flush run the
-  handler once, not once per field.
-* **Seeded** — the handler runs once after mount wiring (replacing
-  the manual `recompute()` seed in `on_mount`).
-* **External changes only** — instead of the typed form's
-  `(new, prev)` equality gate: runs whose field probes prove nothing
-  changed are skipped, and the handler's **own writes never re-fire
-  it** (recompute output can't re-invalidate its own input set).
-  Write listed fields freely inside the handler; it converges by
-  construction.
+For observation only, return `()` and omit `updates(...)`:
 
-A field in the list that doesn't exist (typo) or is `#[computed]` is
-a loud console error at mount and is ignored — computed fields can't
-be watched; watch their inputs instead. Cross-effect update loops
-remain bounded by the runtime cycle guard (100 re-runs per cascade,
-console error naming the field list).
+```rust
+#[watch(value)]
+fn log_value(value: Change<String>) {
+    tracing::info!(?value.current, ?value.previous, "value changed");
+}
+```
+
+### Several fields, one snapshot
+
+```rust
+#[watch(width, height)]
+fn on_size(width: f64, height: f64) {
+    resize_canvas(width, height);
+}
+```
+
+Inputs are read together under a shared borrow that ends before a returned
+patch commits. Only `Change<T>` retains history; its `previous` describes the
+previous invocation, with `None` on the deferred initial notification.
+Multiple input changes in one flush coalesce. Unchanged inputs still carry
+their values. Bare `#[watch]` takes `Changes<Self>` for all watchable fields
+and must return `()`. See the
+[migration guide](./06-readonly-watch-migration.md) for the full contract,
+mutation guard, and typed patch expansion.
+
+### Derived values belong in #[computed]
+
+The card's completion state needs no stored boolean or watcher:
 
 ```rust
 #[derive(Default, Serialize, Deserialize)]
@@ -159,36 +165,19 @@ console error naming the field list).
 pub struct PinCardDemo {
     pub card_number: String,
     pub pin: String,
-    /// Derived mirror, kept as a plain bool so the template can
-    /// `pp-show="complete"`.
-    pub complete: bool,
 }
 
 #[handlers]
 impl PinCardDemo {
-    #[watch(card_number)]
-    fn on_card_change(&mut self, _new: String, _prev: Option<String>) {
-        self.recompute_complete();
-    }
-
-    #[watch(pin)]
-    fn on_pin_change(&mut self, _new: String, _prev: Option<String>) {
-        self.recompute_complete();
-    }
-}
-
-impl PinCardDemo {
-    fn recompute_complete(&mut self) {
-        self.complete =
-            self.card_number.chars().count() == 16 && self.pin.chars().count() == 4;
+    #[computed]
+    fn complete(card_number: &str, pin: &str) -> bool {
+        card_number.chars().count() == 16 && pin.chars().count() == 4
     }
 }
 ```
 
-Reach for `#[computed]` when the result is a pure projection you read in
-the template; reach for `#[watch(field)]` when you need `&mut self` or a
-side effect. The free-function family (`watch` / `watch_field`) is in
-[Utilities](./02-utilities.md#watchers-watch-watch-field-scoped).
+The template still reads `pp-show="complete"`. Declared computed
+dependencies are checked for cycles at compile time.
 
 ## App-wide state — #[store]
 
@@ -362,7 +351,7 @@ for the timer and scheduling primitives these build on.
 | Two-way bind your own input | `pp-model="field"` | template directive |
 | Accept two-way binding from a parent | `#[model]` field | `pocopine::prelude::*` |
 | Derive a value from other fields | `#[computed]` method | `pocopine::prelude::*` |
-| Run on a field change (with side effect) | `#[watch(field)]` method | `pocopine::prelude::*` |
+| Observe inputs or return a state patch | `#[watch(...)]` method | `pocopine::prelude::*` |
 | Share state app-wide | `#[store]` struct | `pocopine::prelude::*` |
 | Read a store in a template | `$store.<name>.<field>` | template magic |
 | Get a handle to a store | `store::<T>()` | `pocopine::prelude::*` |
