@@ -231,11 +231,18 @@ impl PineWorkspaceSidebar {
         });
     }
 
-    /// Keep the rendered state in sync when the user/`pp-model` toggles
-    /// `collapsed`.
-    #[watch(collapsed)]
-    fn on_collapsed(&mut self, _new: bool, _old: Option<bool>) {
-        self.sync_display();
+    /// Project the authored size and collapse state onto the rendered sidebar.
+    #[watch(collapsed, responsive_rail, rail_size, size)]
+    fn on_display_change(
+        collapsed: bool,
+        responsive_rail: bool,
+        rail_size: f64,
+        size: f64,
+    ) -> Update<Self, (Self::DisplayCollapsed, Self::DisplaySize)> {
+        let display_collapsed = collapsed || responsive_rail;
+        Update::new()
+            .display_collapsed(display_collapsed)
+            .display_size(if display_collapsed { rail_size } else { size })
     }
 
     /// Begin a pointer-drag resize from the grab handle.

@@ -105,18 +105,19 @@ impl PineTextarea {
     /// External writes to `value` flow into the DOM `.value`
     /// property. Guarded so user keystrokes do not clobber cursor
     /// position while the model round-trips.
-    #[watch(value)]
-    fn on_value_change(&mut self, value: String, _prev: Option<String>) {
+    #[watch(value, autosize)]
+    fn on_value_change(value: &str, autosize: bool) -> Update<Self, (Self::Filled,)> {
+        let update = Update::new().filled(!value.is_empty());
         let Some(textarea) = root_textarea() else {
-            return;
+            return update;
         };
         if textarea.value() != value {
-            textarea.set_value(&value);
+            textarea.set_value(value);
         }
-        self.filled = !value.is_empty();
-        if self.autosize {
+        if autosize {
             autosize_textarea(&textarea);
         }
+        update
     }
 
     pub fn on_focus(&mut self) {

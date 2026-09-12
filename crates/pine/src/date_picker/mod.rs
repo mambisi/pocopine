@@ -106,17 +106,15 @@ impl PineDatePicker {
 
     /// Close on real pick — ignore the initial no-op flow and the
     /// user-initiated deselect (value becomes empty again).
-    #[watch(value)]
-    fn on_value_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
-        if !self.close_on_select {
-            return;
+    #[watch(value, close_on_select)]
+    fn on_value_change(
+        value: Change<Option<DateValue>>,
+        close_on_select: bool,
+    ) -> Update<Self, (Self::Open,)> {
+        if close_on_select && value.current.is_some() && value.changed() {
+            Update::new().open(false)
+        } else {
+            Update::new()
         }
-        if new.is_none() {
-            return;
-        }
-        if prev == Some(new) {
-            return;
-        }
-        self.open = false;
     }
 }

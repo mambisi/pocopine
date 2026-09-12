@@ -75,25 +75,23 @@ impl PineProgressRoot {
         ROOT.provide(this::<Self>());
     }
 
-    #[watch(value)]
-    fn on_value(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_percent();
-    }
-
-    #[watch(max)]
-    fn on_max(&mut self, _: f64, _: Option<f64>) {
-        self.recompute_percent();
+    #[watch(value, max)]
+    fn on_range_change(value: f64, max: f64) -> Update<Self, (Self::Percent,)> {
+        Update::new().percent(value_percent(value, max))
     }
 }
 
 impl PineProgressRoot {
     fn recompute_percent(&mut self) {
-        if self.value < 0.0 || self.max <= 0.0 {
-            self.percent = 0.0;
-            return;
-        }
-        let pct = (self.value / self.max) * 100.0;
-        self.percent = pct.clamp(0.0, 100.0);
+        self.percent = value_percent(self.value, self.max);
+    }
+}
+
+fn value_percent(value: f64, max: f64) -> f64 {
+    if value < 0.0 || max <= 0.0 {
+        0.0
+    } else {
+        ((value / max) * 100.0).clamp(0.0, 100.0)
     }
 }
 

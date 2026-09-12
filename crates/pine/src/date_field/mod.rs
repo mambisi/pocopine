@@ -109,13 +109,34 @@ impl PineDateField {
         self.sync_display(&segs);
     }
 
-    #[watch(value)]
-    fn on_value_change(&mut self, new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
-        let segs = match new {
+    #[watch(value, min_value, max_value)]
+    fn on_value_change(
+        value: Option<DateValue>,
+        min_value: Option<DateValue>,
+        max_value: Option<DateValue>,
+    ) -> Update<
+        Self,
+        (
+            Self::MonthDisplay,
+            Self::DayDisplay,
+            Self::YearDisplay,
+            Self::Filled,
+            Self::Invalid,
+        ),
+    > {
+        let segs = match value {
             Some(d) => DateSegments::from_date(d),
             None => DateSegments::default(),
         };
-        self.sync_display(&segs);
+        let invalid = value.is_some_and(|date| {
+            min_value.is_some_and(|min| date < min) || max_value.is_some_and(|max| date > max)
+        });
+        Update::new()
+            .month_display(segs.display(DatePart::Month))
+            .day_display(segs.display(DatePart::Day))
+            .year_display(segs.display(DatePart::Year))
+            .filled(segs.is_complete())
+            .invalid(invalid)
     }
 
     // ── focus bookkeeping (fired by @focus on each segment) ──

@@ -7,36 +7,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::StorageBrowserStore;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 #[component(
     template = "FileBrowserFileList.poco",
     role = "panel",
     display = "contents",
     uses = [PineIcon, PineToggleGroupRoot, PineToggleGroupItem]
 )]
-pub struct FileBrowserFileList {
-    /// Active row filter — `"all" | "folders" | "objects"`.
-    #[model]
-    pub view: String,
-}
-
-impl Default for FileBrowserFileList {
-    fn default() -> Self {
-        Self {
-            view: "all".to_string(),
-        }
-    }
-}
+pub struct FileBrowserFileList {}
 
 #[handlers]
 impl FileBrowserFileList {
-    pub fn on_setup(&mut self) {
-        self.view = pocopine::store::<StorageBrowserStore>().with(|s| s.entry_view.clone());
-    }
-
-    #[watch(view)]
-    fn on_view_change(&mut self, view: String, _prev: Option<String>) {
-        pocopine::store::<StorageBrowserStore>().update(move |s| s.set_entry_view(view));
+    pub fn select_view(&mut self, event: web_sys::CustomEvent) {
+        if let Some(view) = event.detail().as_string() {
+            pocopine::store::<StorageBrowserStore>().update(move |s| s.set_entry_view(view));
+        }
     }
 
     pub fn open_prefix(&mut self, prefix: String) {
