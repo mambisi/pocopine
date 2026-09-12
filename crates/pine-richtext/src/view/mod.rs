@@ -15,6 +15,7 @@ pub mod content;
 mod event_boundary;
 pub mod input;
 pub mod interop;
+mod native_input;
 mod node_view_handle;
 mod node_view_manager;
 mod reconciler;

@@ -1,6 +1,6 @@
-//! Keystroke + beforeinput dispatch.
+//! Keystroke, beforeinput, and native-input dispatch.
 //!
-//! The view installs two listeners on the contentEditable surface:
+//! The contenteditable surface intercepts cancelable commands and reads back native edits:
 //! - **`keydown`** — looks the pressed key combo up in a small keymap
 //!   built from `crate::commands::*`. Matched keys dispatch the
 //!   corresponding command and `preventDefault()` so the browser
@@ -9,6 +9,8 @@
 //!   characters), prevents the default DOM mutation, and inserts the
 //!   text via `Transaction::insert_text` so the model stays the source
 //!   of truth.
+//! - **`input` / composition events** — read browser-owned edits back into
+//!   transactions when autocomplete or IME cannot be intercepted.
 //!
 //! Crucially the view does NOT listen on `selectionchange` to push the
 //! DOM selection into the model. That would create a feedback loop:
@@ -22,8 +24,7 @@
 //! position (`delete_selection`, `toggle_mark`, `insert_text`, etc.)
 //! get the up-to-date DOM selection that way.
 
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -37,8 +38,8 @@ use crate::inputrules::{plugin as inputrules_plugin, run_rules};
 use crate::model::{Node, Slice};
 use crate::runtime::EditorRuntime;
 use crate::state::{EditorState, Selection, Transaction};
-use crate::text_diff::char_splice;
 
+use super::native_input::NativeInput;
 use super::node_view_manager::NodeViewManager;
 use super::selection::dom_pos_to_model;
 
@@ -241,18 +242,16 @@ fn simple_text_delete_defer_reason(
 /// Everything the listeners need to reach besides the dispatch sink.
 ///
 /// Grouped rather than passed positionally because the call site reads better
-/// named, and because `composing` is easy to mistake for a plain flag: it is
-/// shared state, and the caller's reconciler must observe the *same* cell.
+/// named. Native input state is shared with the reconciler so a pending
+/// browser mutation cannot be overwritten before it reaches the model.
 pub(crate) struct ListenerSetup {
     pub surface: Element,
     pub runtime: Arc<EditorRuntime>,
     pub state_provider: Rc<dyn Fn(bool) -> Option<EditorState>>,
     pub node_view_manager: Rc<RefCell<NodeViewManager>>,
     pub keymap: Rc<KeyMap>,
-    /// Set for the duration of an IME composition. The caller shares this cell
-    /// with its reconciler so a repaint cannot destroy the node the IME is
-    /// composing into (see the `compositionstart`/`compositionend` listeners).
-    pub composing: Rc<Cell<bool>>,
+    /// Shared with the reconciler: native text is pending until input readback.
+    pub native_input: Rc<NativeInput>,
     pub debug_perf: bool,
 }
 
@@ -269,7 +268,7 @@ where
         state_provider,
         node_view_manager,
         keymap,
-        composing,
+        native_input,
         debug_perf,
     } = setup;
     let dispatch = Rc::new(dispatch);
@@ -315,6 +314,7 @@ where
         let dispatch = dispatch.clone();
         let runtime_for_log = runtime_name.clone();
         let surface_for_keydown = surface.clone();
+        let native_for_keydown = native_input.clone();
         let manager = node_view_manager.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
             if !editor_owns_event(&event, &manager) {
@@ -324,6 +324,9 @@ where
             let Ok(ev) = event.clone().dyn_into::<KeyboardEvent>() else {
                 return;
             };
+            if native_for_keydown.is_active() || ev.is_composing() || ev.key_code() == 229 {
+                return;
+            }
             let combo = key_combo(&ev);
             let Some(cmd) = keymap.lookup(&combo) else {
                 return;
@@ -449,6 +452,7 @@ where
         let runtime_for_log = runtime_name.clone();
         let manager = node_view_manager.clone();
         let keymap_for_input = keymap.clone();
+        let native_for_input = native_input.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
             if !editor_owns_event(&event, &manager) {
                 return;
@@ -458,6 +462,43 @@ where
                 return;
             };
             let input_type = ev.input_type();
+            let composition_input = matches!(
+                input_type.as_str(),
+                "insertCompositionText"
+                    | "insertFromComposition"
+                    | "deleteByComposition"
+                    | "deleteCompositionText"
+            );
+            // Cancellation is not available for every keyboard/autocorrect edit.
+            // A replacement without a target range is also ambiguous: inserting
+            // its payload at the caret duplicates the word it intended to replace.
+            let replacement_data = (input_type == "insertReplacementText")
+                .then(|| {
+                    ev.data_transfer()
+                        .and_then(|dt| dt.get_data("text/plain").ok())
+                        .filter(|text| !text.is_empty())
+                        .or_else(|| ev.data())
+                })
+                .flatten();
+            let incomplete_replacement = input_type == "insertReplacementText"
+                && (target_range_only_to_model(&surface_for_input, &ev).is_none()
+                    || replacement_data.as_deref().is_none_or(str::is_empty));
+            if !ev.cancelable()
+                || ev.is_composing()
+                || native_for_input.is_composing()
+                || composition_input
+                || incomplete_replacement
+                || input_type == "insertText" && ev.data().is_none()
+            {
+                native_for_input.begin(
+                    &surface_for_input,
+                    &runtime_for_input,
+                    state_provider(false),
+                    Some(&ev),
+                    ev.is_composing() || input_type == "insertCompositionText",
+                );
+                return;
+            }
             match input_type.as_str() {
                 // A soft keyboard's return key frequently produces no `keydown`
                 // at all (or an unidentifiable `keyCode 229` one), so the
@@ -510,10 +551,7 @@ where
                     // engines and on `data` in others; a typed character only
                     // ever uses `data`.
                     let data = if is_replacement {
-                        ev.data_transfer()
-                            .and_then(|dt| dt.get_data("text/plain").ok())
-                            .filter(|s| !s.is_empty())
-                            .or_else(|| ev.data())
+                        replacement_data
                     } else {
                         ev.data()
                     };
@@ -885,47 +923,8 @@ where
                         started_at,
                     );
                 }
-                // Composition is the one exception to the floor below, and it
-                // has to be. An IME owns the DOM for the duration of a
-                // composition — it needs to place, restyle and replace its own
-                // preedit text — so refusing these would not "keep the model
-                // authoritative", it would stop CJK and Android keyboards from
-                // typing at all. We let the browser mutate, suppress the
-                // reconciler so the composing text node survives (see
-                // `composing` below), and reconcile the model at
-                // `compositionend`.
-                "insertCompositionText"
-                | "insertFromComposition"
-                | "deleteByComposition"
-                | "deleteCompositionText" => {
-                    log_input_perf(debug_perf, "input.beforeinput", || {
-                        json!({
-                            "runtime": runtime_for_log.clone(),
-                            "input_type": input_type.clone(),
-                            "handled": false,
-                            "reason": "composition_native_until_compositionend",
-                            "total_ms": round_ms(perf_now_ms() - started_at),
-                        })
-                    });
-                }
-                // Everything else: refuse it. This surface is controlled — the
-                // model is authoritative and the DOM is a projection of it — so
-                // an edit the model never sees is not a missing feature, it is
-                // corruption. The browser can emit input types we don't
-                // implement (`insertReplacementText` from autocorrect,
-                // `historyUndo` from shake-to-undo, `formatBold` from the mobile
-                // selection toolbar, `insertFromDrop`, `insertTranspose`,
-                // `insertFromYank`, and whatever the next spec revision adds),
-                // and letting one through desyncs the model silently: the DOM
-                // gains content the model has no position for, so the next
-                // `getTargetRanges` mapping resolves against a document that no
-                // longer matches and the reconciler eventually repaints the
-                // model over the user's text.
-                //
-                // Refusing turns an unimplemented input type into a visible
-                // no-op instead. That is a *worse* editor and a *correct* one,
-                // and it fails in the direction we can see. Implement the ones
-                // that matter as explicit arms above; this is the floor.
+                // Cancelable input types without a model command are refused.
+                // Non-cancelable edits were routed to native readback above.
                 other => {
                     ev.prevent_default();
                     log_input_perf(debug_perf, "input.beforeinput", || {
@@ -961,47 +960,98 @@ where
         closures.push(cb);
     }
 
-    // compositionstart / compositionend — the IME's turn with the DOM.
-    //
-    // Composition is the one edit this editor cannot intercept: the IME needs
-    // to place and repeatedly rewrite its own preedit text in the DOM, so the
-    // `beforeinput` arm above deliberately lets it through. That leaves the
-    // model stale for the duration, and something has to put it right when the
-    // IME commits — otherwise the composed text is DOM-only, invisible to the
-    // model, and the first reconcile after it repaints the stale model straight
-    // over the user's text.
-    //
-    // `composing` also gates the reconciler (the caller wires it to the same
-    // flag), because repainting mid-composition destroys the very text node the
-    // IME holds a reference to, which on Android shows up as duplicated or
-    // reversed characters.
+    // Browser-owned edits are committed from actual DOM text. A final input
+    // may arrive either before or after compositionend; readback is idempotent.
     {
-        let composing_start = composing.clone();
-        let cb = Closure::wrap(Box::new(move |_event: Event| {
-            composing_start.set(true);
+        let native = native_input.clone();
+        let surface_for_input = surface.clone();
+        let state_provider = state_provider.clone();
+        let dispatch = dispatch.clone();
+        let runtime = runtime.clone();
+        let manager = node_view_manager.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            if !editor_owns_event(&event, &manager) {
+                return;
+            }
+            if let Some(input) = event.dyn_ref::<InputEvent>()
+                && input.is_composing()
+            {
+                native.begin(
+                    &surface_for_input,
+                    &runtime,
+                    state_provider(false),
+                    None,
+                    true,
+                );
+                return;
+            }
+            if native.is_composing() {
+                return;
+            }
+            if event.dyn_ref::<InputEvent>().is_some_and(|input| {
+                matches!(
+                    input.input_type().as_str(),
+                    "insertText" | "insertCompositionText" | "insertFromComposition"
+                )
+            }) {
+                native.continue_composition();
+            }
+            native.finish(
+                &surface_for_input,
+                &runtime,
+                &manager,
+                &state_provider,
+                &*dispatch,
+            );
+        }) as Box<dyn FnMut(Event)>);
+        let _ = surface.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref());
+        closures.push(cb);
+    }
+    {
+        let native = native_input.clone();
+        let surface_for_start = surface.clone();
+        let provider = state_provider.clone();
+        let runtime_for_start = runtime.clone();
+        let manager = node_view_manager.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            if editor_owns_event(&event, &manager) {
+                native.begin(
+                    &surface_for_start,
+                    &runtime_for_start,
+                    provider(false),
+                    None,
+                    true,
+                );
+            }
         }) as Box<dyn FnMut(Event)>);
         let _ = surface
             .add_event_listener_with_callback("compositionstart", cb.as_ref().unchecked_ref());
         closures.push(cb);
 
+        let native = native_input.clone();
         let surface_for_end = surface.clone();
         let state_provider = state_provider.clone();
         let dispatch = dispatch.clone();
+        let runtime = runtime.clone();
         let runtime_for_log = runtime_name.clone();
-        let composing_end = composing.clone();
         let manager = node_view_manager.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
-            composing_end.set(false);
             if !editor_owns_event(&event, &manager) {
                 return;
             }
             let started_at = perf_now_ms();
-            let outcome = commit_composition(&surface_for_end, &state_provider, &dispatch);
+            let reason = native.finish(
+                &surface_for_end,
+                &runtime,
+                &manager,
+                &state_provider,
+                &*dispatch,
+            );
+            native.end_composition_turn();
             log_input_perf(debug_perf, "input.compositionend", || {
                 json!({
                     "runtime": runtime_for_log.clone(),
-                    "handled": outcome.handled,
-                    "reason": outcome.reason,
+                    "reason": reason,
                     "total_ms": round_ms(perf_now_ms() - started_at),
                 })
             });
@@ -1254,117 +1304,6 @@ fn try_replace_selection(
     tr.replace_selection(Slice::new(content.clone(), open_start, open_end))
         .ok()?;
     Some(tr)
-}
-
-/// Why a composition commit did or didn't reach the model — logged, and
-/// returned so tests can assert on the reason rather than only the outcome.
-struct CompositionCommit {
-    handled: bool,
-    reason: &'static str,
-}
-
-impl CompositionCommit {
-    fn skipped(reason: &'static str) -> Self {
-        Self {
-            handled: false,
-            reason,
-        }
-    }
-}
-
-/// Read the block the IME just committed into back into the model.
-///
-/// This is the narrow, composition-shaped case of what ProseMirror's DOM
-/// observer does generally: re-read the changed region and diff it against the
-/// model rather than assuming the model is right. It is deliberately *narrow* —
-/// it trusts the DOM for exactly one textblock, at exactly one moment (the
-/// commit), and refuses rather than guesses everywhere else.
-///
-/// The guard that makes it safe is the length check: a textblock whose model
-/// content size equals its DOM text length can only be text and marks, because
-/// an inline atom (an image, a hard break) costs one model position while
-/// contributing no text. Blocks containing atoms therefore bail out instead of
-/// diffing two sequences that were never aligned to begin with — mis-aligning
-/// them would splice the replacement at an offset that means nothing.
-fn commit_composition(
-    surface: &Element,
-    state_provider: &Rc<dyn Fn(bool) -> Option<EditorState>>,
-    dispatch: &Rc<impl Fn(EditorState, Transaction, bool)>,
-) -> CompositionCommit {
-    let Some(sel) = web_sys::window().and_then(|w| w.get_selection().ok().flatten()) else {
-        return CompositionCommit::skipped("no_selection");
-    };
-    let Some(anchor) = sel.anchor_node() else {
-        return CompositionCommit::skipped("no_anchor");
-    };
-    if !surface.contains(Some(&anchor)) {
-        return CompositionCommit::skipped("anchor_outside_surface");
-    }
-    // The composing node is a text node; its block is what we re-read.
-    let Some(block) = anchor
-        .parent_element()
-        .and_then(|el| nearest_block_element(surface, &el))
-    else {
-        return CompositionCommit::skipped("no_block");
-    };
-    let Some(content_start) = dom_pos_to_model(surface, block.as_ref(), 0) else {
-        return CompositionCommit::skipped("block_not_mappable");
-    };
-    let Some(state) = state_provider(false) else {
-        return CompositionCommit::skipped("missing_state");
-    };
-
-    let doc = state.doc();
-    let Ok(resolved) = doc.resolve(content_start) else {
-        return CompositionCommit::skipped("unresolvable_position");
-    };
-    let block_size = resolved.parent().content_size();
-    let Ok(old_text) = doc.text_between(content_start, content_start + block_size, "") else {
-        return CompositionCommit::skipped("unreadable_model_text");
-    };
-    if old_text.chars().count() != block_size {
-        // Inline atoms present — model positions and DOM text don't line up.
-        return CompositionCommit::skipped("block_not_pure_text");
-    }
-    let new_text = block.text_content().unwrap_or_default();
-    if new_text == old_text {
-        return CompositionCommit::skipped("no_change");
-    }
-
-    let (offset, count, replacement) = char_splice(&old_text, &new_text);
-    let from = content_start + offset;
-    let to = from + count;
-    let Some(state) = state_with_text_selection(state, from, to) else {
-        return CompositionCommit::skipped("selection_error");
-    };
-    let Some(tr) = insert_text_transaction(&state, replacement) else {
-        return CompositionCommit::skipped("transaction_error");
-    };
-    dispatch(state, tr, false);
-    CompositionCommit {
-        handled: true,
-        reason: "committed",
-    }
-}
-
-/// The nearest ancestor of `el` (inclusive) that the model addresses as a
-/// block — i.e. one carrying a `data-pos`, which is what the position mapping
-/// keys off.
-fn nearest_block_element(surface: &Element, el: &Element) -> Option<Element> {
-    let mut current = Some(el.clone());
-    while let Some(node) = current {
-        if !surface.contains(Some(node.as_ref())) {
-            return None;
-        }
-        if node.has_attribute("data-pos") {
-            return Some(node);
-        }
-        if &node == surface {
-            return None;
-        }
-        current = node.parent_element();
-    }
-    None
 }
 
 fn insert_text_transaction(state: &EditorState, text: String) -> Option<Transaction> {
@@ -1741,7 +1680,7 @@ mod input_event_tests {
                 }),
                 node_view_manager: Rc::new(RefCell::new(NodeViewManager::new(runtime()))),
                 keymap: Rc::new(base_keymap()) as Rc<KeyMap>,
-                composing: Rc::new(std::cell::Cell::new(false)),
+                native_input: Rc::new(super::NativeInput::default()),
                 debug_perf: false,
             },
             move |state: EditorState, tr, _scroll| {
@@ -1837,18 +1776,13 @@ mod input_event_tests {
     }
 
     #[wasm_bindgen_test]
-    fn insert_replacement_text_is_handled_not_refused() {
-        // Autocorrect. Without a target range the browser is telling us to
-        // replace at the caret, so this lands as an insert; the important part
-        // is that it is handled by the model at all rather than falling through
-        // to a native DOM rewrite the model never sees.
+    fn replacement_without_a_target_range_waits_for_native_readback() {
+        // Without a target range, the replacement position is unknown. Wait
+        // for native readback instead of inserting the entire word at the caret.
         let (surface, live, _closures) = mount(state_with("hello", 6));
         let ev = fire_beforeinput(&surface, "insertReplacementText", Some(" there"));
-        assert!(
-            ev.default_prevented(),
-            "a replacement must never reach the browser"
-        );
-        assert_eq!(doc_text(&live.borrow()), "hello there");
+        assert!(!ev.default_prevented());
+        assert_eq!(doc_text(&live.borrow()), "hello");
     }
 
     #[wasm_bindgen_test]
@@ -1876,7 +1810,7 @@ mod input_event_tests {
 /// the whole point is that the composed text arrives *without* one.
 #[cfg(all(test, target_arch = "wasm32"))]
 mod composition_tests {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
 
@@ -1904,7 +1838,7 @@ mod composition_tests {
     ) -> (
         Element,
         Rc<RefCell<EditorState>>,
-        Rc<Cell<bool>>,
+        Rc<super::NativeInput>,
         Vec<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
     ) {
         let document = web_sys::window().unwrap().document().unwrap();
@@ -1921,7 +1855,7 @@ mod composition_tests {
         let live = Rc::new(RefCell::new(state));
         let for_provider = live.clone();
         let for_dispatch = live.clone();
-        let composing = Rc::new(Cell::new(false));
+        let composing = Rc::new(super::NativeInput::default());
         let closures = install_listeners(
             super::ListenerSetup {
                 surface: surface.clone(),
@@ -1929,7 +1863,7 @@ mod composition_tests {
                 state_provider: Rc::new(move |_live: bool| Some(for_provider.borrow().clone())),
                 node_view_manager: Rc::new(RefCell::new(NodeViewManager::new(runtime()))),
                 keymap: Rc::new(base_keymap()) as Rc<KeyMap>,
-                composing: composing.clone(),
+                native_input: composing.clone(),
                 debug_perf: false,
             },
             move |state: EditorState, tr, _scroll| {
@@ -2001,7 +1935,10 @@ mod composition_tests {
     fn a_committed_composition_reaches_the_model() {
         let (surface, live, composing, _closures) = mount(paragraph_doc("ni"), 3);
         fire_composition(&surface, "compositionstart");
-        assert!(composing.get(), "compositionstart should raise the flag");
+        assert!(
+            composing.is_composing(),
+            "compositionstart should raise the flag"
+        );
 
         // The IME rewrites the DOM directly; the model still says "ni".
         ime_rewrites_dom_text(&surface, "nihao");
@@ -2009,7 +1946,10 @@ mod composition_tests {
 
         place_caret_in_first_text_node(&surface);
         fire_composition(&surface, "compositionend");
-        assert!(!composing.get(), "compositionend should clear the flag");
+        assert!(
+            !composing.is_composing(),
+            "compositionend should clear the flag"
+        );
         assert_eq!(
             doc_text(&live.borrow()),
             "nihao",
@@ -2018,7 +1958,7 @@ mod composition_tests {
     }
 
     #[wasm_bindgen_test]
-    fn a_composition_that_changed_nothing_dispatches_nothing() {
+    fn a_composition_that_changed_nothing_preserves_the_document() {
         let (surface, live, _composing, _closures) = mount(paragraph_doc("hello"), 6);
         fire_composition(&surface, "compositionstart");
         place_caret_in_first_text_node(&surface);
@@ -2027,11 +1967,9 @@ mod composition_tests {
     }
 
     #[wasm_bindgen_test]
-    fn a_block_holding_an_inline_atom_is_refused_rather_than_mis_spliced() {
-        // The guard that keeps the readback honest: an inline atom costs a model
-        // position but contributes no text, so model positions and DOM text are
-        // not aligned and a diff between them would splice at a meaningless
-        // offset. Such a block must bail out, leaving the model untouched.
+    fn composition_preserves_an_inline_atom_and_reads_text_on_each_side() {
+        // A hard break occupies one model position. Preserve it while the
+        // surrounding text changes, rather than reading the block's textContent.
         let doc = schema_basic::doc(vec![
             schema_basic::paragraph(vec![
                 schema_basic::text("hi", Vec::new()).unwrap(),
@@ -2042,8 +1980,6 @@ mod composition_tests {
         ])
         .unwrap();
         let (surface, live, _composing, _closures) = mount(doc, 3);
-        let before = doc_text(&live.borrow());
-
         fire_composition(&surface, "compositionstart");
         ime_rewrites_dom_text(&surface, "hiXYZ");
         place_caret_in_first_text_node(&surface);
@@ -2051,8 +1987,18 @@ mod composition_tests {
 
         assert_eq!(
             doc_text(&live.borrow()),
-            before,
-            "a block with an inline atom must be refused, not mis-spliced"
+            "hiXYZthere",
+            "native text must commit while the hard break retains its position"
+        );
+        assert_eq!(
+            live.borrow()
+                .doc()
+                .child(0)
+                .unwrap()
+                .child(1)
+                .unwrap()
+                .type_name(),
+            "hard_break"
         );
     }
 }

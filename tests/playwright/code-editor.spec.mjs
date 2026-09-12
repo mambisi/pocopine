@@ -22,7 +22,10 @@ async function highlighted(page, language) {
 }
 const documentChanges = state => state.changes.filter(change => change.document_changed);
 
-test.beforeEach(async ({page}) => {
+test.beforeEach(async ({page, browser}, info) => {
+  expect(browser.browserType().name()).toBe(info.project.use.defaultBrowserType);
+  info.annotations.push({type: 'browser-engine', description: browser.browserType().name()});
+  info.annotations.push({type: 'browser-version', description: browser.version()});
   await page.goto('/');
   await page.locator('#source [data-pine-code-instance]').waitFor();
   await page.waitForFunction(() => Boolean(window.codeExample));
@@ -93,12 +96,21 @@ test('plain clipboard paste normalizes line endings and copies no gutter', async
   await load(page, '');
   await page.locator(content).evaluate(el => {
     const data = new DataTransfer(); data.setData('text/plain', '<b>literal</b>\r\n\t🦀\r'); data.setData('text/html', '<b>rich</b>');
-    el.dispatchEvent(new ClipboardEvent('paste', {bubbles: true, cancelable: true, clipboardData: data}));
+    const event = new ClipboardEvent('paste', {bubbles: true, cancelable: true, clipboardData: data});
+    // Firefox gives synthetic ClipboardEvents a separate empty DataTransfer.
+    Object.defineProperty(event, 'clipboardData', {value: data});
+    el.dispatchEvent(event);
   });
   expect((await snapshot(page)).text).toBe('<b>literal</b>\n\t🦀\n');
   await expect(page.locator(`${content} b`)).toHaveCount(0);
   await page.keyboard.press('ControlOrMeta+a');
-  const copied = await page.locator(content).evaluate(el => { const data = new DataTransfer(); el.dispatchEvent(new ClipboardEvent('copy', {bubbles: true, cancelable: true, clipboardData: data})); return data.getData('text/plain'); });
+  const copied = await page.locator(content).evaluate(el => {
+    const data = new DataTransfer();
+    const event = new ClipboardEvent('copy', {bubbles: true, cancelable: true, clipboardData: data});
+    Object.defineProperty(event, 'clipboardData', {value: data});
+    el.dispatchEvent(event);
+    return data.getData('text/plain');
+  });
   expect(copied).toBe('<b>literal</b>\n\t🦀\n');
 });
 

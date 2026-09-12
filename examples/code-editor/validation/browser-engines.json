@@ -1,0 +1,32 @@
+{
+  "recorded_at": "2026-09-12T00:49:43.033Z",
+  "profile": "release",
+  "bundle": "code_editor_example_bg.5d51e60f.wasm",
+  "suite": "tests/playwright/code-editor.spec.mjs",
+  "stats": {
+    "startTime": "2026-09-12T00:49:43.033Z",
+    "duration": 54497.984,
+    "expected": 84,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "projects": {
+    "code-editor-chromium": {
+      "engine": "chromium",
+      "version": "148.0.7778.96",
+      "passed": 28
+    },
+    "code-editor-firefox": {
+      "engine": "firefox",
+      "version": "150.0.2",
+      "passed": 28
+    },
+    "code-editor-webkit": {
+      "engine": "webkit",
+      "version": "26.4",
+      "passed": 28
+    }
+  },
+  "scope": "Headless Linux browser engines; synthetic clipboard and composition events do not establish real device or OS input-method support."
+}

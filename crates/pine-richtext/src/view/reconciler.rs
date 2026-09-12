@@ -156,7 +156,7 @@ impl<'a> Reconciler<'a> {
         }
     }
 
-    fn full_render(&self, surface: &Element, new_doc: &RichNode) -> ReconcileOutcome {
+    pub(crate) fn full_render(&self, surface: &Element, new_doc: &RichNode) -> ReconcileOutcome {
         let html = render_doc_to_html(self.runtime, new_doc);
         self.will_remove_subtree(surface);
         if set_inner_html(surface, &html) {
@@ -562,7 +562,7 @@ impl<'a> Reconciler<'a> {
             let old_text = old_node.text().ok_or(())?;
             let new_text = new_node.text().ok_or(())?;
             if old_text != new_text {
-                patch_inline_text(dom, old_text, new_text)?;
+                patch_inline_text(dom, new_text)?;
                 stats.record_text();
             }
             return Ok(());
@@ -724,7 +724,11 @@ impl<'a> Reconciler<'a> {
         }
     }
 
-    fn content_root_for_node(&self, dom: &Element, node: &RichNode) -> Result<Element, ()> {
+    pub(crate) fn content_root_for_node(
+        &self,
+        dom: &Element,
+        node: &RichNode,
+    ) -> Result<Element, ()> {
         if self
             .runtime
             .lookup_typed_node_view(node.type_name())
@@ -907,7 +911,7 @@ fn direct_inline_children(root: &Element) -> Result<Vec<DomNode>, ()> {
 /// Patch the sole text leaf represented by one model text node. Marked text
 /// has a one-child wrapper chain (`<em><strong>text</strong></em>`), while
 /// unmarked text starts at the `Text` node itself.
-fn patch_inline_text(dom: &DomNode, old_text: &str, new_text: &str) -> Result<(), ()> {
+fn patch_inline_text(dom: &DomNode, new_text: &str) -> Result<(), ()> {
     let mut leaf = dom.clone();
     loop {
         if leaf.node_type() == DomNode::TEXT_NODE {
@@ -919,10 +923,16 @@ fn patch_inline_text(dom: &DomNode, old_text: &str, new_text: &str) -> Result<()
         leaf = leaf.first_child().ok_or(())?;
     }
 
+    // Native input may already have applied the edit. Diff the actual leaf,
+    // otherwise replaying the model splice duplicates an IME/autocorrect edit.
+    let actual_text = leaf.node_value().unwrap_or_default();
+    if actual_text == new_text {
+        return Ok(());
+    }
     // Splice only the changed span instead of rewriting the whole text node.
     // `text_splice` operates on chars, so surrogate pairs are never split.
     if let Some(character_data) = leaf.dyn_ref::<web_sys::CharacterData>() {
-        let (offset, count, replacement) = crate::text_diff::text_splice(old_text, new_text);
+        let (offset, count, replacement) = crate::text_diff::text_splice(&actual_text, new_text);
         if character_data
             .replace_data(offset, count, &replacement)
             .is_ok()

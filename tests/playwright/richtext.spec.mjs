@@ -148,10 +148,10 @@ test('materializes task item checkboxes and toggles checked state', async ({ pag
   await page.goto('/');
   await expect(page.locator('pine-rich-text-root[runtime="document"]')).toBeVisible();
   await expect
-    .poll(() => events.some((event) => event.debug_version === 'pine-richtext@0.1.0:debug-json-v1'))
+    .poll(() => events.some((event) => /^pine-richtext@[^:]+:debug-json-v1$/.test(event.debug_version ?? '')))
     .toBe(true);
 
-  const taskItems = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
+  const taskItems = page.locator('pine-rich-text-root[runtime="document"] li[data-pine-node-type="task_item"]');
   await expect(taskItems).toHaveCount(2);
   await expect(taskItems.nth(0)).toHaveAttribute('data-checked', 'true');
   await expect(taskItems.nth(1)).toHaveAttribute('data-checked', 'false');
@@ -406,14 +406,14 @@ test('toolbar ordered and checklist lists also create one item per selected para
   await page.locator('.toolbar button', { hasText: /^☑ List$/ }).click();
 
   const taskList = page.locator('pine-rich-text-root[runtime="document"] ul.task-list').first();
-  await expect(taskList.locator('[data-pine-node-type="task_item"]')).toHaveCount(2);
-  await expect(taskList.locator('[data-pine-node-type="task_item"]').nth(0)).toHaveAttribute('data-checked', 'false');
-  await expect(taskList.locator('[data-pine-node-type="task_item"]').nth(1)).toHaveAttribute('data-checked', 'false');
+  await expect(taskList.locator('li[data-pine-node-type="task_item"]')).toHaveCount(2);
+  await expect(taskList.locator('li[data-pine-node-type="task_item"]').nth(0)).toHaveAttribute('data-checked', 'false');
+  await expect(taskList.locator('li[data-pine-node-type="task_item"]').nth(1)).toHaveAttribute('data-checked', 'false');
   await expect(taskList.locator('.pine-task-item-check').nth(0)).toBeVisible();
   await expect(taskList.locator('.pine-task-item-check').nth(1)).toBeVisible();
-  await expectTaskItemChromeHasNoTextNodes(taskList.locator('[data-pine-node-type="task_item"]').nth(0));
-  await expectTaskItemChromeHasNoTextNodes(taskList.locator('[data-pine-node-type="task_item"]').nth(1));
-  const taskTexts = await taskList.locator('[data-pine-node-type="task_item"]').evaluateAll((items) =>
+  await expectTaskItemChromeHasNoTextNodes(taskList.locator('li[data-pine-node-type="task_item"]').nth(0));
+  await expectTaskItemChromeHasNoTextNodes(taskList.locator('li[data-pine-node-type="task_item"]').nth(1));
+  const taskTexts = await taskList.locator('li[data-pine-node-type="task_item"]').evaluateAll((items) =>
     items.map((item) => item.textContent.trim()),
   );
   expect(taskTexts[0]).toBe('Hello, pine-richtext.');
@@ -502,7 +502,7 @@ test('Backspace at the first bullet unwraps that item without deleting the rest 
     return {
       topParagraphs: [...surface.querySelectorAll(':scope > p')].map((p) => p.textContent),
       bulletItems: bullet ? [...bullet.children].map((li) => li.textContent.trim()) : [],
-      taskItems: [...surface.querySelectorAll(':scope > ul.task-list > [data-pine-node-type="task_item"]')].map(
+      taskItems: [...surface.querySelectorAll(':scope > ul.task-list > li[data-pine-node-type="task_item"]')].map(
         (item) => item.textContent.trim(),
       ),
     };
@@ -521,7 +521,7 @@ test('italic mark toggle reconciles one subtree and preserves task checkboxes', 
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  const taskItems = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
+  const taskItems = page.locator('pine-rich-text-root[runtime="document"] li[data-pine-node-type="task_item"]');
   await expect(taskItems).toHaveCount(2);
   await expect(taskItems.nth(0).locator('.pine-task-item-check')).toBeVisible();
   await taskItems.nth(0).locator('.pine-task-item-check').evaluate((check) => {
@@ -555,7 +555,7 @@ test('typing inside a task item preserves node-view chrome', async ({ page }) =>
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  const taskItems = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
+  const taskItems = page.locator('pine-rich-text-root[runtime="document"] li[data-pine-node-type="task_item"]');
   await expect(taskItems).toHaveCount(2);
   await taskItems.nth(1).evaluate((item) => {
     item.__pineSmokeHostToken = 'preserve-host';
@@ -664,9 +664,9 @@ test('typed TaskListExtension mounts PineTaskItem on native task-item hosts', as
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="document"] li[data-pine-node-type="task_item"]');
 
-  const items = page.locator('pine-rich-text-root[runtime="document"] [data-pine-node-type="task_item"]');
+  const items = page.locator('pine-rich-text-root[runtime="document"] li[data-pine-node-type="task_item"]');
   await expect(items).toHaveCount(2);
   // Every stable native host carries the semantic type and position; the
   // mounted component exposes its editor-owned child outlet without a
@@ -779,8 +779,8 @@ test('bullet → task → bullet round-trips through the conversion contract', a
       document.querySelector('pine-rich-text-root[runtime="document"]');
     const taskLists = [...surface.querySelectorAll(':scope > ul.task-list')];
     return taskLists.map((ul) => ({
-      itemCount: ul.querySelectorAll(':scope > [data-pine-node-type="task_item"]').length,
-      texts: [...ul.querySelectorAll(':scope > [data-pine-node-type="task_item"]')].map((item) =>
+      itemCount: ul.querySelectorAll(':scope > li[data-pine-node-type="task_item"]').length,
+      texts: [...ul.querySelectorAll(':scope > li[data-pine-node-type="task_item"]')].map((item) =>
         item.textContent.trim(),
       ),
     }));
@@ -800,7 +800,7 @@ test('bullet → task → bullet round-trips through the conversion contract', a
     const taskList = [...surface.querySelectorAll(':scope > ul.task-list')].find((ul) =>
       ul.textContent.includes('Hello, pine-richtext'),
     );
-    const para = taskList.querySelector('[data-pine-node-type="task_item"] p');
+    const para = taskList.querySelector('li[data-pine-node-type="task_item"] p');
     const range = document.createRange();
     range.setStart(para.firstChild, 0);
     range.setEnd(para.firstChild, 2);
@@ -1313,7 +1313,7 @@ test('invalid state replacement fails loudly and preserves the live document', a
     const host = document.querySelector('pine-rich-text-root[runtime="document"]');
     window.__pineLoadErrors = [];
     host.addEventListener('pine:richtext:load-error', (event) => {
-      window.__pineLoadErrors.push(event.detail);
+      window.__pineLoadErrors.push(JSON.parse(JSON.stringify(event.detail, (_key, value) => value instanceof Map ? Object.fromEntries(value) : value)));
     });
     host.dispatchEvent(
       new CustomEvent('pine:richtext:command', {

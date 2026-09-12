@@ -8,20 +8,20 @@ const richtextSmokeUrl = `http://127.0.0.1:${richtextSmokePort}`;
 // smoke; set PLAYWRIGHT_SERVE_DIR=examples/<other> to run another example's spec.
 const serveDir = process.env.PLAYWRIGHT_SERVE_DIR ?? 'examples/richtext';
 const codeEditor = process.env.PLAYWRIGHT_EXAMPLE === 'code-editor';
+const richtextInputMatrix = process.env.RICHTEXT_INPUT_MATRIX === '1';
 const codePort = process.env.CODE_EDITOR_PORT ?? '3044';
 const codeUrl = `http://127.0.0.1:${codePort}`;
 
 export default defineConfig({
   testDir: './tests/playwright',
-  ...(codeEditor ? { testMatch: /code-editor.*\.spec\.mjs/ } : { testIgnore: /code-editor.*\.spec\.mjs/ }),
+  ...(codeEditor ? { testMatch: /[/\\]code-editor[^/\\]*\.spec\.mjs$/ } : { testIgnore: /[/\\]code-editor[^/\\]*\.spec\.mjs$/ }),
   timeout: 30_000,
   expect: {
     timeout: 5_000,
   },
   use: {
     baseURL: codeEditor ? codeUrl : richtextSmokeUrl,
-    browserName: 'chromium',
-    ...(!codeEditor && browserChannel ? { channel: browserChannel } : {}),
+    ...(!codeEditor && !richtextInputMatrix && browserChannel ? { channel: browserChannel } : {}),
     headless: true,
     trace: 'retain-on-failure',
     viewport: { width: 1280, height: 900 },
@@ -30,6 +30,12 @@ export default defineConfig({
     { name: 'code-editor-chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'code-editor-firefox', use: { ...devices['Desktop Firefox'] } },
     { name: 'code-editor-webkit', use: { ...devices['Desktop Safari'] } },
+  ] : richtextInputMatrix ? [
+    { name: 'richtext-chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'richtext-firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'richtext-webkit', use: { ...devices['Desktop Safari'] } },
+    { name: 'richtext-android-emulation', use: { ...devices['Pixel 7'] } },
+    { name: 'richtext-ios-emulation', use: { ...devices['iPhone 13'] } },
   ] : [
     {
       name: 'richtext-chromium',
@@ -42,9 +48,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
   } : {
-    command: `python3 -m http.server ${richtextSmokePort} --bind 127.0.0.1 --directory ${serveDir}`,
+    command: `pocopine run --path ${serveDir} --port ${richtextSmokePort}`,
     url: richtextSmokeUrl,
     reuseExistingServer: !process.env.CI,
-    timeout: 10_000,
+    timeout: 240_000,
   },
 });

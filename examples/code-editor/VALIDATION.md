@@ -22,7 +22,7 @@ release acceptance remains pending the manual checks below.
 - The CLI's focused WASM-header discovery test passes, including dependency
   reachability so an unrelated workspace package cannot supply the headers.
 
-Release integration: **84 / 84 passing** (28 each in Chromium 148.0.7778.96,
+Release integration, refreshed 2026-09-12: **84 / 84 passing** (28 each in Chromium 148.0.7778.96,
 Firefox 150.0.2, and WebKit 26.4). Cases cover native typing/history, Unicode
 and backwards selection, clipboard/drop, readonly/disabled navigation,
 composition guards and finalization, interrupted-draft policy, recovery,
@@ -33,6 +33,14 @@ results, worker startup failure and recovery, worker disposal/remounting, and
 the native language picker with language-specific indentation.
 The release CLI build passes. The example bundle used for this run is
 `code_editor_example_bg.5d51e60f.wasm`.
+
+The refreshed run verifies each actual browser engine and records its version
+in the [engine-check artifact](validation/browser-engines.json). Validation
+found that a global `browserName: 'chromium'` setting overrode the other device
+presets; the earlier project names alone did not establish Firefox/WebKit
+coverage. Removing that override and explicitly supplying Firefox's synthetic
+clipboard fixture payload produced the verified 84/84 run above. The Chromium
+performance measurements below are unaffected by the project override.
 
 On this Ubuntu 25.10 host, Playwright WebKit uses isolated Ubuntu 24.04
 compatibility libraries extracted from a disposable container. No host
@@ -116,7 +124,7 @@ WASM dependency graph. CI includes these five crates in its WASM check, and
 253 affected host tests passed, including the storage emulator integrations.
 Clippy still reports existing workspace warnings.
 
-`cargo test --workspace` did not complete. A run with socket access failed
+`cargo test --workspace` did not complete. The 2026-09-12 rerun with socket access failed
 compiling `pocopine-live` at `src/lib.rs:1820`, with incompatible `http` type
 identities at `RequestContext::from_parts`. A preceding run also reported
 missing compiled collaboration/realtime crates. These broad host failures have

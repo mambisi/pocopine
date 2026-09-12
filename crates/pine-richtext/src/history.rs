@@ -1,10 +1,9 @@
 //! Undo / redo for pine-richtext.
 //!
 //! A Rust port of `prosemirror-history`. The shape is simpler than
-//! upstream — pine doesn't use rope sequences and doesn't merge adjacent
-//! edits in v1. Each transaction becomes one history event; undo pops the
-//! latest event, applies the previously-inverted steps in reverse, and
-//! pushes the event onto the redo branch.
+//! upstream: rapid typing and the final transactions of one native composition
+//! share an undo event. Undo applies the previously inverted steps in reverse
+//! and pushes the event onto the redo branch.
 //!
 //! History state lives in a [`pine_richtext::state::Plugin`] keyed
 //! `"history"`. The plugin's state is JSON (every step round-trips
@@ -53,6 +52,11 @@ pub const HISTORY_META: &str = "history";
 /// transactions without it skip the merge step entirely
 /// (still recorded, just never merged).
 pub const HISTORY_COMMIT_MS_META: &str = "commit_ms";
+
+/// Native composition transaction; `true` continues the immediately preceding
+/// composition event after a delayed final input. The view checks document
+/// identity before allowing continuation. Ordinary typing never joins it.
+pub(crate) const HISTORY_COMPOSITION_META: &str = "native_composition";
 
 /// Cap on `history.done.len()`. Matches the PM default. The
 /// `undone` branch isn't capped — it only grows from undos
@@ -187,7 +191,10 @@ fn apply_history_value_in_place(
         inverted_json.push(inverted.to_json());
     }
 
-    let is_typing = forward_steps_are_typing(steps_after);
+    let composition = transaction
+        .meta(HISTORY_COMPOSITION_META)
+        .and_then(Value::as_bool);
+    let is_typing = composition.is_none() && forward_steps_are_typing(steps_after);
     let now_ms = transaction
         .meta(HISTORY_COMMIT_MS_META)
         .and_then(Value::as_u64)
@@ -197,6 +204,7 @@ fn apply_history_value_in_place(
         "selection": old_state.selection().bookmark(),
         "is_typing": is_typing,
         "ms": now_ms,
+        "composition": composition.is_some(),
     });
 
     let obj = value.as_object_mut().unwrap();
@@ -205,7 +213,13 @@ fn apply_history_value_in_place(
         *done = json!([]);
     }
     let done_arr = done.as_array_mut().unwrap();
-    if !(is_typing && try_merge_into_last(done_arr, &event, now_ms)) {
+    let continue_composition = composition == Some(true)
+        && done_arr
+            .last()
+            .is_some_and(|event| event.get("composition") == Some(&Value::Bool(true)));
+    if continue_composition {
+        append_event_steps(done_arr.last_mut().unwrap(), &event);
+    } else if !(is_typing && try_merge_into_last(done_arr, &event, now_ms)) {
         done_arr.push(event);
     }
     // Cap depth. Drop from the front (oldest first) one at a
@@ -261,6 +275,14 @@ fn try_merge_into_last(done: &mut [Value], new_event: &Value, now_ms: u64) -> bo
     // Append the new event's inverted steps onto the last
     // event's. Undoing the last event then unwinds the whole
     // merged run in one shot.
+    append_event_steps(last, new_event);
+    if let Some(obj) = last.as_object_mut() {
+        obj.insert("ms".to_string(), json!(now_ms));
+    }
+    true
+}
+
+fn append_event_steps(last: &mut Value, new_event: &Value) {
     if let (Some(last_steps), Some(new_steps)) = (
         last.get_mut("steps").and_then(Value::as_array_mut),
         new_event.get("steps").and_then(Value::as_array),
@@ -269,10 +291,6 @@ fn try_merge_into_last(done: &mut [Value], new_event: &Value, now_ms: u64) -> bo
             last_steps.push(step);
         }
     }
-    if let Some(obj) = last.as_object_mut() {
-        obj.insert("ms".to_string(), json!(now_ms));
-    }
-    true
 }
 
 fn push_value_array(obj: &mut serde_json::Map<String, Value>, key: &str, value: Value) {
@@ -374,4 +392,48 @@ fn branch_len(state: &EditorState, key: &str) -> usize {
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+    use crate::schema_basic;
+    use crate::state::{EditorStateConfig, Selection};
+
+    #[test]
+    fn a_delayed_composition_commit_shares_undo_but_later_typing_does_not() {
+        let doc = schema_basic::doc(vec![
+            schema_basic::paragraph(vec![schema_basic::text("ni", vec![]).unwrap()]).unwrap(),
+        ])
+        .unwrap();
+        let mut state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc)
+                .plugins(vec![history_plugin()])
+                .selection(Selection::text_between(1, 3)),
+        )
+        .unwrap();
+        let mut first = state.tr();
+        first.insert_text("你").unwrap();
+        first.set_meta(HISTORY_COMPOSITION_META, json!(false));
+        first.set_meta(HISTORY_COMMIT_MS_META, json!(1));
+        state = state.apply(first).unwrap();
+        let mut final_input = state.tr();
+        final_input.insert_text("好").unwrap();
+        final_input.set_meta(HISTORY_COMPOSITION_META, json!(true));
+        final_input.set_meta(HISTORY_COMMIT_MS_META, json!(2000));
+        state = state.apply(final_input).unwrap();
+        assert_eq!(undo_depth(&state), 1);
+        let undone = state.apply(undo().apply(&state).unwrap()).unwrap();
+        assert_eq!(undone.doc().text_content(), "ni");
+        let redone = undone.apply(redo().apply(&undone).unwrap()).unwrap();
+        assert_eq!(redone.doc().text_content(), "你好");
+
+        let mut typing = state.tr();
+        typing.insert_text("!").unwrap();
+        typing.set_meta(HISTORY_COMMIT_MS_META, json!(2001));
+        state = state.apply(typing).unwrap();
+        assert_eq!(undo_depth(&state), 2);
+        let undone = state.apply(undo().apply(&state).unwrap()).unwrap();
+        assert_eq!(undone.doc().text_content(), "你好");
+    }
 }
