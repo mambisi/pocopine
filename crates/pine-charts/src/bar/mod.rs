@@ -705,94 +705,168 @@ impl PineBarChart {
         self.recompute();
     }
 
-    #[watch(animate)]
-    fn on_animate(&mut self, _: bool, _: Option<bool>) {
-        self.update_animation_style();
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[watch(
+        data,
+        series,
+        mode,
+        width,
+        height,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left,
+        y_min,
+        y_max,
+        padding_inner,
+        padding_outer,
+        series_padding_inner,
+        animate,
+        animation_duration,
+        animation_easing
+    )]
+    fn on_geometry_change(
+        data: Vec<ChartBar>,
+        series: Vec<ChartBarSeries>,
+        mode: String,
+        width: f64,
+        height: f64,
+        margin_top: f64,
+        margin_right: f64,
+        margin_bottom: f64,
+        margin_left: f64,
+        y_min: Option<f64>,
+        y_max: Option<f64>,
+        padding_inner: f64,
+        padding_outer: f64,
+        series_padding_inner: f64,
+        animate: bool,
+        animation_duration: f64,
+        animation_easing: String,
+    ) -> Update<
+        Self,
+        (
+            Self::State,
+            Self::ViewBox,
+            Self::Bars,
+            Self::PlotX,
+            Self::PlotY,
+            Self::PlotRight,
+            Self::PlotBottom,
+            Self::YGrid,
+            Self::XTickLabels,
+            Self::YTickLabels,
+            Self::XAxisLabel,
+            Self::YAxisLabel,
+            Self::XAxis,
+            Self::YAxis,
+            Self::LegendItems,
+            Self::HoverVisible,
+            Self::FocusedKey,
+            Self::SelectedKey,
+            Self::Error,
+            Self::Ready,
+            Self::Empty,
+            Self::Invalid,
+        ),
+    > {
+        // Work on a detached render snapshot so selection and animation history
+        // survive a prop change. Only the returned fields commit to the scope.
+        let mut next = this::<Self>().with(Clone::clone);
+
+        next.data = data;
+        next.series = series;
+        next.mode = mode;
+        next.width = width;
+        next.height = height;
+        next.margin_top = margin_top;
+        next.margin_right = margin_right;
+        next.margin_bottom = margin_bottom;
+        next.margin_left = margin_left;
+        next.y_min = y_min;
+        next.y_max = y_max;
+        next.padding_inner = padding_inner;
+        next.padding_outer = padding_outer;
+        next.series_padding_inner = series_padding_inner;
+        next.animate = animate;
+        next.animation_duration = animation_duration;
+        next.animation_easing = animation_easing;
+        crate::events::with_chart_event_target(|| next.recompute());
+        Update::new()
+            .state(next.state)
+            .view_box(next.view_box)
+            .bars(next.bars)
+            .plot_x(next.plot_x)
+            .plot_y(next.plot_y)
+            .plot_right(next.plot_right)
+            .plot_bottom(next.plot_bottom)
+            .y_grid(next.y_grid)
+            .x_tick_labels(next.x_tick_labels)
+            .y_tick_labels(next.y_tick_labels)
+            .x_axis_label(next.x_axis_label)
+            .y_axis_label(next.y_axis_label)
+            .x_axis(next.x_axis)
+            .y_axis(next.y_axis)
+            .legend_items(next.legend_items)
+            .hover_visible(next.hover_visible)
+            .focused_key(next.focused_key)
+            .selected_key(next.selected_key)
+            .error(next.error)
+            .ready(next.ready)
+            .empty(next.empty)
+            .invalid(next.invalid)
     }
 
-    #[watch(animation_duration)]
-    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
-        self.update_animation_style();
+    #[watch(animation_duration, animation_easing)]
+    fn on_animation_change(
+        animation_duration: f64,
+        animation_easing: &str,
+    ) -> Update<Self, (Self::AnimationStyle,)> {
+        Update::new().animation_style(animation_style(animation_duration, animation_easing))
     }
 
-    #[watch(animation_easing)]
-    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
-        self.update_animation_style();
+    #[watch(tooltip, hover_visible)]
+    fn on_tooltip_change(
+        tooltip: &str,
+        hover_visible: bool,
+    ) -> Update<Self, (Self::TooltipMode, Self::TooltipAriaHidden)> {
+        let mode = crate::cartesian::tooltip_mode(tooltip);
+        Update::new()
+            .tooltip_mode(mode.into())
+            .tooltip_aria_hidden(crate::cartesian::tooltip_aria_hidden(mode, hover_visible).into())
     }
 
-    #[watch(tooltip)]
-    fn on_tooltip(&mut self, _: String, _: Option<String>) {
-        self.sync_tooltip_state();
-    }
-
-    #[watch(data)]
-    fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
-        self.recompute();
-    }
-
-    #[watch(series)]
-    fn on_series(&mut self, _: Vec<ChartBarSeries>, _: Option<Vec<ChartBarSeries>>) {
-        self.recompute();
-    }
-
-    #[watch(mode)]
-    fn on_mode(&mut self, _: String, _: Option<String>) {
-        self.recompute();
-    }
-
-    #[watch(width)]
-    fn on_width(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(height)]
-    fn on_height(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_top)]
-    fn on_margin_top(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_right)]
-    fn on_margin_right(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_bottom)]
-    fn on_margin_bottom(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(margin_left)]
-    fn on_margin_left(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(y_min)]
-    fn on_y_min(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
-        self.recompute();
-    }
-
-    #[watch(y_max)]
-    fn on_y_max(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
-        self.recompute();
-    }
-
-    #[watch(padding_inner)]
-    fn on_padding_inner(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(padding_outer)]
-    fn on_padding_outer(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
-    }
-
-    #[watch(series_padding_inner)]
-    fn on_series_padding_inner(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+    #[allow(clippy::type_complexity)]
+    #[watch(hover_visible)]
+    fn on_hover_visibility(
+        hover_visible: bool,
+    ) -> Update<
+        Self,
+        (
+            Self::HoverKey,
+            Self::HoverCategory,
+            Self::HoverValue,
+            Self::HoverValueLabel,
+            Self::HoverSeries,
+            Self::HoverAriaLabel,
+            Self::HoverPlacementX,
+            Self::HoverPlacementY,
+            Self::HoverStyle,
+        ),
+    > {
+        if hover_visible {
+            return Update::new();
+        }
+        Update::new()
+            .hover_key(Default::default())
+            .hover_category(Default::default())
+            .hover_value(Default::default())
+            .hover_value_label(Default::default())
+            .hover_series(Default::default())
+            .hover_aria_label(Default::default())
+            .hover_placement_x("right".into())
+            .hover_placement_y("above".into())
+            .hover_style(Default::default())
     }
 
     pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {

@@ -118,13 +118,8 @@ impl PineChartLegend {
     }
 
     #[watch(items)]
-    fn on_items(&mut self, _: Vec<LegendItem>, _: Option<Vec<LegendItem>>) {
-        self.recompute();
-    }
-
-    #[watch(orientation)]
-    fn on_orientation(&mut self, _: String, _: Option<String>) {
-        self.recompute();
+    fn on_items(items: &[LegendItem]) -> Update<Self, (Self::Empty,)> {
+        Update::new().empty(items.is_empty())
     }
 
     pub fn toggle_item(&mut self, key: String) {

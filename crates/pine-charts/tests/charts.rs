@@ -296,6 +296,7 @@ impl CustomTooltipLineChartFixture {}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template = poco! {
 <div>
+  <button class="swap-layer" @click="swap">Swap</button>
   <pine-layer-chart class="metro-chart"
                     label="Metro"
                     width="300"
@@ -377,11 +378,19 @@ impl Default for LayeredChartFixture {
 }
 
 #[handlers]
-impl LayeredChartFixture {}
+impl LayeredChartFixture {
+    fn swap(&mut self) {
+        self.line = vec![
+            ChartLayerPoint::new(0.0, 30.0),
+            ChartLayerPoint::new(120.0, 140.0),
+        ];
+    }
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template = poco! {
 <div>
+  <button class="swap-series" @click="swap">Swap</button>
   <pine-cartesian-chart class="composed-line-chart"
                         label="Composed revenue"
                         width="100"
@@ -416,7 +425,11 @@ impl Default for ComposedCartesianFixture {
 }
 
 #[handlers]
-impl ComposedCartesianFixture {}
+impl ComposedCartesianFixture {
+    fn swap(&mut self) {
+        self.actual = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(10.0, 0.0)];
+    }
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template = poco! {
@@ -602,6 +615,16 @@ async fn layered_chart_composes_child_marks_into_one_svg_tree() {
         icon.get_attribute("transform").as_deref(),
         Some("translate(20 20) scale(0.1)")
     );
+
+    dispatch_click(&host.query_selector("button.swap-layer").unwrap().unwrap());
+    settle().await;
+    let line = host
+        .query_selector(".pine-layer-chart-line")
+        .unwrap()
+        .unwrap();
+    assert_eq!(line.get_attribute("d").as_deref(), Some("M0,30 L120,140"));
+
+    host.remove();
 }
 
 #[wasm_bindgen_test]
@@ -666,6 +689,18 @@ async fn cartesian_chart_composes_grid_axes_and_line_series() {
         .unwrap()
         .unwrap();
     assert_eq!(y_label.text_content().as_deref(), Some("Sales"));
+
+    dispatch_click(&host.query_selector("button.swap-series").unwrap().unwrap());
+    settle().await;
+    let line = host.query_selector(".pine-chart-line").unwrap().unwrap();
+    assert_eq!(line.get_attribute("d").as_deref(), Some("M0,0 L100,100"));
+    let marker = host.query_selector(".pine-chart-marker").unwrap().unwrap();
+    assert_eq!(
+        marker.get_attribute("aria-label").as_deref(),
+        Some("Actual: x 0, y 10")
+    );
+
+    host.remove();
 }
 
 #[wasm_bindgen_test]
@@ -1738,9 +1773,11 @@ async fn area_chart_keeps_existing_series_nodes_when_adding_series() {
 #[component(template = poco! {
 <div>
   <button class="swap" @click="swap">Swap</button>
+  <button class="replace" @click="replace">Replace</button>
   <span class="swap-count" pp-text="swaps"></span>
   <pine-line-chart class="reactive-chart"
                    label="Reactive"
+                   show_markers="true"
                    width="100"
                    height="100"
                    margin_top="0"
@@ -1769,6 +1806,10 @@ impl ReactiveChartFixture {
     pub fn swap(&mut self) {
         self.swaps += 1;
         self.points = vec![ChartPoint::new(0.0, 1.0), ChartPoint::new(1.0, 0.0)];
+    }
+
+    pub fn replace(&mut self) {
+        self.points = vec![ChartPoint::new(9.0, 0.0), ChartPoint::new(10.0, 1.0)];
     }
 }
 
@@ -1799,6 +1840,58 @@ async fn line_chart_recomputes_when_bound_points_change() {
         .unwrap()
         .unwrap();
     assert_eq!(path.get_attribute("d").as_deref(), Some("M0,0 L100,100"));
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn line_chart_reconciles_selection_and_hover_after_data_updates() {
+    let host = mount_fixture::<ReactiveChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    let marker = host.query_selector(".pine-chart-marker").unwrap().unwrap();
+    let selected_key = marker.get_attribute("data-key").unwrap();
+    let event_target = host.query_selector("pine-line-chart").unwrap().unwrap();
+    let cleared_key = listen_string_field(&event_target, CHART_SELECT_END_EVENT, "key");
+    let hover_end_count = listen_event_count(&event_target, CHART_HOVER_END_EVENT);
+
+    dispatch_click(&marker);
+    dispatch_pointer_move(&svg, 0.0, 100.0);
+    settle().await;
+    assert!(marker.has_attribute("data-selected"));
+    assert!(chart.has_attribute("data-hover"));
+
+    dispatch_click(&host.query_selector("button.swap").unwrap().unwrap());
+    settle().await;
+
+    let marker = host.query_selector(".pine-chart-marker").unwrap().unwrap();
+    assert_eq!(
+        marker.get_attribute("data-key").as_deref(),
+        Some(selected_key.as_str())
+    );
+    assert!(marker.has_attribute("data-selected"));
+    assert!(marker.has_attribute("data-focused"));
+    assert!(!chart.has_attribute("data-hover"));
+    assert_eq!(hover_end_count.get(), 1);
+    assert!(cleared_key.borrow().is_none());
+
+    dispatch_click(&host.query_selector("button.replace").unwrap().unwrap());
+    settle().await;
+
+    assert!(
+        host.query_selector(".pine-chart-marker[data-selected]")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        host.query_selector(".pine-chart-marker[data-focused]")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(cleared_key.borrow().as_deref(), Some(selected_key.as_str()));
+    assert_eq!(hover_end_count.get(), 1);
 
     host.remove();
 }
