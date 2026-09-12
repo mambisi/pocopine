@@ -18,6 +18,8 @@ thread_local! {
     static ALPHA_UNMOUNTS: Cell<u32> = const { Cell::new(0) };
     static BETA_MOUNTS: Cell<u32> = const { Cell::new(0) };
     static BETA_UNMOUNTS: Cell<u32> = const { Cell::new(0) };
+    static EDITOR_MOUNTS: Cell<u32> = const { Cell::new(0) };
+    static EDITOR_UNMOUNTS: Cell<u32> = const { Cell::new(0) };
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -305,6 +307,450 @@ impl KeyedHost {
 
 fn document() -> web_sys::Document {
     window().unwrap().document().unwrap()
+}
+
+#[derive(Serialize, Deserialize)]
+#[component(name = "dc-static-editor", template = poco! {
+    <article>
+        <span class="dc-editor-label" pp-text="label"></span>
+        <span class="dc-editor-setup" pp-text="setup_label"></span>
+        <span class="dc-editor-setup-draft" pp-text="setup_draft"></span>
+        <span class="dc-editor-draft" pp-text="draft"></span>
+        <span class="dc-editor-optional" pp-text="setup_optional"></span>
+        <button class="dc-editor-edit" @click="edit">edit</button>
+        <slot></slot>
+        <slot name="footer"></slot>
+    </article>
+})]
+struct DcStaticEditor {
+    #[prop]
+    label: String,
+    #[model]
+    draft: String,
+    setup_label: String,
+    setup_draft: String,
+    #[prop]
+    optional: Option<String>,
+    setup_optional: String,
+}
+
+impl Default for DcStaticEditor {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            draft: String::new(),
+            setup_label: String::new(),
+            setup_draft: String::new(),
+            optional: Some("default".into()),
+            setup_optional: String::new(),
+        }
+    }
+}
+
+#[handlers]
+impl DcStaticEditor {
+    fn on_setup(&mut self) {
+        EDITOR_MOUNTS.with(|count| count.set(count.get() + 1));
+        self.setup_label = self.label.clone();
+        self.setup_draft = self.draft.clone();
+        self.setup_optional = format!("{:?}", self.optional);
+    }
+    fn edit(&mut self) {
+        self.draft = "local draft".into();
+    }
+    fn on_unmount(&mut self) {
+        EDITOR_UNMOUNTS.with(|count| count.set(count.get() + 1));
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-static-keyed-host", uses = [DcStaticEditor], template = poco! {
+    <section>
+        <dc-static-editor
+            pp-key="identity" :label="label" pp-model:draft="draft"
+            optional="attribute default" :optional="optional"
+            pp-ref="editor" pp-show="visible" @pp:update:draft.self="observe"
+        >
+            <span class="dc-editor-slot" pp-text="label"></span>
+            <template pp-slot="footer"><button class="dc-editor-slot-next" @click="next">next</button></template>
+        </dc-static-editor>
+        <span class="dc-parent-draft" pp-text="draft"></span>
+        <span class="dc-parent-events" pp-text="events"></span>
+        <span class="dc-parent-ref" pp-text="ref_label"></span>
+        <button class="dc-static-next" @click="next">next</button>
+        <button class="dc-static-first" @click="first">first</button>
+        <button class="dc-static-rename" @click="rename">rename</button>
+        <button class="dc-static-ref" @click="read_ref">ref</button>
+        <button class="dc-static-hide" @click="hide">hide</button>
+        <button class="dc-static-invalid" @click="invalid">invalid</button>
+    </section>
+})]
+struct StaticKeyedHost {
+    identity: serde_json::Value,
+    label: String,
+    draft: String,
+    visible: bool,
+    events: u32,
+    ref_label: String,
+    optional: Option<String>,
+}
+
+#[handlers]
+impl StaticKeyedHost {
+    fn on_setup(&mut self) {
+        self.identity = serde_json::json!("first");
+        self.label = "first label".into();
+        self.draft = "first draft".into();
+        self.visible = true;
+    }
+    fn next(&mut self) {
+        self.identity = serde_json::json!("second");
+        self.label = "second label".into();
+        self.draft = "second draft".into();
+    }
+    fn first(&mut self) {
+        self.identity = serde_json::json!("first");
+        self.label = "first label".into();
+    }
+    fn rename(&mut self) {
+        self.label = "renamed".into();
+    }
+    fn observe(&mut self) {
+        self.events += 1;
+    }
+    fn read_ref(&mut self) {
+        self.ref_label = pocopine::refs::get_component::<DcStaticEditor>("editor")
+            .map(|child| child.with(|child| child.setup_label.clone()))
+            .unwrap_or_default();
+    }
+    fn hide(&mut self) {
+        self.visible = false;
+    }
+    fn invalid(&mut self) {
+        self.identity = serde_json::json!([]);
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-keyed-root", uses = [DcStaticEditor], template = poco! {
+    <dc-static-editor pp-key="identity" :label="label"></dc-static-editor>
+})]
+struct DcKeyedRoot {
+    #[prop]
+    identity: String,
+    #[prop]
+    label: String,
+}
+
+#[handlers]
+impl DcKeyedRoot {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-slot-host", template = poco! { <div class="dc-slot-host"><slot></slot></div> })]
+struct DcSlotHost {}
+
+#[handlers]
+impl DcSlotHost {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-keyed-structural-host", uses = [DcKeyedRoot, DcStaticEditor, DcSlotHost], template = poco! {
+    <section>
+        <template pp-if="visible">
+            <dc-keyed-root :identity="identity" :label="identity"></dc-keyed-root>
+        </template>
+        <dc-static-editor pp-key="identity" :label="identity"></dc-static-editor>
+        <template pp-if="visible">
+            <dc-static-editor pp-key="identity" :label="identity" class="dc-direct-conditional"></dc-static-editor>
+        </template>
+        <template pp-if="visible"><span class="dc-after-key">after</span></template>
+        <dc-slot-host>
+            <dc-static-editor pp-key="identity" :label="identity"></dc-static-editor>
+        </dc-slot-host>
+        <button class="dc-structural-next" @click="next">next</button>
+        <button class="dc-structural-hide" @click="hide">hide</button>
+        <span pp-text="identity"></span>
+    </section>
+})]
+struct KeyedStructuralHost {
+    identity: String,
+    visible: bool,
+}
+
+#[handlers]
+impl KeyedStructuralHost {
+    fn on_setup(&mut self) {
+        self.identity = "first".into();
+        self.visible = true;
+    }
+    fn next(&mut self) {
+        self.identity = "second".into();
+    }
+    fn hide(&mut self) {
+        self.visible = false;
+    }
+}
+
+async fn settle_models() {
+    for _ in 0..5 {
+        wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(
+            &wasm_bindgen::JsValue::UNDEFINED,
+        ))
+        .await
+        .unwrap();
+        flush_sync();
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct EditorRow {
+    id: u32,
+    version: u32,
+    label: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-keyed-list", uses = [DcStaticEditor], template = poco! {
+    <section>
+        <template pp-for="row in rows" pp-key="row.id">
+            <dc-static-editor pp-key="row.version" :label="row.label"></dc-static-editor>
+        </template>
+        <button class="dc-list-next" @click="next">next</button>
+        <button class="dc-list-reverse" @click="reverse">reverse</button>
+    </section>
+})]
+struct KeyedList {
+    rows: Vec<EditorRow>,
+}
+
+#[handlers]
+impl KeyedList {
+    fn on_setup(&mut self) {
+        self.rows = (0..2)
+            .map(|id| EditorRow {
+                id,
+                version: 0,
+                label: format!("row {id}"),
+            })
+            .collect();
+    }
+    fn next(&mut self) {
+        self.rows[0].version += 1;
+        self.rows[0].label = "updated first row".into();
+    }
+    fn reverse(&mut self) {
+        self.rows.reverse();
+    }
+}
+
+#[wasm_bindgen_test]
+fn static_component_key_inside_a_keyed_list_replaces_only_the_changed_instance() {
+    pocopine::animate::disable_transitions();
+    EDITOR_MOUNTS.with(|count| count.set(0));
+    EDITOR_UNMOUNTS.with(|count| count.set(0));
+    let effects_before = pocopine_core::reactive::stats().0;
+    let (host, handle) = mount::<KeyedList>();
+    let editors = host.query_selector_all("dc-static-editor").unwrap();
+    assert_eq!(editors.length(), 2);
+    let first = editors.item(0).unwrap();
+    let second = editors.item(1).unwrap();
+    click(&host, ".dc-list-next");
+    flush_sync();
+    flush_sync();
+    assert!(!first.is_connected());
+    let editors = host.query_selector_all("dc-static-editor").unwrap();
+    assert!(second.is_same_node(editors.item(1).as_ref()));
+    assert_eq!(text(&host, ".dc-editor-setup"), "updated first row");
+    let updated_first = editors.item(0).unwrap();
+    click(&host, ".dc-list-reverse");
+    flush_sync();
+    let editors = host.query_selector_all("dc-static-editor").unwrap();
+    assert!(second.is_same_node(editors.item(0).as_ref()));
+    assert!(updated_first.is_same_node(editors.item(1).as_ref()));
+    assert_eq!(EDITOR_MOUNTS.with(Cell::get), 3);
+    handle.unmount();
+    assert_eq!(EDITOR_UNMOUNTS.with(Cell::get), 3);
+    assert_eq!(pocopine_core::reactive::stats().0, effects_before);
+    host.remove();
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+async fn static_key_preserves_bindings_slots_models_refs_and_replaces_the_host() {
+    EDITOR_MOUNTS.with(|count| count.set(0));
+    EDITOR_UNMOUNTS.with(|count| count.set(0));
+    pocopine_core::templates_plan::reset_plan_failure_count();
+    pocopine::animate::disable_transitions();
+    let (host, handle) = mount::<StaticKeyedHost>();
+    settle_models().await;
+    let first = host
+        .query_selector("section > dc-static-editor")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        host.query_selector_all("section > template")
+            .unwrap()
+            .length(),
+        0
+    );
+    assert!(!first.has_attribute("pp-key"));
+    assert_eq!(text(&host, ".dc-editor-setup"), "first label");
+    assert_eq!(text(&host, ".dc-editor-setup-draft"), "first draft");
+    assert_eq!(
+        text(&host, ".dc-editor-optional"),
+        "None",
+        "explicit null must override static attributes and Rust defaults before setup"
+    );
+    assert_eq!(text(&host, ".dc-editor-slot"), "first label");
+
+    click(&host, ".dc-editor-edit");
+    settle_models().await;
+    assert_eq!(text(&host, ".dc-parent-draft"), "local draft");
+    assert_eq!(text(&host, ".dc-parent-events"), "1");
+    click(&host, ".dc-static-rename");
+    settle_models().await;
+    assert_eq!(text(&host, ".dc-editor-label"), "renamed");
+    assert_eq!(text(&host, ".dc-editor-slot"), "renamed");
+    assert_eq!(text(&host, ".dc-editor-draft"), "local draft");
+    assert_eq!(EDITOR_MOUNTS.with(Cell::get), 1);
+    assert!(
+        first.is_same_node(
+            host.query_selector("dc-static-editor")
+                .unwrap()
+                .as_ref()
+                .map(|e| e.as_ref())
+        )
+    );
+
+    click(&host, ".dc-editor-slot-next");
+    settle_models().await;
+    assert!(!first.is_connected());
+    assert_eq!(text(&host, ".dc-editor-setup"), "second label");
+    assert_eq!(text(&host, ".dc-editor-setup-draft"), "second draft");
+    assert_eq!(EDITOR_MOUNTS.with(Cell::get), 2);
+    assert_eq!(EDITOR_UNMOUNTS.with(Cell::get), 1);
+    click(&host, ".dc-static-ref");
+    flush_sync();
+    assert_eq!(text(&host, ".dc-parent-ref"), "second label");
+    click(&host, ".dc-editor-edit");
+    settle_models().await;
+    assert_eq!(text(&host, ".dc-parent-draft"), "local draft");
+    assert_eq!(text(&host, ".dc-parent-events"), "2");
+    click(&host, ".dc-static-hide");
+    flush_sync();
+    let current = host.query_selector("dc-static-editor").unwrap().unwrap();
+    assert_eq!(
+        current
+            .dyn_ref::<HtmlElement>()
+            .unwrap()
+            .style()
+            .get_property_value("display")
+            .unwrap(),
+        "none"
+    );
+    assert_eq!(pocopine_core::templates_plan::plan_failure_count(), 0);
+    handle.unmount();
+    assert_eq!(EDITOR_UNMOUNTS.with(Cell::get), 2);
+    host.remove();
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+fn static_key_rejects_invalid_values_and_recovers_without_stale_refs() {
+    pocopine::animate::disable_transitions();
+    let (host, handle) = mount::<StaticKeyedHost>();
+    click(&host, ".dc-static-invalid");
+    flush_sync();
+    assert!(host.query_selector("dc-static-editor").unwrap().is_none());
+    click(&host, ".dc-static-ref");
+    flush_sync();
+    assert_eq!(text(&host, ".dc-parent-ref"), "");
+    click(&host, ".dc-static-next");
+    flush_sync();
+    assert_eq!(text(&host, ".dc-editor-setup"), "second label");
+    handle.unmount();
+    host.remove();
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+fn static_key_cleans_every_instance_during_interrupted_leave_transitions() {
+    EDITOR_MOUNTS.with(|count| count.set(0));
+    EDITOR_UNMOUNTS.with(|count| count.set(0));
+    pocopine::animate::enable_transitions();
+    let effects_before = pocopine_core::reactive::stats().0;
+    let (host, handle) = mount::<StaticKeyedHost>();
+    let first = host.query_selector("dc-static-editor").unwrap().unwrap();
+    first
+        .set_attribute("pp-transition:leave-start", "dc-leaving")
+        .unwrap();
+    first
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .style()
+        .set_property("transition-duration", "1s")
+        .unwrap();
+    click(&host, ".dc-static-next");
+    flush_sync();
+    assert!(
+        first.is_connected(),
+        "outgoing instance remains until its leave finishes"
+    );
+    assert_eq!(EDITOR_MOUNTS.with(Cell::get), 2);
+    click(&host, ".dc-static-first");
+    flush_sync();
+    click(&host, ".dc-static-ref");
+    flush_sync();
+    assert_eq!(text(&host, ".dc-parent-ref"), "first label");
+    assert_eq!(EDITOR_MOUNTS.with(Cell::get), 3);
+    handle.unmount();
+    assert_eq!(EDITOR_UNMOUNTS.with(Cell::get), 3);
+    assert_eq!(pocopine_core::reactive::stats().0, effects_before);
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+fn static_key_at_component_root_and_next_to_conditionals_keeps_parent_scope_alive() {
+    EDITOR_MOUNTS.with(|count| count.set(0));
+    EDITOR_UNMOUNTS.with(|count| count.set(0));
+    pocopine_core::templates_plan::reset_plan_failure_count();
+    pocopine::animate::disable_transitions();
+    let effects_before = pocopine_core::reactive::stats().0;
+    let (host, handle) = mount::<KeyedStructuralHost>();
+    flush_sync();
+    assert_eq!(
+        host.query_selector_all("dc-static-editor")
+            .unwrap()
+            .length(),
+        4
+    );
+    assert_eq!(text(&host, ".dc-after-key"), "after");
+    click(&host, ".dc-structural-next");
+    flush_sync();
+    flush_sync();
+    assert_eq!(text(&host, "dc-keyed-root .dc-editor-setup"), "second");
+    assert_eq!(text(&host, "dc-slot-host .dc-editor-setup"), "second");
+    click(&host, ".dc-structural-hide");
+    flush_sync();
+    assert!(host.query_selector("dc-keyed-root").unwrap().is_none());
+    assert_eq!(
+        host.query_selector_all("dc-static-editor")
+            .unwrap()
+            .length(),
+        2
+    );
+    handle.unmount();
+    assert_eq!(
+        EDITOR_MOUNTS.with(Cell::get),
+        EDITOR_UNMOUNTS.with(Cell::get)
+    );
+    assert_eq!(pocopine_core::templates_plan::plan_failure_count(), 0);
+    assert_eq!(
+        pocopine_core::reactive::stats().0,
+        effects_before,
+        "all keyed and sibling effects must be released"
+    );
+    host.remove();
+    pocopine::animate::enable_transitions();
 }
 
 fn mount<C: Component>() -> (Element, pocopine::SubtreeHandle) {

@@ -474,6 +474,7 @@ fn mount_component_result(
     tag: &str,
     supplied_slots: Option<(crate::slot_fragment::SlotSet, ScopeId, JsValue)>,
     mut initializer: Option<&mut MountInitializer<'_>>,
+    initial_props: Option<&HashMap<String, JsValue>>,
 ) -> Result<Option<Scope>, crate::app::MountError> {
     let typed_mount = initializer.is_some();
     if get_private(el, "__pp_mounted").is_some() {
@@ -523,7 +524,7 @@ fn mount_component_result(
                 mode: "pp-as",
             });
         }
-        if try_mount_component_as(el, tag) {
+        if try_mount_component_as(el, tag, initial_props) {
             return Ok(None);
         }
     }
@@ -555,6 +556,7 @@ fn mount_component_result(
     // Apply static props BEFORE building the proxy so trigger doesn't fire
     // before any effect subscribes.
     apply_static_props(el, &scope);
+    apply_initial_props(&scope, initial_props);
 
     // RFC-113 N1 — typed initializer seam. This runs with the new scope
     // current after static props, but before plugin/user setup. The closure
@@ -735,7 +737,7 @@ fn mount_component(
     // The legacy/name-driven mount surface intentionally preserves its
     // fire-and-forget behavior. The typed owned path below consumes the same
     // structured result instead of silently accepting a partial mount.
-    let _ = mount_component_result(el, tag, supplied_slots, None);
+    let _ = mount_component_result(el, tag, supplied_slots, None, None);
 }
 
 /// Typed owned-mount entry used by [`crate::app::App::mount_subtree_with`].
@@ -796,7 +798,7 @@ where
             result
         };
 
-        mount_component_result(host, C::NAME, None, Some(&mut erased))?.ok_or_else(|| {
+        mount_component_result(host, C::NAME, None, Some(&mut erased), None)?.ok_or_else(|| {
             crate::app::MountError::ConstructionFailed {
                 component: C::NAME.to_string(),
             }
@@ -819,6 +821,17 @@ where
 /// child-mount path.
 pub fn mount_child_component(host_el: &Element, name: &str) {
     mount_component(host_el, name, None);
+}
+
+/// Seed evaluated parent bindings before setup without converting typed
+/// values to HTML attributes (which cannot represent an explicit null).
+pub(crate) fn mount_child_component_seeded(
+    host: &Element,
+    name: &str,
+    slots: Option<(crate::slot_fragment::SlotSet, ScopeId, JsValue)>,
+    props: &HashMap<String, JsValue>,
+) {
+    let _ = mount_component_result(host, name, slots, None, Some(props));
 }
 
 /// Variant of [`mount_child_component`] that also registers the
@@ -857,7 +870,11 @@ pub fn mount_child_component_with_slots(
 /// constraints fail (not exactly one user element child, or the
 /// template root isn't a simple `<tag><slot></slot></tag>` wrapper)
 /// — caller falls back to the normal mount path.
-fn try_mount_component_as(el: &Element, tag: &str) -> bool {
+fn try_mount_component_as(
+    el: &Element,
+    tag: &str,
+    initial_props: Option<&HashMap<String, JsValue>>,
+) -> bool {
     let plugin_hooks = crate::plugin::component_hook_activity();
     let mount_start_ms = plugin_hooks.needs_mount_start.then(js_sys::Date::now);
     let user_root = match find_single_child_element_skipping_slot_templates(el) {
@@ -881,6 +898,7 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         crate::context::set_parent(scope.id, parent_id);
     }
     apply_static_props(el, &scope);
+    apply_initial_props(&scope, initial_props);
     fire_component_setup_plugin_hooks(tag, scope.id);
     if scope.state.borrow().has_setup() {
         let _frame = crate::ComponentCallbackFrame::for_scope(scope.id);
@@ -1179,6 +1197,24 @@ fn merge_semicolon(a: &str, b: &str) -> String {
             let trimmed = a.trim_end_matches(|c: char| c.is_whitespace() || c == ';');
             format!("{trimmed}; {b}")
         }
+    }
+}
+
+fn apply_initial_props(scope: &Scope, props: Option<&HashMap<String, JsValue>>) {
+    let Some(props) = props else { return };
+    for (name, value) in props {
+        let name = normalize_prop_name(name);
+        let field = crate::model_runtime::resolve_model_key(scope.id, &name).unwrap_or(name);
+        if !scope.state.borrow().is_prop(&field) {
+            continue;
+        }
+        crate::model_runtime::with_scope_write(
+            scope.id,
+            crate::model_runtime::WriteOrigin::SetupSeed,
+            || {
+                scope.state.borrow_mut().set(&field, value.clone());
+            },
+        );
     }
 }
 
@@ -1767,6 +1803,9 @@ pub fn finalize_compiled_subtree(el: &Element) {
     {
         return;
     }
+    if el.local_name() == "template" {
+        crate::keyed_component::finalize(el);
+    }
     let children = el.children();
     let mut snapshot: Vec<Element> = Vec::with_capacity(children.length() as usize);
     for i in 0..children.length() {
@@ -1996,11 +2035,13 @@ fn release_subtree_inner(node: &Node) {
         // Scoped-slot ownership can be stamped on a top-level text node
         // (for example a bare `{{ ctx.label }}` fragment). Visit all child
         // nodes, not only elements, so those ownership counts reach zero.
-        let children = el.child_nodes();
-        for i in 0..children.length() {
-            if let Some(c) = children.item(i) {
-                release_subtree_inner(&c);
-            }
+        // A child controller can detach an earlier sibling during cleanup.
+        // Keep the next node itself so that shifting live NodeList indices
+        // cannot skip later siblings and leak their effects or scopes.
+        let mut child = el.first_child();
+        while let Some(node) = child {
+            child = node.next_sibling();
+            release_subtree_inner(&node);
         }
         if let Some(v) = get_private(&el, EFFECTS_KEY)
             && let Ok(arr) = v.dyn_into::<Array>()
@@ -2057,6 +2098,7 @@ fn release_subtree_inner(node: &Node) {
         crate::refs::unregister_element(&el);
         release_listeners(&el);
         match el.local_name().as_str() {
+            "template" => crate::keyed_component::release_pending(&el),
             "pp-component" => crate::dynamic_component::release_host(&el),
             "pp-outlet" => {
                 crate::dynamic_component::release_host(&el);

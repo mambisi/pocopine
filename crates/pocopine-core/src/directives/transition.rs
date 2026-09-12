@@ -491,27 +491,31 @@ fn has_any_transition_attr(el: &Element) -> bool {
 }
 
 pub fn has_transition_in_subtree(root: &Element) -> bool {
-    if has_any_transition_attr(root) {
-        return true;
-    }
-    root.query_selector(ATTR_SELECTOR).ok().flatten().is_some()
+    let mut found = false;
+    crate::keyed_component::for_each_root(root, |root| {
+        found |= has_any_transition_attr(root)
+            || root.query_selector(ATTR_SELECTOR).ok().flatten().is_some();
+    });
+    found
 }
 
 fn collect_animated(root: &Element) -> Vec<Element> {
     use wasm_bindgen::JsCast;
     let mut out = Vec::new();
-    if has_any_transition_attr(root) {
-        out.push(root.clone());
-    }
-    if let Ok(list) = root.query_selector_all(ATTR_SELECTOR) {
-        for i in 0..list.length() {
-            if let Some(node) = list.item(i)
-                && let Ok(el) = node.dyn_into::<Element>()
-            {
-                out.push(el);
+    crate::keyed_component::for_each_root(root, |root| {
+        if has_any_transition_attr(root) {
+            out.push(root.clone());
+        }
+        if let Ok(list) = root.query_selector_all(ATTR_SELECTOR) {
+            for i in 0..list.length() {
+                if let Some(node) = list.item(i)
+                    && let Ok(el) = node.dyn_into::<Element>()
+                {
+                    out.push(el);
+                }
             }
         }
-    }
+    });
     out
 }
 

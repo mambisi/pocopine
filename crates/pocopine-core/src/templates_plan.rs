@@ -417,16 +417,58 @@ pub fn install_static_child_mount(
     entry: &'static StaticChildMount,
     template_name: &str,
 ) {
-    if entry.slots.is_empty() {
-        crate::mount::mount_child_component(el, entry.tag);
-    } else {
-        let mut set = SlotSet::new();
-        for s in entry.slots {
-            set = match s.scoped_let {
-                Some(let_ident) => set.scoped(s.name, s.fragment, let_ident),
-                None => set.named(s.name, s.fragment),
-            };
+    if let Some(key) = &entry.key {
+        let Some(eval) = scoped_static_evaluator(scope_id, key.compiled, key.expr_src) else {
+            fail(
+                "child-key-parse",
+                template_name,
+                entry.node_path,
+                Some(key.expr_src),
+            );
+            return;
+        };
+        crate::keyed_component::install(el, scope_id, proxy, entry, template_name, eval);
+        return;
+    }
+    mount_static_child_instance(el, scope_id, proxy, entry, template_name);
+}
+
+pub(crate) fn mount_static_child_instance(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticChildMount,
+    template_name: &str,
+) {
+    let mut set = SlotSet::new();
+    for slot in entry.slots {
+        set = match slot.scoped_let {
+            Some(ident) => set.scoped(slot.name, slot.fragment, ident),
+            None => set.named(slot.name, slot.fragment),
+        };
+    }
+    if let Some(key) = &entry.key {
+        // Key and all incoming props belong to the same parent state. Seed
+        // before setup, then install the normal per-binding effects below.
+        let mut props = std::collections::HashMap::new();
+        for binding in entry.bindings {
+            if let Some(eval) =
+                scoped_static_evaluator(scope_id, binding.compiled, binding.expr_src)
+            {
+                props.insert(binding.arg.to_string(), eval(proxy));
+            }
         }
+        let access = crate::scope::scoped_root_reader(scope_id);
+        for model in entry.models {
+            let value = crate::path::resolve_path_with(proxy, access.as_ref(), model.expr_src);
+            props.insert(model.arg.unwrap_or("model").to_string(), value);
+        }
+        if let Some(name) = key.ref_name {
+            crate::refs::register(scope_id, name, el);
+        }
+        let slots = (!set.is_empty()).then(|| (set, scope_id, proxy.clone()));
+        crate::mount::mount_child_component_seeded(el, entry.tag, slots, &props);
+    } else {
         crate::mount::mount_child_component_with_slots(el, entry.tag, set, scope_id, proxy);
     }
     install_child_host_directives(el, scope_id, proxy, entry, template_name);

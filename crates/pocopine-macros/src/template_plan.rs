@@ -648,6 +648,8 @@ struct ChildMountLite {
     host_bindings: Vec<ChildHostBindingLite>,
     host_listeners: Vec<ChildHostListenerLite>,
     host_models: Vec<ChildHostModelLite>,
+    key: Option<String>,
+    key_ref: Option<String>,
 }
 
 struct ChildHostBindingLite {
@@ -1817,6 +1819,18 @@ fn emit_opaque_directive(d: &OpaqueDirectiveLite) -> TokenStream {
 fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let path = emit_node_path(&c.node_path);
     let tag = proc_macro2::Literal::string(&c.tag);
+    let key_ref = match &c.key_ref {
+        Some(name) => quote! { Some(#name) },
+        None => quote! { None },
+    };
+    let key = match &c.key {
+        Some(source) => {
+            let expr = runtime_expr_source(source);
+            let compiled = emit_compiled_expr_option(source);
+            quote! { Some(::pocopine::__private::StaticChildHostKey { expr_src: #expr, compiled: #compiled, ref_name: #key_ref }) }
+        }
+        None => quote! { None },
+    };
     let slot_tokens = c.slot_fragments.iter().map(|(name, ident, pp_let)| {
         let name_lit = proc_macro2::Literal::string(name);
         let scoped_let_tokens = match pp_let {
@@ -1901,6 +1915,7 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
             bindings: &[ #(#binding_tokens),* ],
             listeners: &[ #(#listener_tokens),* ],
             models: &[ #(#model_tokens),* ],
+            key: #key,
         }
     }
 }
@@ -2638,6 +2653,21 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         let mut host_bindings = Vec::new();
         let mut host_listeners = Vec::new();
         let mut host_models = Vec::new();
+        let key = if el.tag != "pp-component" {
+            el.attrs
+                .iter()
+                .find(|(name, _)| name == "pp-key")
+                .and_then(|(_, value)| check_template_expr(value, "pp-key", ctx))
+        } else {
+            None
+        };
+        let mut key_ref = None;
+        if key.is_some() {
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.clone(),
+                name: "pp-key".into(),
+            });
+        }
         let has_pp_as = el.attrs.iter().any(|(name, _)| name == "pp-as");
         if !has_pp_as {
             for (name, value) in &el.attrs {
@@ -2688,10 +2718,15 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                             node_path: path.clone(),
                             name: name.clone(),
                         });
-                        ctx.refs.push(RefLite {
-                            node_path: path.clone(),
-                            name: ref_name,
-                        });
+                        if key.is_some() {
+                            ctx.refs_from_lifted.push(ref_name.clone());
+                            key_ref = Some(ref_name);
+                        } else {
+                            ctx.refs.push(RefLite {
+                                node_path: path.clone(),
+                                name: ref_name,
+                            });
+                        }
                     }
                     ChildHostAttrOutcome::Preserved => {}
                 }
@@ -2815,6 +2850,8 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             host_bindings,
             host_listeners,
             host_models,
+            key,
+            key_ref,
         });
         return;
     }
@@ -4560,6 +4597,13 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
         return;
     }
 
+    let keyed = ctx
+        .child_mounts
+        .iter()
+        .any(|child| child.key.is_some() && child.node_path.as_slice() == path.as_slice());
+    if keyed {
+        out.push_str("<template hidden=\"\">");
+    }
     out.push('<');
     out.push_str(&el.tag);
     for (name, value) in &el.attrs {
@@ -4657,6 +4701,9 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
     out.push_str("</");
     out.push_str(&el.tag);
     out.push('>');
+    if keyed {
+        out.push_str("</template>");
+    }
 }
 
 fn is_void_element(tag: &str) -> bool {
@@ -4751,6 +4798,28 @@ mod tests {
         assert!(plan.contains("source_id"));
         assert!(plan.contains("child_key"));
         let invalid = analyze(r#"<pp-component :is="active" pp-key=""></pp-component>"#);
+        assert!(diagnostics(&invalid).contains("compile_error"));
+    }
+
+    #[test]
+    fn static_component_key_lifts_a_prototype_and_tracks_its_ref() {
+        let emitted = analyze(
+            r#"<section><my-editor pp-key="source_id" pp-ref="editor" :source-id="source_id"><span>slot</span></my-editor><p pp-text="label"></p></section>"#,
+        );
+        assert!(!diagnostics(&emitted).contains("compile_error"));
+        let html = emitted.cleaned_html.as_ref().unwrap();
+        assert!(
+            html.contains(
+                "<template hidden=\"\"><my-editor><span>slot</span></my-editor></template>"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("pp-key"));
+        assert_eq!(emitted.ref_names, vec!["editor"]);
+        let plan = emitted.plan_tokens.unwrap().to_string();
+        assert!(plan.contains("key : Some"), "{plan}");
+        assert!(plan.contains("ref_name : Some (\"editor\")"), "{plan}");
+        let invalid = analyze(r#"<my-editor pp-key=""></my-editor>"#);
         assert!(diagnostics(&invalid).contains("compile_error"));
     }
 

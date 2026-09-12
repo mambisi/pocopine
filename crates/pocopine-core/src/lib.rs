@@ -36,6 +36,7 @@ pub mod fingerprint;
 pub mod focus;
 pub mod handle;
 pub mod handler;
+pub(crate) mod keyed_component;
 pub mod lifecycle;
 #[cfg(feature = "locale")]
 pub mod locale;
