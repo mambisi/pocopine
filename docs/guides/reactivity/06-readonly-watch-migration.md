@@ -129,10 +129,13 @@ active while the watcher evaluates and its patch commits.
 
 DOM APIs such as `focus()` or `click()` can synchronously dispatch events
 into the same component or another component. During watcher evaluation,
-those handler invocations join the callback FIFO and run after evaluation
-and patch commit, if their target scope is still live. Outside evaluation,
-handlers on other scopes may run synchronously. Direct handle, field-handle,
-and signal writes during evaluation remain rejected.
+named handler invocations (such as `@click="on_click"`) join the callback
+FIFO and run after evaluation and patch commit, if their target scope is
+still live. Outside evaluation, handlers on other scopes may run
+synchronously. Inline event assignments (such as `@click="count = count + 1"`)
+and model or prop mirror writes do not use named-handler dispatch and remain
+guarded. Direct handle, field-handle, and signal writes during evaluation
+also remain rejected.
 
 ## Cycle and mutation checks
 
