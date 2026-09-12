@@ -1,0 +1,44 @@
+[package]
+name = "pine-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native text transactions and contenteditable code editor for Pocopine"
+
+[features]
+default = []
+syntax = ["dep:tree-sitter", "dep:tree-sitter-language"]
+lang-rust = ["syntax", "dep:tree-sitter-rust"]
+lang-json = ["syntax", "dep:tree-sitter-json"]
+lang-python = ["syntax", "dep:tree-sitter-python"]
+lang-javascript = ["syntax", "dep:tree-sitter-javascript"]
+view = ["syntax", "dep:serde_json", "dep:pocopine", "dep:wasm-bindgen", "dep:js-sys", "dep:web-sys"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
+tree-sitter = { version = "0.27.0", optional = true }
+tree-sitter-language = { version = "0.1.8", optional = true }
+tree-sitter-rust = { version = "0.24.2", optional = true }
+tree-sitter-json = { version = "0.24.8", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pocopine = { path = "../pocopine", optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Location", "Worker", "WorkerOptions", "WorkerType", "MessageEvent", "ErrorEvent", "Blob", "BlobPropertyBag", "Url", "DedicatedWorkerGlobalScope",
+    "CharacterData", "ClipboardEvent", "CompositionEvent", "DataTransfer", "CustomEvent", "CustomEventInit", "CaretPosition",
+    "Document", "DomRect", "DragEvent", "Element", "Event", "EventTarget",
+    "HtmlElement", "InputEvent", "InputEventInit", "KeyboardEvent", "MouseEvent", "MutationObserver",
+    "MutationObserverInit", "MutationRecord", "Node", "NodeList", "Performance",
+    "Range", "Selection", "Text", "Window", "ScrollIntoViewOptions", "ScrollLogicalPosition",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+wasm-bindgen-futures = { workspace = true }
+pocopine-core = { workspace = true }

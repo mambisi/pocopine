@@ -161,12 +161,30 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy-wasm
+      - name: install WASM C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm
+      # Raw Cargo checks do not pass through the CLI's WASM C setup. Supply
+      # the locked Tree-sitter package's mini-sysroot to grammar build scripts.
+      - name: configure Tree-sitter WASM headers
+        run: |
+          set -euo pipefail
+          command -v clang llvm-ar
+          tree_sitter_headers="$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown |
+            jq -er '.packages[] | select(.name == "tree-sitter-language") | .manifest_path | sub("/Cargo.toml$"; "/wasm/include")')"
+          test -f "$tree_sitter_headers/stdlib.h"
+          {
+            echo 'CC_wasm32_unknown_unknown=clang'
+            echo 'AR_wasm32_unknown_unknown=llvm-ar'
+            echo 'CC_SHELL_ESCAPED_FLAGS=1'
+            printf 'CFLAGS_wasm32_unknown_unknown=-I"%s"\n' "$tree_sitter_headers"
+          } >> "$GITHUB_ENV"
       # Most workspace crates target wasm32. Host-only crates and examples pull
       # in provider SDKs, axum, sqlx, redis, or tokio[net], which intentionally
       # do not compile for wasm32 and are covered by host checks.
       - run: >
           cargo clippy --workspace
-          --exclude pocopine-cli
           --exclude pocopine-auth-credentials
           --exclude pocopine-auth-jwt
           --exclude pocopine-deploy
@@ -178,10 +196,6 @@ jobs:
           --exclude pocopine-server
           --exclude pocopine-native
           --exclude pocopine-native-tauri
-          --exclude pocopine-storage-azure
-          --exclude pocopine-storage-gcs
-          --exclude pocopine-storage-s3
-          --exclude pocopine-assets
           --exclude pocopine-sync
           --exclude pocopine-sync-sqlite
           --exclude blog
@@ -583,6 +597,8 @@ jobs:
     # run-to-run noise. The artifact upload is the primary signal —
     # reviewers compare target/perf/*.json before/after.
     timeout-minutes: 20
+    env:
+      RICHTEXT_RELEASE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -596,7 +612,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: richtext-perf
-          workspaces: examples/richtext
+      - name: build Pocopine CLI
+        run: |
+          cargo build -p pocopine-cli
+          cargo metadata --no-deps --format-version 1 |
+            jq -r '.target_directory + "/debug"' >> "$GITHUB_PATH"
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -608,8 +628,6 @@ jobs:
       # when `PLAYWRIGHT_BROWSER_CHANNEL` is unset on CI.
       - name: install playwright chromium
         run: npx playwright install --with-deps chromium
-      - name: build richtext wasm
-        run: npm run build:richtext
       - name: run perf spec
         run: npx playwright test richtext.perf.spec.mjs --reporter=list
       - name: print perf summaries

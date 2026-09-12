@@ -1,0 +1,70 @@
+[data-pine-code-root] {
+  --pine-code-bg: var(--color-background, #fff);
+  --pine-code-fg: var(--color-foreground, #20232a);
+  --pine-code-muted: var(--color-muted-foreground, #68717e);
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  overflow: auto;
+  max-height: inherit;
+  background: var(--pine-code-bg);
+  color: var(--pine-code-fg);
+  border: 1px solid var(--color-border, #d3d8df);
+  border-radius: var(--radius, 5px);
+  font: 14px/1.6 var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+}
+[data-pine-code-content] {
+  grid-column: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  min-width: max-content;
+  min-height: 6.4em;
+  padding: .65em .8em;
+  outline: none;
+  caret-color: currentColor;
+}
+[data-pine-code-root]:focus-within { outline: 2px solid var(--color-ring, #4d72d5); outline-offset: 1px; }
+[data-pine-code-line] { min-height: 1.6em; }
+[data-pine-code-gutter] {
+  grid-column: 1;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  white-space: pre;
+  user-select: none;
+  pointer-events: none;
+  text-align: right;
+  padding: .65em .8em;
+  background: var(--pine-code-bg);
+  color: var(--pine-code-muted);
+  border-right: 1px solid var(--color-border, #d3d8df);
+}
+[data-pine-code-gutter][hidden] { display: none; }
+[data-pine-code-status] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+[data-pine-code-error] [data-pine-code-status] { position: static; width: auto; height: auto; clip-path: none; grid-column: 1 / -1; padding: .5em; color: #b42318; }
+[data-pine-code-content][aria-disabled="true"] { opacity: .6; }
+[data-pine-code-content] [data-token="keyword"] { color: var(--pine-code-keyword, #8046b5); }
+[data-pine-code-content] [data-token="string"] { color: var(--pine-code-string, #19733c); }
+[data-pine-code-content] [data-token="number"], [data-pine-code-content] [data-token="literal"] { color: var(--pine-code-number, #9e4a13); }
+[data-pine-code-content] [data-token="comment"] { color: var(--pine-code-comment, #68717e); }
+[data-pine-code-content] [data-token="lifetime"] { color: var(--pine-code-lifetime, #1d648c); }
+[data-pine-code-root][data-theme="dark"] { --pine-code-bg: #171a21; --pine-code-fg: #e4e8f0; --pine-code-muted: #9da8ba; }
+[data-pine-code-root][data-theme="dark"] { --pine-code-keyword: #cca6f1; --pine-code-string: #a4d795; --pine-code-number: #efbc92; --pine-code-comment: #9da8ba; --pine-code-lifetime: #8dc9e9; }
+@media (prefers-color-scheme: dark) {
+  [data-pine-code-root][data-theme="auto"] { --pine-code-bg: var(--color-background, #171a21); --pine-code-fg: var(--color-foreground, #e4e8f0); --pine-code-muted: #9da8ba; }
+  [data-pine-code-root][data-theme="auto"] { --pine-code-keyword: #cca6f1; --pine-code-string: #a4d795; --pine-code-number: #efbc92; --pine-code-comment: #9da8ba; --pine-code-lifetime: #8dc9e9; }
+}
+[data-pine-code-content] [data-token="function"] { color: var(--pine-code-function, #2266aa); }
+[data-pine-code-content] [data-token="type"], [data-pine-code-content] [data-token="tag"] { color: var(--pine-code-type, #137b7a); }
+[data-pine-code-content] [data-token="property"], [data-pine-code-content] [data-token="attribute"] { color: var(--pine-code-property, #985512); }
+[data-pine-code-content] [data-token="escape"] { color: var(--pine-code-escape, #9e4a13); }
+[data-pine-code-root][data-theme="dark"] { --pine-code-function: #93c5fd; --pine-code-type: #79d8cb; --pine-code-property: #edcb91; --pine-code-escape: #efbc92; }
+@media (prefers-color-scheme: dark) {
+  [data-pine-code-root][data-theme="auto"] { --pine-code-function: #93c5fd; --pine-code-type: #79d8cb; --pine-code-property: #edcb91; --pine-code-escape: #efbc92; }
+}
+@media (forced-colors: active) {
+  [data-pine-code-root][data-theme] { --pine-code-bg: Canvas; --pine-code-fg: CanvasText; --pine-code-muted: GrayText; }
+  [data-pine-code-content] ::selection { color: HighlightText; background: Highlight; }
+  [data-pine-code-content] [data-token] { color: CanvasText; }
+}

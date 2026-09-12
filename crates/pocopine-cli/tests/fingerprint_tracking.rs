@@ -31,6 +31,8 @@
 //!
 //! Requires `cargo` on PATH (always true under `cargo test`).
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::path::Path;
 use std::process::Command;
 

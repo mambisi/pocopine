@@ -175,6 +175,7 @@ pub fn resolve_target(selector: &str) -> Option<Element> {
 /// clone's scopes + effects.
 pub fn release(el: &Element) {
     for clone in take_teleported(el) {
+        crate::before_detach::prepare(clone.as_ref());
         if let Some(parent) = clone.parent_node() {
             let _ = parent.remove_child(&clone);
         }

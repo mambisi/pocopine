@@ -1,0 +1,41 @@
+<main>
+  <header><p class="eyebrow">PINE / CODE EDITOR</p><h1>Edit the source.</h1><p>Native text selection, Rust transactions, and a document you control.</p></header>
+  <form @submit.prevent="save">
+    <div class="toolbar" role="search" aria-label="Find and replace">
+      <label>Find <pine-input pp-model:value="query" placeholder="Literal text"></pine-input></label>
+      <label>Replace <pine-input pp-model:value="replacement" placeholder="Replacement"></pine-input></label>
+      <pine-button @click="find_previous">Previous</pine-button><pine-button @click="find_next">Next</pine-button>
+      <pine-button @click="replace_current">Replace</pine-button><pine-button @click="replace_all">Replace all</pine-button>
+    </div>
+    <div class="toolbar">
+      <pine-button @click="undo">Undo</pine-button><pine-button @click="redo">Redo</pine-button>
+      <pine-button @click="indent">Indent</pine-button><pine-button @click="outdent">Outdent</pine-button>
+      <pine-button @click="toggle_readonly">Toggle read-only</pine-button><pine-button @click="toggle_disabled">Toggle disabled</pine-button>
+      <pine-button @click="toggle_editor">Open / close editor</pine-button>
+    </div>
+    <div class="toolbar">
+      <span id="language-label">Language</span>
+      <pine-select-root pp-model:value="language">
+        <pine-select-trigger aria-labelledby="language-label"><pine-select-value>Choose language</pine-select-value></pine-select-trigger>
+        <pine-select-portal><pine-select-content>
+          <pine-select-item value="rust">Rust</pine-select-item>
+          <pine-select-item value="json">JSON</pine-select-item>
+          <pine-select-item value="python">Python</pine-select-item>
+          <pine-select-item value="javascript">JavaScript</pine-select-item>
+          <pine-select-item value="config">Custom config</pine-select-item>
+          <pine-select-item value="plain">Plain text</pine-select-item>
+        </pine-select-content></pine-select-portal>
+      </pine-select-root>
+    </div>
+    <h2 id="source-label">Source</h2>
+    <p id="source-help">Tab moves to the next control. Use Indent for indentation.</p>
+    <template pp-if="visible">
+      <pine-code-editor id="source" pp-ref="source" @pine:code:ready="editor_ready" pp-bind:initial-value="seed" pp-bind:language="language" pp-bind:read-only="read_only" pp-bind:disabled="disabled" line-numbers aria-labelledby="source-label" aria-describedby="source-help"></pine-code-editor>
+    </template>
+    <div class="actions"><pine-button @click="save">Save source</pine-button><pine-button @click="reset">Reset</pine-button></div>
+    <p role="status" data-demo-status pp-text="status"></p>
+  </form>
+  <section pp-show="draft != ''"><h2>Interrupted composition</h2><pre pp-text="draft"></pre><pine-button @click="recover_draft">Recover draft</pine-button></section>
+  <section><h2>Saved source</h2><pre data-saved pp-text="saved"></pre></section>
+  <section><h2>Independent second editor</h2><pine-code-editor id="second" initial-value="{ &quot;independent&quot;: true }" language="json" aria-label="JSON source"></pine-code-editor></section>
+</main>

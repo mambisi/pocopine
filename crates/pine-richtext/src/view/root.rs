@@ -28,9 +28,10 @@ use crate::state::{EditorState, EditorStateConfig, Plugin, Selection, Transactio
 use crate::transform::{AttrStep, Step};
 
 use super::input::{ListenerSetup, default_keymap, install_listeners, read_dom_selection};
+use super::native_input::NativeInput;
 use super::node_view_handle::{NodeViewEditorBinding, TransactionDispatch};
 use super::node_view_manager::NodeViewManager;
-use super::reconciler::{ReconcileOutcome, reconcile_surface_with_manager};
+use super::reconciler::{ReconcileOutcome, Reconciler, reconcile_surface_with_manager};
 use super::selection::model_pos_to_dom;
 use super::selection_observer::SelectionChangeSubscription;
 
@@ -802,8 +803,8 @@ impl PineRichTextRoot {
         // Shared with the reconcile watch below: while an IME is composing, the
         // DOM belongs to the IME, and repainting destroys the very text node it
         // is composing into.
-        let composing = Rc::new(Cell::new(false));
-        let composing_for_watch = composing.clone();
+        let native_input = Rc::new(NativeInput::default());
+        let native_for_watch = native_input.clone();
         let closures = install_listeners(
             ListenerSetup {
                 surface: surface_el.clone(),
@@ -811,7 +812,7 @@ impl PineRichTextRoot {
                 state_provider: state_provider.clone(),
                 node_view_manager: node_view_manager.clone(),
                 keymap,
-                composing,
+                native_input,
                 debug_perf,
             },
             move |state, transaction, sync_flush| {
@@ -1086,7 +1087,7 @@ impl PineRichTextRoot {
             // duplicated or reordered characters (and on Android, a dropped
             // composition). The commit at `compositionend` reconciles the model
             // and bumps the generation again, so nothing is lost by waiting.
-            if composing_for_watch.get() {
+            if native_for_watch.is_active() {
                 return;
             }
             if reconcile_pending.replace(true) {
@@ -1100,8 +1101,13 @@ impl PineRichTextRoot {
             let node_view_manager_for_watch = node_view_manager_for_watch.clone();
             let commit_slot_for_watch = commit_slot_for_watch.clone();
             let last_watch_gen_for_watch = last_watch_gen_for_watch.clone();
+            let native_for_watch = native_for_watch.clone();
             pocopine::defer_component_callback_for(scope, move || {
                 reconcile_pending.set(false);
+                // Composition may have started after this callback was queued.
+                if native_for_watch.is_active() {
+                    return;
+                }
                 let watch_started_at = perf_now_ms();
                 let materialize_started_at = perf_now_ms();
                 let (new_doc, cached_state) = {
@@ -1116,15 +1122,24 @@ impl PineRichTextRoot {
                 let reconcile_started_at = perf_now_ms();
                 let (reconcile_outcome, document_changed) = {
                     let old = last_doc_for_watch.borrow();
+                    let repair = native_for_watch.take_repair();
                     (
-                        reconcile_surface_with_manager(
-                            &runtime_for_watch,
-                            &node_view_manager_for_watch,
-                            &surface_for_watch,
-                            &old,
-                            &new_doc,
-                        ),
-                        *old != new_doc,
+                        if repair {
+                            Reconciler::with_manager(
+                                &runtime_for_watch,
+                                &node_view_manager_for_watch,
+                            )
+                            .full_render(&surface_for_watch, &new_doc)
+                        } else {
+                            reconcile_surface_with_manager(
+                                &runtime_for_watch,
+                                &node_view_manager_for_watch,
+                                &surface_for_watch,
+                                &old,
+                                &new_doc,
+                            )
+                        },
+                        *old != new_doc || repair,
                     )
                 };
                 let reconcile_ms = perf_now_ms() - reconcile_started_at;

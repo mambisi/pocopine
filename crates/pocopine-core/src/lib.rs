@@ -15,6 +15,7 @@ pub mod animate;
 pub mod app;
 // RFC-100 — content-addressed asset URLs.
 pub mod assets;
+mod before_detach;
 pub mod client_module;
 pub mod client_trace;
 pub mod component_callback;
@@ -89,6 +90,7 @@ pub use app::{
     assert_dynamic_component_selection, assert_dynamic_component_selection_type,
     encode_route_fragment, encode_route_path_segment, encode_route_query_part,
 };
+pub use before_detach::on_before_detach;
 pub use client_module::{ClientModule, ClientModuleError};
 pub use component_callback::{
     ComponentCallbackFrame, component_callback_active, defer_component_callback,

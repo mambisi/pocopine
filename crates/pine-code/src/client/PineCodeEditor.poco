@@ -1,0 +1,5 @@
+<div pp-ref="root" data-pine-code-root>
+  <div data-pine-code-gutter aria-hidden="true" hidden></div>
+  <div data-pine-code-content contenteditable="true" role="textbox" aria-multiline="true" tabindex="0" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></div>
+  <div data-pine-code-status role="status" aria-live="polite"></div>
+</div>

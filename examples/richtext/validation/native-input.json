@@ -1,0 +1,327 @@
+{
+  "recorded_at": "2026-09-12T03:54:07.774Z",
+  "base_commit": "a3c55fbb0ada3dc3faec44561792a62affbd6ec0",
+  "source_commit": "e7f16410",
+  "profile": "debug",
+  "method": "Synthetic native input on a mounted editor; device projects emulate the browser viewport and input capabilities, not a physical keyboard or OS IME.",
+  "stats": {
+    "startTime": "2026-09-12T03:54:07.774Z",
+    "duration": 41495.320999999996,
+    "expected": 55,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "projects": {
+    "richtext-chromium": {
+      "engine": "chromium",
+      "version": "148.0.7778.96",
+      "bundle": "/pkg/richtext.64241049.js",
+      "cases": [
+        {
+          "name": "non-cancelable autocomplete commits once, survives rendering, and undoes",
+          "status": "expected",
+          "duration_ms": 1045
+        },
+        {
+          "name": "autocomplete without beforeinput reads actual Unicode text and final caret",
+          "status": "expected",
+          "duration_ms": 689
+        },
+        {
+          "name": "replacement without target ranges waits for native text instead of inserting at caret",
+          "status": "expected",
+          "duration_ms": 657
+        },
+        {
+          "name": "cancelable replacement with target ranges stays a model transaction",
+          "status": "expected",
+          "duration_ms": 664
+        },
+        {
+          "name": "autocomplete with an unreadable event payload uses native readback",
+          "status": "expected",
+          "duration_ms": 656
+        },
+        {
+          "name": "composition with final input before compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 1042
+        },
+        {
+          "name": "composition with final input after compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 801
+        },
+        {
+          "name": "composition deletion can empty a paragraph without resurrecting its text",
+          "status": "expected",
+          "duration_ms": 764
+        },
+        {
+          "name": "native correction retains marks, inline breaks, and surrounding text",
+          "status": "expected",
+          "duration_ms": 848
+        },
+        {
+          "name": "a canceled composition resumes a document replacement deferred during composition",
+          "status": "expected",
+          "duration_ms": 640
+        },
+        {
+          "name": "unrepresentable native structure is repaired instead of remaining out of sync",
+          "status": "expected",
+          "duration_ms": 561
+        }
+      ]
+    },
+    "richtext-firefox": {
+      "engine": "firefox",
+      "version": "150.0.2",
+      "bundle": "/pkg/richtext.64241049.js",
+      "cases": [
+        {
+          "name": "non-cancelable autocomplete commits once, survives rendering, and undoes",
+          "status": "expected",
+          "duration_ms": 2445
+        },
+        {
+          "name": "autocomplete without beforeinput reads actual Unicode text and final caret",
+          "status": "expected",
+          "duration_ms": 1137
+        },
+        {
+          "name": "replacement without target ranges waits for native text instead of inserting at caret",
+          "status": "expected",
+          "duration_ms": 1117
+        },
+        {
+          "name": "cancelable replacement with target ranges stays a model transaction",
+          "status": "expected",
+          "duration_ms": 1033
+        },
+        {
+          "name": "autocomplete with an unreadable event payload uses native readback",
+          "status": "expected",
+          "duration_ms": 1190
+        },
+        {
+          "name": "composition with final input before compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 1009
+        },
+        {
+          "name": "composition with final input after compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 1390
+        },
+        {
+          "name": "composition deletion can empty a paragraph without resurrecting its text",
+          "status": "expected",
+          "duration_ms": 1100
+        },
+        {
+          "name": "native correction retains marks, inline breaks, and surrounding text",
+          "status": "expected",
+          "duration_ms": 1000
+        },
+        {
+          "name": "a canceled composition resumes a document replacement deferred during composition",
+          "status": "expected",
+          "duration_ms": 989
+        },
+        {
+          "name": "unrepresentable native structure is repaired instead of remaining out of sync",
+          "status": "expected",
+          "duration_ms": 1015
+        }
+      ]
+    },
+    "richtext-webkit": {
+      "engine": "webkit",
+      "version": "26.4",
+      "bundle": "/pkg/richtext.64241049.js",
+      "cases": [
+        {
+          "name": "non-cancelable autocomplete commits once, survives rendering, and undoes",
+          "status": "expected",
+          "duration_ms": 2858
+        },
+        {
+          "name": "autocomplete without beforeinput reads actual Unicode text and final caret",
+          "status": "expected",
+          "duration_ms": 2782
+        },
+        {
+          "name": "replacement without target ranges waits for native text instead of inserting at caret",
+          "status": "expected",
+          "duration_ms": 2259
+        },
+        {
+          "name": "cancelable replacement with target ranges stays a model transaction",
+          "status": "expected",
+          "duration_ms": 2151
+        },
+        {
+          "name": "autocomplete with an unreadable event payload uses native readback",
+          "status": "expected",
+          "duration_ms": 1946
+        },
+        {
+          "name": "composition with final input before compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 2582
+        },
+        {
+          "name": "composition with final input after compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 2736
+        },
+        {
+          "name": "composition deletion can empty a paragraph without resurrecting its text",
+          "status": "expected",
+          "duration_ms": 2341
+        },
+        {
+          "name": "native correction retains marks, inline breaks, and surrounding text",
+          "status": "expected",
+          "duration_ms": 2124
+        },
+        {
+          "name": "a canceled composition resumes a document replacement deferred during composition",
+          "status": "expected",
+          "duration_ms": 2472
+        },
+        {
+          "name": "unrepresentable native structure is repaired instead of remaining out of sync",
+          "status": "expected",
+          "duration_ms": 2275
+        }
+      ]
+    },
+    "richtext-android-emulation": {
+      "engine": "chromium",
+      "version": "148.0.7778.96",
+      "bundle": "/pkg/richtext.64241049.js",
+      "cases": [
+        {
+          "name": "non-cancelable autocomplete commits once, survives rendering, and undoes",
+          "status": "expected",
+          "duration_ms": 830
+        },
+        {
+          "name": "autocomplete without beforeinput reads actual Unicode text and final caret",
+          "status": "expected",
+          "duration_ms": 676
+        },
+        {
+          "name": "replacement without target ranges waits for native text instead of inserting at caret",
+          "status": "expected",
+          "duration_ms": 618
+        },
+        {
+          "name": "cancelable replacement with target ranges stays a model transaction",
+          "status": "expected",
+          "duration_ms": 702
+        },
+        {
+          "name": "autocomplete with an unreadable event payload uses native readback",
+          "status": "expected",
+          "duration_ms": 669
+        },
+        {
+          "name": "composition with final input before compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 902
+        },
+        {
+          "name": "composition with final input after compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 785
+        },
+        {
+          "name": "composition deletion can empty a paragraph without resurrecting its text",
+          "status": "expected",
+          "duration_ms": 724
+        },
+        {
+          "name": "native correction retains marks, inline breaks, and surrounding text",
+          "status": "expected",
+          "duration_ms": 654
+        },
+        {
+          "name": "a canceled composition resumes a document replacement deferred during composition",
+          "status": "expected",
+          "duration_ms": 848
+        },
+        {
+          "name": "unrepresentable native structure is repaired instead of remaining out of sync",
+          "status": "expected",
+          "duration_ms": 689
+        }
+      ]
+    },
+    "richtext-ios-emulation": {
+      "engine": "webkit",
+      "version": "26.4",
+      "bundle": "/pkg/richtext.64241049.js",
+      "cases": [
+        {
+          "name": "non-cancelable autocomplete commits once, survives rendering, and undoes",
+          "status": "expected",
+          "duration_ms": 2476
+        },
+        {
+          "name": "autocomplete without beforeinput reads actual Unicode text and final caret",
+          "status": "expected",
+          "duration_ms": 1963
+        },
+        {
+          "name": "replacement without target ranges waits for native text instead of inserting at caret",
+          "status": "expected",
+          "duration_ms": 2025
+        },
+        {
+          "name": "cancelable replacement with target ranges stays a model transaction",
+          "status": "expected",
+          "duration_ms": 2186
+        },
+        {
+          "name": "autocomplete with an unreadable event payload uses native readback",
+          "status": "expected",
+          "duration_ms": 1846
+        },
+        {
+          "name": "composition with final input before compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 1915
+        },
+        {
+          "name": "composition with final input after compositionend preserves DOM and history",
+          "status": "expected",
+          "duration_ms": 2792
+        },
+        {
+          "name": "composition deletion can empty a paragraph without resurrecting its text",
+          "status": "expected",
+          "duration_ms": 2696
+        },
+        {
+          "name": "native correction retains marks, inline breaks, and surrounding text",
+          "status": "expected",
+          "duration_ms": 2730
+        },
+        {
+          "name": "a canceled composition resumes a document replacement deferred during composition",
+          "status": "expected",
+          "duration_ms": 2162
+        },
+        {
+          "name": "unrepresentable native structure is repaired instead of remaining out of sync",
+          "status": "expected",
+          "duration_ms": 2036
+        }
+      ]
+    }
+  }
+}

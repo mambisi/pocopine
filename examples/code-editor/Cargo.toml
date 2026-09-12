@@ -1,0 +1,31 @@
+[package]
+name = "code-editor-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+bin = "code-editor-server"
+port = 3044
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "code-editor-server"
+path = "src/bin/server.rs"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pocopine = { path = "../../crates/pocopine" }
+pine-code = { workspace = true, features = ["view", "lang-rust", "lang-json", "lang-python", "lang-javascript"] }
+pine-ui = { path = "../../crates/pine" }
+tree-sitter-json = "0.24.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { version = "0.3", features = ["Document", "Element", "Window"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-server = { path = "../../crates/pocopine-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

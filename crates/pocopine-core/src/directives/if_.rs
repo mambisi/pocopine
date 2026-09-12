@@ -176,6 +176,7 @@ pub fn install_cond(
                 let teleported = teleport_target.is_some();
                 *leaving.borrow_mut() = Some((prev_active.get(), clone.clone()));
                 transition::leave_subtree(&clone, move || {
+                    crate::before_detach::prepare(clone_cap.as_ref());
                     if let Some(parent) = clone_cap.parent_node() {
                         let _ = parent.remove_child(&clone_cap);
                     }
@@ -468,6 +469,7 @@ pub fn install_match(
                     payload_scope.borrow_mut().take(),
                 ));
                 transition::leave_subtree(&clone, move || {
+                    crate::before_detach::prepare(clone_cap.as_ref());
                     if let Some(parent) = clone_cap.parent_node() {
                         let _ = parent.remove_child(&clone_cap);
                     }

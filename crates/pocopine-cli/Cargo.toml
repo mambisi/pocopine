@@ -10,7 +10,8 @@ description = "CLI for pocopine projects: build, run, dev."
 name = "pocopine"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
 # Build-time precompression of the hashed bundle pair (see build::precompress).
 # Both are already in the graph transitively, so this adds no new crates.
 brotli = "8"
@@ -56,16 +57,10 @@ toml = "0.8"
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile = "3"
 # RFC-100 — `tests/assets_push_minio.rs` drives the real binary
 # against a MinIO testcontainer (same pattern as
 # pocopine-storage-s3/tests/minio.rs). Needs a Docker daemon.
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["minio"] }
-
-# The CLI itself is host-only; reqwest is only used when downloading
-# the Tailwind standalone binary. Target-gated so `cargo check
-# --target wasm32 --workspace` stays happy.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
