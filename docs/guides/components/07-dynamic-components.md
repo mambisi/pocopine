@@ -107,6 +107,8 @@ replacement mounts. In-place list patches propagate to existing children;
 changing an unrelated binding does not replay unchanged props over local edits.
 Values that are not declared props seed ordinary attributes before mount-time
 attribute fallthrough, including `class`, `style`, `id`, and `data-*`.
+These non-prop attributes are reapplied on replacement; they do not update
+reactively while the same child instance remains mounted.
 
 ## Component instance identity
 
