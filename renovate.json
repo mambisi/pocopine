@@ -62,7 +62,8 @@
       "matchStrings": [
         "(?:tool:\\s*|cargo install --locked )(?<depName>[a-z][a-z0-9-]+)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
-      "datasourceTemplate": "crate"
+      "datasourceTemplate": "crate",
+      "versioningTemplate": "semver"
     }
   ]
 }
