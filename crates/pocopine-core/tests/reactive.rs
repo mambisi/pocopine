@@ -39,6 +39,26 @@ impl Drop for DropFlag {
 }
 
 #[wasm_bindgen_test]
+fn releasing_an_effect_drops_its_owned_computed_without_a_storage_borrow() {
+    setup();
+    let baseline = pocopine_core::reactive::stats().0;
+    let (source, setter) = signal(1_u32);
+    let calls = Rc::new(Cell::new(0));
+    let observed = calls.clone();
+    let derived = computed(move || source.get() + 1);
+    let owner = effect(move || {
+        assert!(derived.get() > 0);
+        observed.set(observed.get() + 1);
+    });
+    setter.set(2);
+    release(owner);
+    flush_sync();
+    assert_eq!(calls.get(), 1);
+    assert_eq!(pocopine_core::reactive::stats().0, baseline);
+    release(owner);
+}
+
+#[wasm_bindgen_test]
 fn signal_get_set_basic() {
     setup();
     let (s, setter) = signal(0_i32);

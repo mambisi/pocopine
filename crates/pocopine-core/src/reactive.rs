@@ -444,13 +444,12 @@ pub fn release(id: EffectId) {
         // Only remove when the id is live — guards double-release and
         // stale ids from evicting a slot's newer occupant.
         if s.get(slot).is_some_and(|e| e.generation == generation) {
-            s.remove(slot);
-            true
+            Some(s.remove(slot))
         } else {
-            false
+            None
         }
     });
-    if removed {
+    if let Some(removed) = removed {
         // Bump the slot's generation so its next occupant gets a fresh
         // id and this id (now stale) resolves to None forever.
         EFFECT_GENERATIONS.with(|g| {
@@ -462,6 +461,10 @@ pub fn release(id: EffectId) {
             // shift_remove keeps any concurrently-queued effects in order.
             q.borrow_mut().shift_remove(&id);
         });
+        // Captured resources (notably Computed) may release their own
+        // effects on drop. Retire this id before dropping the closure,
+        // with no slab borrow held so those nested releases can re-enter.
+        drop(removed);
     }
 }
 
