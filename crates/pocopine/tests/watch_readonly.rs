@@ -129,3 +129,112 @@ async fn snapshot_observers_preserve_delivery_context_and_safe_reentry() {
     set_auto_flush(true);
     host.remove();
 }
+
+thread_local! {
+    static CROSS_PARENT: Cell<Option<ScopeId>> = const { Cell::new(None) };
+    static CROSS_CHILD: Cell<Option<ScopeId>> = const { Cell::new(None) };
+    static CROSS_EVENTS: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) };
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "cross-scope-watch-child",
+    template = poco! { <button pp-ref="button" @click="on_click">Click</button> }
+)]
+struct CrossScopeWatchChild {
+    clicks: u32,
+}
+
+#[handlers]
+impl CrossScopeWatchChild {
+    fn on_ready(&self) {
+        CROSS_CHILD.with(|scope| scope.set(current_scope_id()));
+    }
+
+    fn on_click(&mut self) {
+        self.clicks += 1;
+        let applied = cross_parent().with(|state| state.applied);
+        CROSS_EVENTS.with(|events| events.borrow_mut().push((self.clicks, applied)));
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "cross-scope-watch-parent",
+    uses = [CrossScopeWatchChild],
+    template = poco! { <div><cross-scope-watch-child></cross-scope-watch-child></div> }
+)]
+struct CrossScopeWatchParent {
+    step: u32,
+    applied: u32,
+}
+
+#[handlers]
+impl CrossScopeWatchParent {
+    fn on_mount(&mut self) {
+        self.step = 1;
+    }
+
+    fn on_ready(&self) {
+        CROSS_PARENT.with(|scope| scope.set(current_scope_id()));
+    }
+
+    #[watch(step, writes(applied))]
+    fn on_step(step: u32) -> Update<Self> {
+        let child_scope = CROSS_CHILD.with(Cell::get).unwrap();
+        let child = Scope::find(child_scope)
+            .unwrap()
+            .typed::<CrossScopeWatchChild>()
+            .unwrap();
+        let before = child.borrow().clicks;
+        cross_child_button().click();
+        assert_eq!(
+            child.borrow().clicks,
+            before,
+            "child event must wait for evaluation"
+        );
+        Update::new().applied(step)
+    }
+}
+
+fn cross_parent() -> Handle<CrossScopeWatchParent> {
+    let id = CROSS_PARENT.with(Cell::get).unwrap();
+    Handle::new(
+        Scope::find(id)
+            .unwrap()
+            .typed::<CrossScopeWatchParent>()
+            .unwrap(),
+        id,
+    )
+}
+
+fn cross_child_button() -> web_sys::HtmlElement {
+    pocopine::refs::get_on(CROSS_CHILD.with(Cell::get).unwrap(), "button")
+        .unwrap()
+        .dyn_into()
+        .unwrap()
+}
+
+#[wasm_bindgen_test]
+async fn cross_scope_browser_events_wait_for_watcher_patch_commit() {
+    CROSS_EVENTS.with(|events| events.borrow_mut().clear());
+    let document = web_sys::window().unwrap().document().unwrap();
+    let host = document.create_element("div").unwrap();
+    document.body().unwrap().append_child(&host).unwrap();
+    let mounted = App::mount_subtree::<CrossScopeWatchParent>(&host);
+    settle().await;
+
+    // The seed may dispatch an event into a different component. That handler
+    // must see the committed patch, with both evaluation borrows released.
+    CROSS_EVENTS.with(|events| assert_eq!(*events.borrow(), vec![(1, 1)]));
+    cross_parent().update(|state| state.step = 2);
+    flush_sync();
+    CROSS_EVENTS.with(|events| assert_eq!(*events.borrow(), vec![(1, 1), (2, 2)]));
+
+    // Outside watcher evaluation, ordinary DOM event dispatch stays synchronous.
+    cross_child_button().click();
+    CROSS_EVENTS.with(|events| assert_eq!(*events.borrow(), vec![(1, 1), (2, 2), (3, 2)]));
+
+    mounted.unmount();
+    host.remove();
+}

@@ -127,6 +127,13 @@ deferred until after `on_ready`, and unmount releases the subscription and
 its previous snapshot. The component scope and callback safe point remain
 active while the watcher evaluates and its patch commits.
 
+DOM APIs such as `focus()` or `click()` can synchronously dispatch events
+into the same component or another component. During watcher evaluation,
+those handler invocations join the callback FIFO and run after evaluation
+and patch commit, if their target scope is still live. Outside evaluation,
+handlers on other scopes may run synchronously. Direct handle, field-handle,
+and signal writes during evaluation remain rejected.
+
 ## Cycle and mutation checks
 
 The macro rejects a field listed in both the inputs and `writes(...)`.

@@ -107,9 +107,13 @@ thread_local! {
     static EVALUATING: Cell<bool> = const { Cell::new(false) };
 }
 
+pub(crate) fn is_evaluating() -> bool {
+    EVALUATING.with(Cell::get)
+}
+
 pub(crate) fn assert_writes_allowed() {
     assert!(
-        !EVALUATING.with(Cell::get),
+        !is_evaluating(),
         "#[watch] evaluation cannot mutate reactive state directly; return Update<Self> instead"
     );
 }
@@ -242,8 +246,20 @@ mod tests {
 
     #[test]
     fn evaluation_guard_blocks_writes_and_restores_after_unwind() {
-        let result = std::panic::catch_unwind(|| evaluate(assert_writes_allowed));
+        let result = std::panic::catch_unwind(|| {
+            evaluate(|| {
+                assert!(is_evaluating());
+                let nested = std::panic::catch_unwind(|| evaluate(assert_writes_allowed));
+                assert!(nested.is_err());
+                assert!(
+                    is_evaluating(),
+                    "inner unwind must preserve the outer guard"
+                );
+                assert_writes_allowed();
+            });
+        });
         assert!(result.is_err());
+        assert!(!is_evaluating());
         assert_writes_allowed();
     }
 

@@ -350,6 +350,12 @@ Evaluation can call browser APIs that remove the owner, so liveness is
 checked again before patch commit. The input borrow ends before commit;
 borrowed parameters do not require cloning the entire component.
 
+Handler invocations triggered synchronously by DOM APIs during evaluation
+join the callback FIFO, including events targeting another component. They
+run after evaluation and patch commit complete, provided their target scope
+is still live. Outside watcher evaluation, the existing same-scope reentry
+deferral applies; handlers on other scopes may execute synchronously.
+
 Changes to several inputs in the same flush pass coalesce into one
 invocation. Further changes during a cascade may cause another pass;
 delivery is not an event log of every intermediate assignment. Existing
@@ -405,6 +411,10 @@ runtime applies the returned patch. Only declared inputs subscribe:
 incidental reactive reads in the callback or model writeback do not add
 dependencies. External values that should trigger a transition need an
 explicit owning action or a declared local input.
+
+The event-dispatch deferral above does not permit direct `Handle`,
+`FieldHandle`, or signal writes during evaluation. Those calls still fail
+immediately; queued event handlers execute after the guard has ended.
 
 These are framework API guarantees. Shared references and cloned values
 can contain interior mutability, and hidden macro support APIs are not a
