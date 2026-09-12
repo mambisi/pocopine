@@ -9,15 +9,17 @@ The authoritative contract is
 [RFC-125: Typed watcher inputs and restricted state updates](../../../rfcs/rfc-125-watch-inputs-and-updates.md).
 
 A watcher receives named values, borrows, or `Change<T>` snapshots and may
-return an `Update<Self>` patch. It takes no `self` receiver. `#[computed]` remains the right tool for a
-value that is always derived; a watcher can coordinate changes to several
+return an `Update` with an explicit output tuple or `updates(...)` shorthand.
+It takes no `self` receiver. `#[computed]` remains the right tool for a value
+that is always derived; a watcher can coordinate changes to several
 independently editable fields.
 
 ```rust
 #[handlers]
 impl Editor {
-    #[watch(record, writes(draft, dirty, error))]
-    fn start_edit(record: Change<String>) -> Update<Self> {
+    #[watch(record)]
+    fn start_edit(record: Change<String>)
+        -> Update<Self, (Self::Draft, Self::Dirty, Self::Error)> {
         Update::new()
             .draft(record.current)
             .dirty(false)
@@ -30,6 +32,34 @@ impl Editor {
 builder exposes setters only for those fields. Returning `Update::new()`
 leaves every field unchanged. Omitting `.error(...)` preserves the existing
 error; `.error(None)` explicitly clears an `Option` field.
+
+The explicit return type declares the allowed outputs. Its optional shorthand is:
+
+```rust
+#[watch(record, updates(draft, dirty, error))]
+fn start_edit(record: Change<String>) -> Update<Self> {
+    Update::new().draft(record.current).dirty(false).error(None)
+}
+```
+
+Both forms return the same type. Use one declaration, not both. The earlier
+`writes(...)` spelling has been replaced by `updates(...)`.
+
+`Update<Self>` without `updates(...)` is an error. An empty tuple
+(`Update<Self, ()>`) or `updates()` emits `pocopine::empty_watch_update`,
+suggesting `-> ()` for an observer. It uses Rust's deprecated-use warning,
+so `#[allow(deprecated)]` on the method permits an intentional empty set.
+A watcher with declared outputs may still return `Update::new()` to skip a
+change without triggering this warning. Bare `#[watch]` requires `()`.
+
+The owner generates reusable descriptors such as `EditorField::Draft`.
+Within watcher output tuples, `Self::Draft` resolves to that descriptor.
+Outside watcher signatures, use `EditorField::Draft` directly and import
+`EditorField::setters::{Draft as _, Dirty as _}` for selected fluent setters.
+Descriptors preserve field visibility and expose the value type, Rust name, and a borrowed `get`
+through `pocopine::Field<Editor>`. `draft_text` becomes `DraftText`; duplicate
+marker names are rejected. Output tuples support up to 32 fields, and their
+order is part of the Rust type.
 
 ## Input contract
 
@@ -62,7 +92,7 @@ pub struct Change<T> {
 - `changed()` is available when `T: PartialEq`; it is true on the initial
   invocation and when the current value differs from the previous value.
 - Watchers are synchronous, safe, non-generic functions. They return `()`
-  for observation or `Update<Self>` for a patch.
+  for observation or an `Update` with declared outputs for a patch.
 - Only declared inputs subscribe. Incidental reactive reads inside the
   callback do not add dependencies; include every triggering field in the
   watch list.
@@ -90,7 +120,7 @@ because this form retains its history. Computed keys, flattened aliases, and
 `#[serde(skip)]` fields are excluded.
 
 Bare observers must return `()`; even an empty `Update<Self>` is rejected.
-There is no `writes(...)` form because every watchable field is an input.
+There is no `updates(...)` form because every watchable field is an input.
 Initial delivery, coalescing, mutation guards, and unmount cleanup are the
 same as for named watches. Use an explicit field list with `T` or `&T` when
 history is unnecessary.
@@ -98,11 +128,11 @@ history is unnecessary.
 ## Multi-field transitions
 
 ```rust
-#[watch(first_name, last_name, writes(errors, valid))]
+#[watch(first_name, last_name)]
 fn check_errors(
     first_name: Change<String>,
     last_name: Change<String>,
-) -> Update<Self> {
+) -> Update<Self, (Self::Errors, Self::Valid)> {
     let mut errors = Vec::new();
     if first_name.current.trim().is_empty() {
         errors.push("First name is required".to_string());
@@ -115,9 +145,9 @@ fn check_errors(
 }
 ```
 
-The macro expands `Update<Self>` into a policy specific to that watcher.
-Its patch stores optional values for the declared outputs and its generated
-extension trait supplies the fluent setters. The runtime commits the patch
+Both forms resolve to a tuple of reusable owner field descriptors. Its
+patch stores optional values for the declared outputs; generated setter
+traits require membership in that tuple. The runtime commits the patch
 through one component mutation and model-writeback batch after evaluation.
 Reactive observers see the completed batch, and unchanged model values do
 not emit another update event. An empty patch skips the mutation entirely.
@@ -146,7 +176,7 @@ evaluation also remain rejected.
 
 ## Cycle and mutation checks
 
-The macro rejects a field listed in both the inputs and `writes(...)`.
+The macro rejects a field listed in both the inputs and `updates(...)`.
 It also checks the declared graph across watchers and computed methods in
 the handlers block, including longer cycles. Conditional compilation applies
 to the graph nodes, so inactive watchers do not create false cycles.
@@ -173,7 +203,7 @@ write into a deferred callback just to bypass the contract.
 | Existing watcher | Migration |
 | --- | --- |
 | Keeps a purely derived label, percentage, or completion flag synchronized | Remove the stored output and use `#[computed]`. |
-| Resets an editable draft, clears errors, or closes a popover | Declare `writes(...)` and return a patch. |
+| Resets an editable draft, clears errors, or closes a popover | Declare `updates(...)` and return a patch. |
 | Updates DOM properties, starts an animation, or logs | Take named snapshots and return `()`. |
 | Normalizes the same input that triggered the watcher | Normalize in the action accepting that input; a watcher cannot write its own inputs. |
 | Changes another scope or manages request/loading/result state | Give the transition an explicit event/action or editing-session lifecycle, preserving cancellation and stale-response checks. |

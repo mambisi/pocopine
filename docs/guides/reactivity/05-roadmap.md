@@ -64,13 +64,13 @@ releases its backing effect on drop.
 ### Reacting to changes — `#[watch(field)]`
 
 Named watchers take `T`, `&T`, or `Change<T>` inputs with no receiver.
-They return `()` for observation or `Update<Self>` for declared writes:
+They return `()` for observation or an `Update` with declared output fields:
 
 ```rust
 #[handlers]
 impl Editor {
-    #[watch(value, writes(error))]
-    fn on_value_change(value: Change<String>) -> Update<Self> {
+    #[watch(value)]
+    fn on_value_change(value: Change<String>) -> Update<Self, (Self::Error,)> {
         if value.previous.is_none() {
             return Update::new();
         }

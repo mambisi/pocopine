@@ -22,13 +22,14 @@ A watcher declares the fields that trigger it and the fields it may update.
 Its callback takes no `self` receiver. Named parameters provide a cloned
 current value (`T`), a shared current value (`&T`), or current and previous
 values (`Change<T>`). A callback returns either `()` or a restricted
-`Update<Self>` patch:
+`Update<Self, (Self::FieldName, ...)>` patch:
 
 ```rust
 #[handlers]
 impl Editor {
-    #[watch(record, writes(draft, dirty, error))]
-    fn start_edit(record: Change<String>) -> Update<Self> {
+    #[watch(record)]
+    fn start_edit(record: Change<String>)
+        -> Update<Self, (Self::Draft, Self::Dirty, Self::Error)> {
         Update::new()
             .draft(record.current)
             .dirty(false)
@@ -87,22 +88,24 @@ and a general-purpose state patch API are outside its scope.
 
 | Form | Parameters | Return |
 | --- | --- | --- |
-| `#[watch(a)]` | One named input for `a` | `()` or `Update<Self>` |
-| `#[watch(a, b)]` | One named input for each listed field | `()` or `Update<Self>` |
-| `#[watch(a, b, writes(c, d))]` | One named input for each listed field | `Update<Self>` |
+| `#[watch(a)]` | One named input for `a` | `()` or `Update<Self, (Self::Output, ...)>` |
+| `#[watch(a, b)]` | One named input for each listed field | `()` or `Update<Self, (Self::Output, ...)>` |
+| `#[watch(a, b, updates(c, d))]` | One named input for each listed field | `Update<Self>` |
 | `#[watch]` | One parameter of type `Changes<Self>` | `()` only |
 
-A named watcher lists at least one input. The optional `writes(...)` list
-comes last. Duplicate inputs, duplicate outputs, repeated `writes(...)`
+A named watcher lists at least one input. The optional `updates(...)` list
+comes last. Duplicate inputs, duplicate outputs, repeated `updates(...)`
 lists, stacked watch attributes, and input/output overlap are errors.
-`#[watch()]`, `#[watch(*)]`, and a writes-only attribute are not supported.
+`#[watch()]`, `#[watch(*)]`, and a updates-only attribute are not supported.
 
 Watch callbacks are synchronous, safe, non-generic associated functions
 inside `#[handlers]`. They accept no receiver, including `&self`, and no
 context extractors. Lifecycle method names cannot also be watcher names.
-The only result shapes are unit (implicit or explicit) and `Update<Self>`;
-`Option<Update<Self>>`, `Result`, and asynchronous results are not accepted.
-Return an empty update to skip a transition.
+The result is unit (implicit or explicit), or `Update<Self, (Self::Field, ...)>`.
+`Update<Self>` requires the `updates(...)` shorthand. `Option`, `Result`, and
+asynchronous results are not accepted. Declare outputs once: combining an
+explicit tuple with `updates(...)` is an error, even if the lists match.
+Return an empty update value to skip a transition.
 
 Every named parameter must match a declared input's Rust field name exactly.
 Parameters may appear in a different order from the attribute; each input
@@ -170,13 +173,63 @@ previous entry when present. Choose `T` or `&T` when history is unnecessary.
 
 ### 2.3 Restricted patches
 
-`Update<Self>` is authoring shorthand. The handlers macro adds a generated
-policy type identifying this particular watcher. Only its declared outputs
-receive fluent setters; declaring `writes(draft, dirty, error)` does not
-provide a `.record(...)` setter or general mutable access to the owner.
+The return type declares the permitted output fields. The field list uses
+Rust tuple syntax, including a trailing comma for a one-field tuple:
 
-Each patch slot is `Option<FieldType>`. Omission means preserve the field;
-setting an optional field to `None` means explicitly clear it:
+```rust
+#[watch(record)]
+fn start_edit(record: String) -> Update<Self, (Self::Draft, Self::Dirty)> {
+    Update::new().draft(record).dirty(false)
+}
+```
+
+`updates(...)` is optional sugar for that tuple:
+
+```rust
+#[watch(record, updates(draft, dirty))]
+fn start_edit(record: String) -> Update<Self> {
+    Update::new().draft(record).dirty(false)
+}
+```
+
+Both forms resolve to exactly `Update<Editor, (EditorField::Draft,
+EditorField::Dirty)>`. There is no watcher-specific patch policy. The old
+`writes(...)` spelling is rejected with a migration diagnostic.
+
+The owner macro generates the `<Owner>Field` module once per component or
+store. It contains field descriptors such as `EditorField::Draft`, each
+implementing `Field<Editor>` with an associated `Value` type, a `NAME`
+constant, and a borrowed `get(&Editor)` operation. `Self::Draft` is shorthand
+resolved by `#[handlers]` in watcher output tuples; it is not an inherent
+Rust associated type. Outside watcher signatures, use the ordinary marker
+path:
+
+```rust
+fn reset_draft(record: &str) -> Update<Editor, (EditorField::Draft, EditorField::Dirty)> {
+    use EditorField::setters::{Draft as _, Dirty as _};
+    Update::new().draft(record.to_owned()).dirty(false)
+}
+```
+
+The module has the owner's visibility, and each marker and setter trait
+preserves its field's visibility. The marker name capitalizes each
+underscore-separated word (`draft_text` becomes `DraftText`; `r#type`
+becomes `Type`). A leading digit retains an underscore (`_1` becomes `_1`),
+and the reserved `Self` spelling gains a trailing underscore (`self_` becomes
+`Self_`). Fields that normalize to the same marker name are rejected.
+Original field types resolve in the owner's declaration module, preserving
+private types and relative module paths. Descriptor reads themselves do not
+subscribe or expose a reactive mutation handle.
+
+Tuple order is part of the Rust type. Sugar preserves the declared order;
+helpers sharing a return type must use that same order. Tuples support up
+to 32 output fields. Duplicate outputs, unknown or skipped fields, and
+input/output overlap are compile errors. The same graph checks apply to
+both forms. Fluent setters are generated per owner field, with a tuple
+membership bound that permits calls only for declared outputs.
+
+Each tuple patch slot is `Option<FieldType>`. Omission means preserve the
+field; setting an optional field to `None` means explicitly clear it:
 
 ```rust
 Update::new()                         // Preserve every field.
@@ -185,10 +238,20 @@ Update::new().error(None)             // Clear error.
 Update::new().error(Some(message))    // Replace error.
 ```
 
-Calling a setter twice replaces its pending value. A watcher may set a
-subset of its declared outputs. `writes(...)` requires a patch return type;
-a named watcher returning `Update<Self>` without declared outputs can only
-return an empty patch. Bare observers cannot return a patch at all.
+Calling a setter twice replaces its pending value. A watcher may set any
+subset of its declared outputs. `Update<Self>` without `updates(...)` is an
+error, with a suggestion to declare outputs or return `()` for observation.
+
+`Update<Self, ()>` and `updates()` are valid empty output sets, but emit the
+`pocopine::empty_watch_update` warning: "this watcher declares no outputs;
+return () instead of Update<Self, ()> or updates()". Watcher callbacks are
+non-generic, so an empty capability usually obscures an observer. The lint
+uses the same stable-Rust deprecated-constant mechanism as existing Pocopine
+warnings: `#[deny(warnings)]` or `#[deny(deprecated)]` makes it an error;
+`#[allow(deprecated)]` on the method permits an intentional empty set.
+Inactive `#[cfg]` watchers do not warn. A nonempty output tuple returning
+`Update::new()` never triggers this lint. Bare observers cannot return even
+an empty patch.
 
 The runtime commits a nonempty patch through one owner `Handle::update`
 and model-writeback batch. Reactive observers see the completed batch;
@@ -197,11 +260,6 @@ skips mutation entirely. This is batching, with no rollback transaction or
 guarantee of ordering between distinct watchers. Multiple watchers may
 declare the same output if the graph remains acyclic; applications needing
 a deterministic resolution should give that transition one owner.
-
-The generated policy and builder traits are implementation details.
-`Update<Self>` and `Changes<Self>` are macro shorthand within watcher
-signatures, not one-parameter aliases usable in arbitrary Rust signatures.
-Helpers can return ordinary domain values for the watcher to put in a patch.
 
 ### 2.4 Observing every field
 
@@ -231,76 +289,52 @@ requirement because the macro also supports bare observers. An inactive
 
 ## 3. Expansion and runtime ownership
 
-The owner macro (`#[component]` or `#[store]`) knows field types; the
-handlers macro knows declared inputs and outputs. Generated `WatchField`
-metadata connects them. There is no source-text search for assignments in
-the callback or its helper methods.
+The owner macro (`#[component]` or `#[store]`) knows field types and emits
+reusable field descriptors. The handlers macro resolves the explicit tuple
+or `updates(...)` into those descriptors and records their field names in
+the local dependency graph. It does not search callback or helper bodies
+for assignments.
 
-The following expansion illustrates `Editor::start_edit` from the summary.
-It abbreviates generated names, substitutes concrete field types and direct
-assignments for the `WatchField` bridge, and omits lifecycle boilerplate:
+For example, `Editor` emits the following field metadata (abbreviated):
 
 ```rust
-mod __start_edit {
-    use super::*;
-    use pocopine::__private::WatchSpec;
-
-    pub struct Policy;
-
-    #[derive(Default)]
-    pub struct Patch {
-        draft: Option<String>,
-        dirty: Option<bool>,
-        error: Option<Option<String>>,
-    }
-
-    impl WatchSpec<Editor> for Policy {
-        type Patch = Patch;
-
-        fn is_empty(patch: &Patch) -> bool {
-            patch.draft.is_none() && patch.dirty.is_none() && patch.error.is_none()
-        }
-
-        fn apply(patch: Patch, state: &mut Editor) {
-            if let Some(value) = patch.draft { state.draft = value; }
-            if let Some(value) = patch.dirty { state.dirty = value; }
-            if let Some(value) = patch.error { state.error = value; }
-        }
-    }
-
-    pub trait Setters: Sized {
-        fn draft(self, value: String) -> Self;
-        fn dirty(self, value: bool) -> Self;
-        fn error(self, value: Option<String>) -> Self;
-    }
-
-    impl Setters for Update<Editor, Policy> {
-        fn draft(mut self, value: String) -> Self {
-            self.__patch_mut().draft = Some(value);
-            self
-        }
-        fn dirty(mut self, value: bool) -> Self {
-            self.__patch_mut().dirty = Some(value);
-            self
-        }
-        fn error(mut self, value: Option<String>) -> Self {
-            self.__patch_mut().error = Some(value);
-            self
-        }
-    }
+pub mod EditorField {
+    pub enum Draft {}
+    pub enum Dirty {}
+    pub enum Error {}
+    // Generated setter traits, with UpdateField membership bounds.
 }
 
+impl pocopine::Field<Editor> for EditorField::Draft {
+    type Value = String;
+    const NAME: &'static str = "draft";
+    fn get(state: &Editor) -> &String { &state.draft }
+    fn set(state: &mut Editor, value: String) { state.draft = value; }
+}
+// Dirty and Error have corresponding metadata implementations.
+```
+
+Both authoring forms expand the callback to the same signature and import
+the same owner-level setter traits:
+
+```rust
 impl Editor {
-    fn start_edit(record: Change<String>) -> Update<Self, __start_edit::Policy> {
-        use __start_edit::Setters as _;
+    fn start_edit(record: Change<String>)
+        -> Update<Self, (EditorField::Draft, EditorField::Dirty, EditorField::Error)>
+    {
+        use EditorField::setters::{Draft as _, Dirty as _, Error as _};
         Update::new().draft(record.current).dirty(false).error(None)
     }
 }
 ```
 
-The setters are a generated extension trait implemented for one specialized
-`Update` type. The runtime owns the final mutable access; author code only
-constructs values in the restricted patch.
+The core crate implements `WatchSpec<C>` for tuples of descriptors that
+implement `Field<C>`. Its patch storage is a tuple of optional field values:
+for this example, `(Option<String>, Option<bool>, Option<Option<String>>)`.
+The generated `.draft(...)` setter requires
+`W: UpdateField<Editor, EditorField::Draft, INDEX>`, with the slot index
+inferred from the tuple. A setter for an undeclared field cannot satisfy
+that bound. The runtime owns the final mutable access.
 
 The generated installation supplies a shared-state callback and history
 containing only the inputs that requested `Change<T>`:
@@ -382,9 +416,9 @@ its declared inputs and computed output. An edge exists when one node
 writes a field another reads. A cycle is a compile error:
 
 ```text
-watch(a) -> writes(b)
-watch(b) -> writes(c)
-watch(c) -> writes(a)    // Rejected, even if each callback is conditional.
+watch(a) -> updates(b)
+watch(b) -> updates(c)
+watch(c) -> updates(a)    // Rejected, even if each callback is conditional.
 ```
 
 The check covers the declarations visible in that handlers block, including
@@ -446,7 +480,7 @@ leave the source of hidden writes in place. Migration is staged by behavior:
 | Existing behavior | New owner or form |
 | --- | --- |
 | Maintain a purely derived label, percentage, or completion flag | Remove the stored mirror and use `#[computed]`. |
-| Reset editable fields or close a popover after an input changes | Declare inputs and `writes(...)`; return a patch. |
+| Reset editable fields or close a popover after an input changes | Declare inputs and `updates(...)`; return a patch. |
 | Observe DOM, animate, or log | Named inputs and a unit return. |
 | Normalize the same field being watched | Normalize in the action that accepts the input. |
 | Observe the complete local state | Bare `#[watch]` with `Changes<Self>` and unit return. |
@@ -482,6 +516,8 @@ Acceptance coverage must include:
 - Valid owned, borrowed, history, mixed, and all-field callbacks; borrowing
   a non-`Clone` field; no unused history clones; raw names and conditional
   callbacks; skipped fields and declaration ordering.
+- Explicit/sugar type equivalence, reusable field descriptors and visibility,
+  tuple limits, duplicate marker diagnostics, and empty-output lint controls.
 - Rejection of receivers, mutable inputs, incorrect signatures, unknown
   fields, undeclared setters, self-writes, local cycles, and bare patches.
 - Deferred initial delivery, coalescing, previous-delivery semantics,
@@ -497,8 +533,8 @@ implementation is organized as follows:
 
 | Responsibility | Source |
 | --- | --- |
-| Public values, generated policy traits, evaluation guard, patch commit, graph validation | [`watch_update.rs`](../crates/pocopine-core/src/watch_update.rs) |
-| Attribute/signature parsing, field metadata, policies, history generation | [`watchers.rs`](../crates/pocopine-macros/src/watchers.rs) |
+| Public values, tuple patch storage, field membership, evaluation guard, patch commit, graph validation | [`watch_update.rs`](../crates/pocopine-core/src/watch_update.rs) |
+| Attribute/signature parsing, field descriptors and setters, empty-output lint, history generation | [`watchers.rs`](../crates/pocopine-macros/src/watchers.rs) |
 | Handler lifecycle installation and computed graph nodes | [`pocopine-macros/src/lib.rs`](../crates/pocopine-macros/src/lib.rs) |
 | Field subscriptions, probes, deferred seed, coalesced dispatch | [`watch.rs`](../crates/pocopine-core/src/watch.rs) |
 | Signature and diagnostic fixtures | [`handlers_contract_ui.rs`](../crates/pocopine/tests/handlers_contract_ui.rs) |
@@ -524,7 +560,7 @@ explicitly. The existing low-level `effect()` automatically tracks reactive
 reads, a different contract that should remain distinguishable.
 
 **Allow an unrestricted patch excluding only current inputs.** An explicit
-`writes(...)` list gives the macro the output edges required to reject
+`updates(...)` list gives the macro the output edges required to reject
 cycles spanning several callbacks. It also bounds which transitions a
 watcher can perform as its implementation changes.
 

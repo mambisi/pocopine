@@ -113,8 +113,8 @@ Watchers receive named values (`T`), borrows (`&T`), or snapshots with history
 fields and take no `self` receiver:
 
 ```rust
-#[watch(value, writes(error, dirty))]
-fn on_value(value: Change<String>) -> Update<Self> {
+#[watch(value)]
+fn on_value(value: Change<String>) -> Update<Self, (Self::Error, Self::Dirty)> {
     if value.previous.is_none() {
         return Update::new(); // Initial delivery is not a user edit.
     }
@@ -122,12 +122,13 @@ fn on_value(value: Change<String>) -> Update<Self> {
 }
 ```
 
-Declare every input by name and every writable output in `writes(...)`.
+Declare every input by name and every output in the return tuple. The
+`updates(error, dirty)` shorthand supplies that tuple for `Update<Self>`.
 `Update::new()` is an empty patch; omitted fields remain unchanged. The macro
 rejects writing an input and checks the declared graph for cycles. The
 runtime applies all returned fields together after the callback returns.
 
-For observation only, return `()` and omit `writes(...)`:
+For observation only, return `()` and omit `updates(...)`:
 
 ```rust
 #[watch(value)]

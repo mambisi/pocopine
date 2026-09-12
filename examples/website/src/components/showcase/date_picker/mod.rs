@@ -65,8 +65,8 @@ impl DatePickerDemo {
     }
 
     /// Selection is editable state; closing the popover is a separate transition.
-    #[watch(value, writes(open))]
-    fn on_value_change(value: Change<Option<DateValue>>) -> Update<Self> {
+    #[watch(value)]
+    fn on_value_change(value: Change<Option<DateValue>>) -> Update<Self, (Self::Open,)> {
         if value.current.is_some() && value.changed() {
             Update::new().open(false)
         } else {
