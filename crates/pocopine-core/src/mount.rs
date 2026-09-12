@@ -556,7 +556,7 @@ fn mount_component_result(
     // Apply static props BEFORE building the proxy so trigger doesn't fire
     // before any effect subscribes.
     apply_static_props(el, &scope);
-    apply_initial_props(&scope, initial_props);
+    apply_initial_props(el, &scope, initial_props);
 
     // RFC-113 N1 — typed initializer seam. This runs with the new scope
     // current after static props, but before plugin/user setup. The closure
@@ -898,7 +898,7 @@ fn try_mount_component_as(
         crate::context::set_parent(scope.id, parent_id);
     }
     apply_static_props(el, &scope);
-    apply_initial_props(&scope, initial_props);
+    apply_initial_props(el, &scope, initial_props);
     fire_component_setup_plugin_hooks(tag, scope.id);
     if scope.state.borrow().has_setup() {
         let _frame = crate::ComponentCallbackFrame::for_scope(scope.id);
@@ -1173,6 +1173,43 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
     }
 }
 
+/// A keyed template root owns the scope, but its prototype owns the visible
+/// root. Preserve the already-resolved fallthrough and default transitions
+/// on that prototype so every replacement inherits the same attributes.
+pub(crate) fn forward_keyed_root_attributes(template: &Element, prototype: &Element) {
+    let explicit_transition = has_user_transition_attr(prototype);
+    let attrs = template.attributes();
+    let attrs: Vec<_> = (0..attrs.length()).filter_map(|i| attrs.item(i)).collect();
+    for attr in attrs {
+        let name = attr.name();
+        if name.starts_with("pp-transition") && explicit_transition {
+            let _ = template.remove_attribute(&name);
+            continue;
+        }
+        if name == "hidden"
+            || name.starts_with("__pp_")
+            || name.starts_with("data-pp-")
+            || (name.starts_with("pp-") && !name.starts_with("pp-transition"))
+        {
+            continue;
+        }
+        let value = attr.value();
+        let value = match name.as_str() {
+            "class" => merge_space(
+                &prototype.get_attribute("class").unwrap_or_default(),
+                &value,
+            ),
+            "style" => merge_semicolon(
+                &prototype.get_attribute("style").unwrap_or_default(),
+                &value,
+            ),
+            _ => value,
+        };
+        let _ = prototype.set_attribute(&name, &value);
+        let _ = template.remove_attribute(&name);
+    }
+}
+
 /// Local copy of the kebab→snake mapping the directive registry
 /// used to expose. Walker removal eliminated the public helper;
 /// `apply_static_props` and the fallthrough path are the only
@@ -1200,12 +1237,13 @@ fn merge_semicolon(a: &str, b: &str) -> String {
     }
 }
 
-fn apply_initial_props(scope: &Scope, props: Option<&HashMap<String, JsValue>>) {
+fn apply_initial_props(host: &Element, scope: &Scope, props: Option<&HashMap<String, JsValue>>) {
     let Some(props) = props else { return };
-    for (name, value) in props {
-        let name = normalize_prop_name(name);
+    for (attr, value) in props {
+        let name = normalize_prop_name(attr);
         let field = crate::model_runtime::resolve_model_key(scope.id, &name).unwrap_or(name);
         if !scope.state.borrow().is_prop(&field) {
+            crate::directives::bind::apply_initial_attribute(host, attr, value);
             continue;
         }
         crate::model_runtime::with_scope_write(

@@ -274,15 +274,20 @@ fn flip_target_for_entry(entry: &PrevItem) -> Option<Element> {
     // `is_connected` is true only when the element is part of
     // the live document tree, which is the actual signal
     // pp-for needs.
-    if !entry.element.is_connected()
-        || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
-    {
+    if !entry.element.is_connected() {
         return None;
     }
-    Some(first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone()))
+    let mut target = None;
+    crate::keyed_component::for_each_root(&entry.element, |root| {
+        if root.get_attribute("data-pp-animate").as_deref() == Some("flip") {
+            target = Some(first_layout_child(root).unwrap_or_else(|| root.clone()));
+        }
+    });
+    target
 }
 
 fn lift_leaver_out_of_layout(entry: &PrevItem) {
+    crate::keyed_component::mark_leaving(&entry.element, true);
     let Some(target) = flip_target_for_entry(entry) else {
         return;
     };
@@ -302,6 +307,7 @@ fn lift_leaver_out_of_layout(entry: &PrevItem) {
 }
 
 fn restore_leaver_layout(entry: &PrevItem) {
+    crate::keyed_component::mark_leaving(&entry.element, false);
     let Some(target) = flip_target_for_entry(entry) else {
         return;
     };
@@ -1925,6 +1931,10 @@ fn run_keyed(
         fn next_non_leaving(node: Option<web_sys::Node>) -> Option<web_sys::Node> {
             let mut cursor = node;
             while let Some(n) = cursor.clone() {
+                if let Some(end) = crate::keyed_component::leaving_end(&n) {
+                    cursor = end.next_sibling();
+                    continue;
+                }
                 if let Ok(el) = n.dyn_into::<Element>()
                     && crate::directives::transition::is_leaving(&el)
                 {

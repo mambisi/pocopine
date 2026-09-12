@@ -572,6 +572,13 @@ fn read_field_tracked(
     state: &Rc<RefCell<dyn ComponentState>>,
     key: &str,
 ) -> JsValue {
+    // Computed fields subscribe through their own synthetic signal. A
+    // second subscription under the field name would enter DirtySweep,
+    // where a computed has no stored-field fingerprint and is therefore
+    // spuriously invalidated after every unrelated handler mutation.
+    if state.borrow().is_computed_field(key) {
+        return state.borrow().get(key);
+    }
     track(scope_id, key);
     // Derived scopes (`SlotScope`, etc.) compose their return value
     // from a parent proxy on every read — caching would freeze the
@@ -581,17 +588,6 @@ fn read_field_tracked(
     // `state.get`.
     let cacheable = state.borrow().cacheable_fields();
     if !cacheable {
-        return state.borrow().get(key);
-    }
-    // A `#[computed]` field is memoized by its own `Computed<JsValue>`
-    // (dirty bit + cached value) and re-runs through its own signal,
-    // which the `get` below subscribes the current effect to. Layering
-    // the projection cache on top would freeze it at its first value:
-    // the projection is only invalidated by a write to `key`, but a
-    // computed is never written — so an upstream change would recompute
-    // the `Computed` yet keep serving the stale projection. Read
-    // straight through; the computed's own cache is the memoization.
-    if state.borrow().is_computed_field(key) {
         return state.borrow().get(key);
     }
     // RFC 054 phase A — field cache short-circuit. The first `get`
@@ -656,6 +652,10 @@ pub fn scoped_root_reader(scope_id: ScopeId) -> Option<crate::expr::RootAccess> 
 /// path. No serde-to-JS on the scalar path.
 pub(crate) fn read_field_text(scope_id: ScopeId, key: &str) -> Option<Option<String>> {
     let scope = Scope::find(scope_id)?;
+    if scope.state.borrow().is_computed_field(key) {
+        // The projection fallback subscribes to the computed's own signal.
+        return Some(None);
+    }
     track(scope_id, key);
     let text = scope.state.borrow().field_as_text(key);
     Some(text)

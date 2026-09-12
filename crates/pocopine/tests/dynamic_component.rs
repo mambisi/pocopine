@@ -2,7 +2,8 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use pocopine::flush_sync;
 use pocopine::prelude::*;
@@ -250,7 +251,8 @@ impl ForeignSelectionHost {}
     name = "dc-keyed-host",
     uses = [DynamicAlpha, DynamicBeta],
     template = poco! {<section>
-        <pp-component pp-key="identity" :is="active" :label="label" :note="note" :keep-alive="keep"></pp-component>
+        <pp-component pp-key="identity" :is="active" :label="label" :note="note" :keep-alive="keep"
+            pp-transition:leave-start="dc-cache-leave" data-pp-motion="always"></pp-component>
         <button class="dc-keyed-note" @click="change_note">note</button>
         <button class="dc-keyed-next" @click="next">next</button>
         <button class="dc-keyed-first" @click="first">first</button>
@@ -307,6 +309,145 @@ impl KeyedHost {
 
 fn document() -> web_sys::Document {
     window().unwrap().document().unwrap()
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-collection", template = poco! {
+    <article class="dc-collection-root">
+        <span class="dc-collection-rows" pp-text="rows_text"></span>
+        <span class="dc-collection-items" pp-text="items_text"></span>
+        <button class="dc-collection-edit" @click="edit">edit</button>
+    </article>
+})]
+struct DynamicCollection {
+    #[prop]
+    rows: Vec<String>,
+    #[prop]
+    items: Vec<String>,
+    #[prop]
+    note: String,
+}
+
+#[handlers]
+impl DynamicCollection {
+    #[computed]
+    fn rows_text(rows: &Vec<String>) -> String {
+        rows.join(",")
+    }
+    #[computed]
+    fn items_text(items: &Vec<String>) -> String {
+        items.join(",")
+    }
+    fn edit(&mut self) {
+        self.items[0] = "local".into();
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-collection-host", uses = [DynamicCollection], template = poco! {
+    <section>
+        <pp-component :is="active" pp-key="identity" :rows="rows" :items="make_items"
+            :note="note" :class="theme" :id="identity" :data-note="note"></pp-component>
+        <button class="dc-collection-patch" @click="patch">patch</button>
+        <button class="dc-collection-append" @click="append">append</button>
+        <button class="dc-collection-note" @click="change_note">note</button>
+        <button class="dc-collection-next" @click="next">next</button>
+        <button class="dc-collection-first" @click="change_first">first</button>
+    </section>
+})]
+struct CollectionHost {
+    active: Option<ComponentRef<CollectionHost>>,
+    identity: String,
+    rows: Vec<String>,
+    first: String,
+    second: String,
+    note: String,
+    theme: String,
+}
+
+#[handlers]
+impl CollectionHost {
+    #[computed]
+    fn make_items(first: &String, second: &String) -> Vec<String> {
+        vec![first.clone(), second.clone()]
+    }
+    fn on_setup(&mut self) {
+        self.active = Some(ComponentRef::of::<DynamicCollection>());
+        self.identity = "collection-first".into();
+        self.rows = vec!["one".into()];
+        self.first = "first".into();
+        self.second = "second".into();
+        self.note = "initial".into();
+        self.theme = "collection-theme".into();
+    }
+    fn patch(&mut self) {
+        self.rows[0] = "patched".into();
+        pocopine::patch_list_at_inline("rows", 0, &self.rows[0]);
+    }
+    fn append(&mut self) {
+        let start = self.rows.len();
+        self.rows.push("appended".into());
+        pocopine::append_list_inline("rows", start, &self.rows[start..]);
+    }
+    fn change_note(&mut self) {
+        self.note = "updated".into();
+    }
+    fn change_first(&mut self) {
+        self.first = "changed".into();
+    }
+    fn next(&mut self) {
+        self.identity = "collection-next".into();
+        self.theme = "next-theme".into();
+    }
+}
+
+#[wasm_bindgen_test]
+fn dynamic_bindings_deliver_in_place_lists_and_preserve_unrelated_object_edits() {
+    let effects_before = pocopine_core::reactive::stats().0;
+    let (host, handle) = mount::<CollectionHost>();
+    assert_eq!(text(&host, ".dc-collection-rows"), "one");
+    click(&host, ".dc-collection-edit");
+    flush_sync();
+    assert_eq!(text(&host, ".dc-collection-items"), "local,second");
+    let effects_mounted = pocopine_core::reactive::stats().0;
+    for (action, expected) in [
+        (".dc-collection-patch", "patched"),
+        (".dc-collection-append", "patched,appended"),
+        (".dc-collection-note", "patched,appended"),
+    ] {
+        click(&host, action);
+        flush_sync();
+        flush_sync();
+        assert_eq!(text(&host, ".dc-collection-rows"), expected);
+        assert_eq!(text(&host, ".dc-collection-items"), "local,second");
+        assert_eq!(pocopine_core::reactive::stats().0, effects_mounted);
+    }
+    click(&host, ".dc-collection-first");
+    flush_sync();
+    flush_sync();
+    assert_eq!(text(&host, ".dc-collection-items"), "changed,second");
+    handle.unmount();
+    host.remove();
+    assert_eq!(pocopine_core::reactive::stats().0, effects_before);
+}
+
+#[wasm_bindgen_test]
+fn dynamic_replacements_seed_non_prop_attributes_before_fallthrough() {
+    let (host, handle) = mount::<CollectionHost>();
+    let first = host.query_selector(".dc-collection-root").unwrap().unwrap();
+    assert!(first.class_list().contains("collection-theme"));
+    assert_eq!(first.id(), "collection-first");
+    assert_eq!(first.get_attribute("data-note").as_deref(), Some("initial"));
+    click(&host, ".dc-collection-note");
+    click(&host, ".dc-collection-next");
+    flush_sync();
+    let next = host.query_selector(".dc-collection-root").unwrap().unwrap();
+    assert!(!first.is_same_node(Some(&next)));
+    assert!(next.class_list().contains("next-theme"));
+    assert_eq!(next.id(), "collection-next");
+    assert_eq!(next.get_attribute("data-note").as_deref(), Some("updated"));
+    handle.unmount();
+    host.remove();
 }
 
 #[derive(Serialize, Deserialize)]
@@ -370,6 +511,7 @@ impl DcStaticEditor {
             pp-key="identity" :label="label" pp-model:draft="draft"
             optional="attribute default" :optional="optional"
             pp-ref="editor" pp-show="visible" @pp:update:draft.self="observe"
+            pp-transition:enter-start="dc-key-enter" data-pp-motion="always"
         >
             <span class="dc-editor-slot" pp-text="label"></span>
             <template pp-slot="footer"><button class="dc-editor-slot-next" @click="next">next</button></template>
@@ -432,8 +574,8 @@ impl StaticKeyedHost {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "dc-keyed-root", uses = [DcStaticEditor], template = poco! {
-    <dc-static-editor pp-key="identity" :label="label"></dc-static-editor>
+#[component(name = "dc-keyed-root", transition = "fade", uses = [DcStaticEditor], template = poco! {
+    <dc-static-editor class="dc-root-authored" pp-key="identity" :label="label"></dc-static-editor>
 })]
 struct DcKeyedRoot {
     #[prop]
@@ -456,7 +598,7 @@ impl DcSlotHost {}
 #[component(name = "dc-keyed-structural-host", uses = [DcKeyedRoot, DcStaticEditor, DcSlotHost], template = poco! {
     <section>
         <template pp-if="visible">
-            <dc-keyed-root :identity="identity" :label="identity"></dc-keyed-root>
+            <dc-keyed-root class="dc-root-inherited" data-kind="editor" :identity="identity" :label="identity"></dc-keyed-root>
         </template>
         <dc-static-editor pp-key="identity" :label="identity"></dc-static-editor>
         <template pp-if="visible">
@@ -490,6 +632,131 @@ impl KeyedStructuralHost {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-default-model", template = poco! {
+    <article><span class="dc-default-setup" pp-text="setup_value"></span>
+        <input class="dc-default-input" pp-model="model" />
+    </article>
+})]
+struct DcDefaultModel {
+    #[model]
+    model: String,
+    setup_value: String,
+}
+
+#[handlers]
+impl DcDefaultModel {
+    fn on_setup(&mut self) {
+        self.setup_value = self.model.clone();
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+enum KeyedView {
+    #[default]
+    Ready,
+    Empty,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(name = "dc-keyed-portals", uses = [DcKeyedRoot, DcDefaultModel], template = poco! {
+    <section>
+        <template pp-match="view">
+            <template pp-case="Ready">
+                <dc-keyed-root pp-key="identity" :identity="identity" :label="identity"></dc-keyed-root>
+            </template>
+            <template pp-case="Empty"><span class="dc-keyed-empty">empty</span></template>
+        </template>
+        <template pp-if="visible" pp-teleport="#dc-keyed-target">
+            <dc-default-model pp-key="identity" pp-model="draft"></dc-default-model>
+        </template>
+        <span class="dc-portal-draft" pp-text="draft"></span>
+        <button class="dc-portal-next" @click="next">next</button>
+        <button class="dc-portal-hide" @click="hide">hide</button>
+    </section>
+})]
+struct KeyedPortals {
+    view: KeyedView,
+    identity: String,
+    visible: bool,
+    draft: String,
+}
+
+#[handlers]
+impl KeyedPortals {
+    fn on_setup(&mut self) {
+        self.identity = "first".into();
+        self.draft = "first draft".into();
+        self.visible = true;
+    }
+    fn next(&mut self) {
+        self.identity = "second".into();
+        self.draft = "second draft".into();
+    }
+    fn hide(&mut self) {
+        self.view = KeyedView::Empty;
+        self.visible = false;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn keys_compose_with_match_nested_keys_teleport_and_default_models() {
+    pocopine::animate::disable_transitions();
+    let effects_before = pocopine_core::reactive::stats().0;
+    let target = document().create_element("div").unwrap();
+    target.set_id("dc-keyed-target");
+    document().body().unwrap().append_child(&target).unwrap();
+    let (host, handle) = mount::<KeyedPortals>();
+    assert_eq!(text(&target, ".dc-default-setup"), "first draft");
+    let first = host.query_selector("dc-static-editor").unwrap().unwrap();
+    click(&host, ".dc-portal-next");
+    settle_models().await;
+    assert!(!first.is_connected());
+    assert_eq!(text(&host, ".dc-editor-setup"), "second");
+    assert_eq!(text(&target, ".dc-default-setup"), "second draft");
+    let input = target
+        .query_selector("input")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::HtmlInputElement>()
+        .unwrap();
+    input.set_value("edited");
+    input
+        .dispatch_event(&web_sys::Event::new("input").unwrap())
+        .unwrap();
+    settle_models().await;
+    assert_eq!(text(&host, ".dc-portal-draft"), "edited");
+    click(&host, ".dc-portal-hide");
+    settle_models().await;
+    assert!(host.query_selector("dc-static-editor").unwrap().is_none());
+    assert!(target.query_selector("dc-default-model").unwrap().is_none());
+    handle.unmount();
+    host.remove();
+    target.remove();
+    assert_eq!(pocopine_core::reactive::stats().0, effects_before);
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+fn static_keys_enter_on_replacement_but_not_on_initial_mount() {
+    pocopine::animate::enable_transitions();
+    let (host, handle) = mount::<StaticKeyedHost>();
+    let first = host.query_selector("dc-static-editor").unwrap().unwrap();
+    assert!(!first.class_list().contains("dc-key-enter"));
+    click(&host, ".dc-static-next");
+    flush_sync();
+    let instances = host.query_selector_all("dc-static-editor").unwrap();
+    let next: Element = instances
+        .item(instances.length() - 1)
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    assert!(!first.is_same_node(Some(&next)));
+    assert!(next.class_list().contains("dc-key-enter"));
+    handle.unmount();
+    host.remove();
+}
+
 async fn settle_models() {
     for _ in 0..5 {
         wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(
@@ -516,6 +783,8 @@ struct EditorRow {
         </template>
         <button class="dc-list-next" @click="next">next</button>
         <button class="dc-list-reverse" @click="reverse">reverse</button>
+        <button class="dc-list-add" @click="add">add</button>
+        <button class="dc-list-remove" @click="remove_middle">remove</button>
     </section>
 })]
 struct KeyedList {
@@ -540,6 +809,112 @@ impl KeyedList {
     fn reverse(&mut self) {
         self.rows.reverse();
     }
+    fn add(&mut self) {
+        self.rows.push(EditorRow {
+            id: 2,
+            version: 0,
+            label: "row 2".into(),
+        });
+    }
+    fn remove_middle(&mut self) {
+        self.rows.remove(1);
+    }
+}
+
+struct UnmountRecorder(Rc<RefCell<Vec<ScopeId>>>);
+
+impl Hook<ComponentUnmounted> for UnmountRecorder {
+    fn call(&self, event: ComponentUnmounted) {
+        self.0.borrow_mut().push(event.scope_id);
+    }
+}
+
+#[wasm_bindgen_test]
+fn root_key_preserves_fallthrough_and_presets_and_emits_each_unmount_once() {
+    pocopine::animate::disable_transitions();
+    let unmounts = Rc::new(RefCell::new(Vec::new()));
+    App::new()
+        .provide_plugin(UnmountRecorder(unmounts.clone()))
+        .hook_plugin::<UnmountRecorder, ComponentUnmounted>()
+        .run();
+    let (host, handle) = mount::<KeyedStructuralHost>();
+    for next in [false, true] {
+        if next {
+            click(&host, ".dc-structural-next");
+            flush_sync();
+            flush_sync();
+        }
+        let child = host
+            .query_selector("dc-keyed-root dc-static-editor")
+            .unwrap()
+            .unwrap();
+        let visible = child.first_element_child().unwrap();
+        assert!(visible.class_list().contains("dc-root-authored"));
+        assert!(visible.class_list().contains("dc-root-inherited"));
+        assert_eq!(
+            visible.get_attribute("data-kind").as_deref(),
+            Some("editor")
+        );
+        assert!(child.has_attribute("pp-transition:enter-start"));
+        let template = host
+            .query_selector("dc-keyed-root > template")
+            .unwrap()
+            .unwrap();
+        assert!(!template.has_attribute("class"));
+        assert!(!template.has_attribute("pp-transition:enter-start"));
+    }
+    handle.unmount();
+    let events = unmounts.borrow();
+    assert!(!events.is_empty());
+    let unique: std::collections::HashSet<_> = events.iter().collect();
+    assert_eq!(
+        unique.len(),
+        events.len(),
+        "each component must notify plugins once"
+    );
+    host.remove();
+    App::new().run();
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+fn keyed_list_leavers_keep_their_position_and_flip_uses_the_visible_root() {
+    pocopine::animate::enable_transitions();
+    let effects_before = pocopine_core::reactive::stats().0;
+    let (host, handle) = mount::<KeyedList>();
+    click(&host, ".dc-list-add");
+    flush_sync();
+    let nodes = host.query_selector_all("dc-static-editor").unwrap();
+    let first = nodes.item(0).unwrap();
+    let middle: Element = nodes.item(1).unwrap().dyn_into().unwrap();
+    let last = nodes.item(2).unwrap();
+    middle.set_attribute("data-pp-animate", "flip").unwrap();
+    middle.set_attribute("data-pp-motion", "always").unwrap();
+    middle
+        .set_attribute("pp-transition:leave-start", "dc-leaving")
+        .unwrap();
+    middle
+        .set_attribute("style", "transition-duration:1s")
+        .unwrap();
+    click(&host, ".dc-list-remove");
+    flush_sync();
+    assert!(middle.is_connected());
+    let nodes = host.query_selector_all("dc-static-editor").unwrap();
+    assert!(first.is_same_node(nodes.item(0).as_ref()));
+    assert!(middle.is_same_node(nodes.item(1).as_ref()));
+    assert!(last.is_same_node(nodes.item(2).as_ref()));
+    let visible = middle
+        .first_element_child()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    assert_eq!(
+        visible.style().get_property_value("position").unwrap(),
+        "fixed"
+    );
+    handle.unmount();
+    host.remove();
+    assert_eq!(pocopine_core::reactive::stats().0, effects_before);
 }
 
 #[wasm_bindgen_test]
@@ -999,6 +1374,41 @@ fn keyed_keep_alive_caches_by_type_and_key_and_releases_every_instance() {
     assert_eq!(ALPHA_UNMOUNTS.with(Cell::get), 3);
     host.remove();
     pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+async fn keyed_keep_alive_can_restore_an_instance_during_its_leave() {
+    pocopine::animate::enable_transitions();
+    let effects_before = pocopine_core::reactive::stats().0;
+    let (host, handle) = mount::<KeyedHost>();
+    click(&host, ".dc-keyed-keep");
+    flush_sync();
+    let first = host.query_selector("dc-dynamic-alpha").unwrap().unwrap();
+    first
+        .set_attribute("style", "transition-duration:40ms")
+        .unwrap();
+    click(&first, ".dc-alpha-bump");
+    flush_sync();
+    click(&host, ".dc-keyed-next");
+    flush_sync();
+    assert!(first.is_connected());
+    assert!(first.class_list().contains("dc-cache-leave"));
+    click(&host, ".dc-keyed-first");
+    flush_sync();
+    let delay = js_sys::Promise::new(&mut |resolve, _| {
+        window()
+            .unwrap()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 80)
+            .unwrap();
+    });
+    wasm_bindgen_futures::JsFuture::from(delay).await.unwrap();
+    assert!(first.is_connected());
+    assert!(!first.has_attribute("hidden"));
+    assert!(!first.class_list().contains("dc-cache-leave"));
+    assert_eq!(text(&first, ".dc-alpha-count"), "1");
+    handle.unmount();
+    host.remove();
+    assert_eq!(pocopine_core::reactive::stats().0, effects_before);
 }
 
 #[wasm_bindgen_test]

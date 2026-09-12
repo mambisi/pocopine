@@ -2805,6 +2805,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         // (e.g. pp-route content): no fragment is
                         // emitted; the runtime falls back to the
                         // light-DOM capture path for this slot.
+                        reject_uncompiled_component_keys(&tpl.children, ctx);
                     }
                 }
             }
@@ -2838,6 +2839,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         // Unliftable default slot content — no
                         // fragment is emitted; the runtime falls
                         // back to the light-DOM capture path.
+                        reject_uncompiled_component_keys(&default_children, ctx);
                     }
                 }
             }
@@ -4373,6 +4375,20 @@ fn apply_role_substitution(html: &str, tag: &str, attrs: &str) -> String {
 
 // ─── slot subtree eligibility + emission ─────────────────────────
 
+fn reject_uncompiled_component_keys(nodes: &[Node], ctx: &mut AnalysisCtx) {
+    for node in nodes {
+        let Node::Element(el) = node else { continue };
+        if !is_plan_native(&el.tag) && el.attrs.iter().any(|(name, _)| name == "pp-key") {
+            ctx.diagnostics.push(format!(
+                "`pp-key` on `<{}>` requires compiled slot content; move `pp-route` \
+                 outside this slot or isolate it in a separate component",
+                el.tag,
+            ));
+        }
+        reject_uncompiled_component_keys(&el.children, ctx);
+    }
+}
+
 /// RFC-058 Phase 3.5b + 3.5c — analyse a `<custom-tag>`'s
 /// children for slot fragment lifting. Returns `None` when
 /// anything in the subtree falls outside the v1 envelope (`<slot>`,
@@ -4821,6 +4837,19 @@ mod tests {
         assert!(plan.contains("ref_name : Some (\"editor\")"), "{plan}");
         let invalid = analyze(r#"<my-editor pp-key=""></my-editor>"#);
         assert!(diagnostics(&invalid).contains("compile_error"));
+    }
+
+    #[test]
+    fn component_keys_in_uncompiled_slots_have_a_diagnostic() {
+        for slot in [
+            r#"<my-layout><my-editor pp-key="id"></my-editor><main pp-route="/"></main></my-layout>"#,
+            r#"<my-layout><template pp-slot="content"><main pp-route="/"><my-editor pp-key="id"></my-editor></main></template></my-layout>"#,
+        ] {
+            let emitted = analyze(slot);
+            assert!(diagnostics(&emitted).contains("requires compiled slot content"));
+        }
+        let valid = analyze(r#"<my-layout><my-editor pp-key="id"></my-editor></my-layout>"#);
+        assert!(!diagnostics(&valid).contains("compile_error"));
     }
 
     #[test]

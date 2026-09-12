@@ -186,6 +186,12 @@ fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Optio
     *prev.borrow_mut() = Some(serialised);
 }
 
+/// Seed a bound non-prop attribute before component fallthrough runs.
+pub(crate) fn apply_initial_attribute(el: &Element, attr: &str, value: &JsValue) {
+    let previous = Rc::new(RefCell::new(el.get_attribute(attr)));
+    apply_memoised(el, attr, value, &previous);
+}
+
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
 fn dom_attr_name<'a>(el: &Element, attr: &'a str) -> Cow<'a, str> {
