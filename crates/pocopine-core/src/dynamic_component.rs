@@ -121,9 +121,11 @@ pub(crate) fn configure_host(host: &Element, expected_host: &str) {
     ensure_region(host).borrow_mut().expected_host = Some(expected_host.to_owned());
 }
 
-/// Install one effect for the region's selection, identity, and forwarded props.
-/// Evaluate every expression before mounting or updating a child; otherwise a
-/// key change can run setup with props from the preceding identity.
+/// Apply selection, identity, and props in one batch, with independently
+/// memoized bindings. Input invalidation matters for in-place projections;
+/// JS reference equality alone cannot distinguish a patched list from an
+/// unchanged binding. Memoization also keeps fresh-object expressions from
+/// replaying over local edits when an unrelated binding changes.
 pub(crate) fn install_bindings(
     host: &Element,
     parent_proxy: &JsValue,
@@ -131,32 +133,47 @@ pub(crate) fn install_bindings(
 ) {
     let owner = host.clone();
     let host = host.clone();
-    let proxy = parent_proxy.clone();
+    let bindings: Vec<_> = bindings
+        .into_iter()
+        .map(|(arg, eval)| {
+            let proxy = parent_proxy.clone();
+            let revision = Cell::new(0_u64);
+            let value = crate::computed::computed(move || {
+                revision.set(revision.get().wrapping_add(1));
+                (revision.get(), eval(&proxy))
+            });
+            (arg, value, Cell::new(0))
+        })
+        .collect();
     let id = effect(move || {
         let values: Vec<_> = bindings
             .iter()
-            .map(|(arg, eval)| (*arg, eval(&proxy)))
+            .map(|(arg, binding, applied)| {
+                let (revision, value) = binding.get();
+                (*arg, value, applied.replace(revision) != revision)
+            })
             .collect();
         crate::reactive::without_tracking(|| set_bindings(&host, values));
     });
     mount::track_effect_on(&owner, id);
 }
 
-fn set_bindings(host: &Element, values: Vec<(&str, JsValue)>) {
+fn set_bindings(host: &Element, values: Vec<(&str, JsValue, bool)>) {
     let region = ensure_region(host);
     let mut selection = JsValue::UNDEFINED;
     let mut key = Some(ComponentKey::None);
     let mut changed_props = HashMap::new();
     {
         let mut state = region.borrow_mut();
-        for (arg, value) in values {
+        for (arg, value, invalidated) in values {
             match arg {
                 "is" => selection = value,
                 "pp-key" => key = ComponentKey::from_value(&value),
                 "keep-alive" => state.keep_alive = binding_truthy(&value),
                 _ => {
-                    let prop = normalize_prop_name(arg);
-                    if state.props.get(&prop) != Some(&value) {
+                    let prop = arg.to_owned();
+                    if invalidated && (value.is_object() || state.props.get(&prop) != Some(&value))
+                    {
                         changed_props.insert(prop.clone(), value.clone());
                         state.props.insert(prop, value);
                     }
@@ -500,8 +517,8 @@ fn write_prop(mounted: &MountedComponent, key: &str, value: &JsValue) {
     let Some(scope_id) = mounted.scope_id else {
         return;
     };
-    let target_key =
-        crate::model_runtime::resolve_model_key(scope_id, key).unwrap_or_else(|| key.to_string());
+    let key = normalize_prop_name(key);
+    let target_key = crate::model_runtime::resolve_model_key(scope_id, &key).unwrap_or(key);
     let is_prop = crate::scope::Scope::find(scope_id)
         .map(|scope| scope.state.borrow().is_prop(&target_key))
         .unwrap_or(false);

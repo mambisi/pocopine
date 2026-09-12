@@ -19,13 +19,58 @@ use crate::reactive::{ScopeId, effect, without_tracking};
 
 #[derive(Default)]
 struct Instances {
-    current: Option<(ComponentKey, Element)>,
-    leaving: Vec<Element>,
+    current: Option<(ComponentKey, Instance)>,
+    leaving: Vec<Instance>,
+}
+
+#[derive(Clone)]
+struct Instance {
+    element: Element,
+    released: Rc<Cell<bool>>,
+}
+
+impl Instance {
+    fn new(element: Element) -> Self {
+        let released = Rc::new(Cell::new(false));
+        let mark_released = released.clone();
+        mount::on_before_subtree_release(&element, move || mark_released.set(true));
+        Self { element, released }
+    }
+
+    fn remove(self) {
+        // A normal parent walk can visit the live sibling before reaching
+        // our template anchor. Its scope and plugin hooks are already done.
+        if !self.released.get() {
+            mount::release_compiled_subtree(&self.element);
+        }
+        self.element.remove();
+    }
 }
 
 type PendingMount = Box<dyn FnOnce()>;
 const PENDING_KEY: &str = "__pp_keyed_pending";
 const START_KEY: &str = "__pp_keyed_start";
+const LEAVING_END_KEY: &str = "__pp_keyed_leaving_end";
+
+/// A row's leave state belongs to the whole range, independently of an
+/// outgoing child that happens to be leaving inside a still-active row.
+pub(crate) fn mark_leaving(root: &Element, leaving: bool) {
+    let start = first_node(root);
+    if start == *root.as_ref() {
+        return;
+    }
+    if leaving {
+        let _ = js_sys::Reflect::set(&start, &LEAVING_END_KEY.into(), root);
+    } else {
+        let _ = js_sys::Reflect::delete_property(&start, &LEAVING_END_KEY.into());
+    }
+}
+
+pub(crate) fn leaving_end(start: &Node) -> Option<Node> {
+    js_sys::Reflect::get(start, &LEAVING_END_KEY.into())
+        .ok()
+        .and_then(|value| value.dyn_into::<Node>().ok())
+}
 thread_local! {
     static NEXT_PENDING: Cell<u64> = const { Cell::new(1) };
     static PENDING: RefCell<HashMap<u64, PendingMount>> = RefCell::new(HashMap::new());
@@ -146,6 +191,9 @@ fn install_now(
         return;
     };
     let ctx_parent = mount::inherited_ctx_parent_of(template).unwrap_or(scope_id);
+    if mount::host_child_scope_id_of(&parent) == Some(scope_id) {
+        mount::forward_keyed_root_attributes(template, &prototype);
+    }
     // Like conditional roots, a scope-carrying template must remain reachable
     // for parent prop writes and teardown. Nested sites use only a comment.
     let (anchor, owner): (Node, Element) = if mount::scope_id_of_element(template).is_some() {
@@ -183,31 +231,33 @@ fn install_now(
             let mut state = cleanup_instances.borrow_mut();
             (state.current.take(), std::mem::take(&mut state.leaving))
         };
-        for element in current
+        for instance in current
             .into_iter()
-            .map(|(_, element)| element)
+            .map(|(_, instance)| instance)
             .chain(leaving)
         {
-            mount::release_compiled_subtree(&element);
-            element.remove();
+            instance.remove();
         }
     });
     let proxy = proxy.clone();
     let template_name = template_name.to_owned();
+    let initialized = Cell::new(false);
     let id = effect(move || {
         if !alive.get() {
             return;
         }
         let key = ComponentKey::from_value(&eval(&proxy));
         without_tracking(|| {
+            let replacement = initialized.replace(true);
             if key.is_some()
                 && instances.borrow().current.as_ref().map(|(key, _)| key) == key.as_ref()
             {
                 return;
             }
             let outgoing = instances.borrow_mut().current.take();
-            if let Some((_, element)) = outgoing {
-                instances.borrow_mut().leaving.push(element.clone());
+            if let Some((_, instance)) = outgoing {
+                let element = instance.element.clone();
+                instances.borrow_mut().leaving.push(instance);
                 let leaving = instances.clone();
                 let element_for_done = element.clone();
                 transition::leave_subtree(&element, move || {
@@ -216,12 +266,11 @@ fn install_now(
                         state
                             .leaving
                             .iter()
-                            .position(|el| el == &element_for_done)
+                            .position(|instance| instance.element == element_for_done)
                             .map(|index| state.leaving.remove(index))
                     };
-                    if let Some(element) = removed {
-                        mount::release_compiled_subtree(&element);
-                        element.remove();
+                    if let Some(instance) = removed {
+                        instance.remove();
                     }
                 });
             }
@@ -257,9 +306,13 @@ fn install_now(
                 entry,
                 &template_name,
             );
-            instances.borrow_mut().current = Some((key, element.clone()));
+            instances.borrow_mut().current = Some((key, Instance::new(element.clone())));
             mount::finalize_compiled_subtree(&element);
-            transition::enter_subtree(&element, || {});
+            // Initial enter belongs to an enclosing structural controller
+            // (if any). Only identity replacements start an enter here.
+            if replacement {
+                transition::enter_subtree(&element, || {});
+            }
         });
     });
     mount::track_effect_on(&owner, id);

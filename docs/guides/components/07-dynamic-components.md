@@ -102,6 +102,12 @@ remounting it.
 The values stay as `JsValue`s through the forwarding path; objects and arrays
 are not reduced to display strings.
 
+Bindings track their inputs independently and are applied together before a
+replacement mounts. In-place list patches propagate to existing children;
+changing an unrelated binding does not replay unchanged props over local edits.
+Values that are not declared props seed ordinary attributes before mount-time
+attribute fallthrough, including `class`, `style`, `id`, and `data-*`.
+
 ## Component instance identity
 
 Use `pp-key` on an ordinary component tag when changing an input should create
@@ -117,6 +123,16 @@ needed. The replacement receives current bound props and model values before
 `on_setup`; slots, event handlers, model bindings, and `pp-ref` attach to the
 replacement host. The rendered component stays a direct child of its authored
 parent, without a dynamic-component wrapper.
+
+A keyed child can also be the component's template root. Fallthrough attributes
+and default transition presets follow its rendered instance. Initial enter
+transitions remain the responsibility of an enclosing structural directive;
+later key replacements run their own enter transition.
+
+Slot content must be compiled to use component keys. A slot containing
+`pp-route` currently uses the legacy capture path, so a component `pp-key` in
+that slot is rejected at compile time. Move the route outside the slot or into
+a separate component.
 
 When the type itself can change, use the same key on `<pp-component>`:
 
