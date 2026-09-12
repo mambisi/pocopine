@@ -1,5 +1,5 @@
-error: #[watch] expects field names: #[watch(field)] or #[watch(a, b, c)]
+error: #[watch] handlers take no self receiver; use named T, &T, or Change<T> inputs, or Changes<Self> for a bare #[watch]
   --> tests/ui/watch_bare_attr.rs:11:5
    |
-11 |     #[watch]
-   |     ^^^^^^^^
+11 |     fn on_start_time(&self, _next: String, _prev: Option<String>) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

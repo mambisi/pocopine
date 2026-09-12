@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+ --> tests/ui/watch_input_type.rs:5:1
+  |
+5 | #[handlers]
+  | ^^^^^^^^^^^ expected `String`, found `u32`
+  |
+  = note: this error originates in the attribute macro `handlers` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: try using a conversion method
+  |
+5 - #[handlers]
+5 + to_string
+  |
+
+warning: unused variable: `value`
+ --> tests/ui/watch_input_type.rs:8:8
+  |
+8 | fn bad(value: Change<String>) {}
+  |        ^^^^^ help: if this is intentional, prefix it with an underscore: `_value`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default

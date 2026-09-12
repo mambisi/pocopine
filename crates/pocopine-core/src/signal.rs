@@ -149,6 +149,7 @@ impl<T: PartialEq + 'static> Setter<T> {
     /// For the rare "I want to re-fire even on an identical value"
     /// case, use [`Setter::set_force`].
     pub fn set(&self, value: T) {
+        crate::watch_update::assert_writes_allowed();
         if *self.cell.borrow() == value {
             return;
         }
@@ -164,6 +165,7 @@ impl<T: 'static> Setter<T> {
     /// even for the identical value (rare; e.g. force-replaying
     /// the last effect run).
     pub fn set_force(&self, value: T) {
+        crate::watch_update::assert_writes_allowed();
         *self.cell.borrow_mut() = value;
         trigger_signal(self.id);
     }
@@ -174,6 +176,7 @@ impl<T: 'static> Setter<T> {
     /// mutation compare), which would defeat the point of `update`
     /// for non-`Clone` / non-`PartialEq` `T`.
     pub fn update(&self, f: impl FnOnce(&mut T)) {
+        crate::watch_update::assert_writes_allowed();
         f(&mut self.cell.borrow_mut());
         trigger_signal(self.id);
     }
@@ -193,6 +196,7 @@ impl<T: Clone + 'static> RwSignal<T> {
 impl<T: PartialEq + 'static> RwSignal<T> {
     /// See [`Setter::set`] — value-equality guard identical shape.
     pub fn set(&self, value: T) {
+        crate::watch_update::assert_writes_allowed();
         if *self.cell.borrow() == value {
             return;
         }
@@ -209,11 +213,13 @@ impl<T: 'static> RwSignal<T> {
 
     /// See [`Setter::set_force`].
     pub fn set_force(&self, value: T) {
+        crate::watch_update::assert_writes_allowed();
         *self.cell.borrow_mut() = value;
         trigger_signal(self.id);
     }
 
     pub fn update(&self, f: impl FnOnce(&mut T)) {
+        crate::watch_update::assert_writes_allowed();
         f(&mut self.cell.borrow_mut());
         trigger_signal(self.id);
     }

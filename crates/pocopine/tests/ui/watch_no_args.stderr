@@ -1,5 +1,5 @@
-error: #[watch(start_time)] handler must take `&mut self` and `(next: V, prev: Option<V>)` — e.g. `fn on_start_time(&mut self, next: V, prev: Option<V>)` — or watch several fields with a no-arg handler: #[watch(a, b, c)]
+error: #[watch] handlers take no self receiver; use named T, &T, or Change<T> inputs, or Changes<Self> for a bare #[watch]
   --> tests/ui/watch_no_args.rs:12:5
    |
-12 |     fn on_start_time(&mut self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+12 |     fn on_start_time(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

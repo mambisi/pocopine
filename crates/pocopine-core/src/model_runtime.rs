@@ -83,6 +83,7 @@ pub fn resolve_model_key(scope_id: ScopeId, wire_name: &str) -> Option<String> {
 }
 
 pub fn with_scope_write<R>(scope_id: ScopeId, origin: WriteOrigin, f: impl FnOnce() -> R) -> R {
+    crate::watch_update::assert_writes_allowed();
     let before = snapshot_models(scope_id);
     let out = with_write_origin(origin, f);
     let after = snapshot_models(scope_id);

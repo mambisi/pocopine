@@ -1,0 +1,5 @@
+error: Update<Self> requires updates(...); declare an explicit field tuple or return () for observation
+ --> tests/ui/watch_outputs_missing.rs:6:24
+  |
+6 | fn missing(value: u32) -> Update<Self> { let _ = value; Update::new() }
+  |                        ^^^^^^^^^^^^^^^

@@ -1,0 +1,12 @@
+error[E0603]: enum `PrivateValue` is private
+  --> tests/ui/watch_marker_visibility.rs:10:40
+   |
+10 | fn main() { let _ = model::StateField::PrivateValue::get(&model::State::default()); }
+   |                                        ^^^^^^^^^^^^ private enum
+   |
+note: the enum `PrivateValue` is defined here
+  --> tests/ui/watch_marker_visibility.rs:5:5
+   |
+ 5 |     #[store(name = "marker-visibility")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `store` (in Nightly builds, run with -Z macro-backtrace for more info)

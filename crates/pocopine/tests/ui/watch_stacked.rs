@@ -11,7 +11,7 @@ struct Editor {
 impl Editor {
     #[watch(start_time)]
     #[watch(end_time)]
-    fn on_times(&mut self, _next: String, _prev: Option<String>) {}
+    fn on_times(&self, _next: String, _prev: Option<String>) {}
 }
 
 fn main() {}
