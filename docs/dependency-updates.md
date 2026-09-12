@@ -47,3 +47,7 @@ The custom regex manager tracks `tool: crate@version` and
 `cargo install --locked crate@version` in workflow files and the canonical build
 Dockerfile. Keep those forms when editing pinned Cargo tools so Renovate can
 continue to detect them.
+
+The tool matcher uses `semver` versioning so each installed version is an exact
+pin. Cargo dependency versioning would interpret `0.2.95` as a compatible range
+and skip later `0.2.x` releases of the installed binary.
