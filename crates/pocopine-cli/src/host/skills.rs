@@ -13,7 +13,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::args::{SkillsArgs, SkillsCmd};
+use crate::host::args::{SkillsArgs, SkillsCmd};
 
 const SKILLS_REPO: &str = "https://github.com/mambisi/pocopine-skills.git";
 const SKILLS_DIR: &str = ".claude/skills";

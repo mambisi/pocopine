@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use syn::{Item, spanned::Spanned};
 
-use crate::args::FmtArgs;
-use crate::config::{FmtConfig, FmtLevel};
+use crate::host::args::FmtArgs;
+use crate::host::config::{FmtConfig, FmtLevel};
 
 /// What a rule wants done to one component.
 #[derive(Debug)]
@@ -69,7 +69,7 @@ struct Finding {
 
 pub fn run(args: &FmtArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
-    let cfg = crate::config::load(&args.path)?;
+    let cfg = crate::host::config::load(&args.path)?;
     let fmt = cfg.fmt.unwrap_or_default();
 
     if fmt.inline_threshold == 0 {
@@ -591,7 +591,7 @@ fn dedent(body: &str) -> String {
 /// Reuses the pre-lint's character rules, so "would `pocopine build` reject
 /// this body?" has exactly one answer in the codebase.
 fn unlexable_reason(body: &str) -> Option<String> {
-    let offenders = crate::inline_lint::lexer_offenders(body);
+    let offenders = crate::host::inline_lint::lexer_offenders(body);
     if offenders.is_empty() {
         return None;
     }

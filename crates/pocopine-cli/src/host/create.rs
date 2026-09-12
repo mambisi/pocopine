@@ -10,8 +10,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::args::NewArgs;
-use crate::skills;
+use crate::host::args::NewArgs;
+use crate::host::skills;
 
 const STARTER_REPO: &str = "https://github.com/mambisi/pocopine-starter-template.git";
 

@@ -26,8 +26,8 @@ use tower_lsp::lsp_types::Range as LspRange;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use crate::args::LspArgs;
-use crate::component_index::{self, ComponentIndex, FieldRole};
+use crate::host::args::LspArgs;
+use crate::host::component_index::{self, ComponentIndex, FieldRole};
 
 /// Blocking entry point invoked from `main`. Spins a tokio runtime and serves
 /// the language server on stdin/stdout until the client disconnects.
@@ -143,8 +143,12 @@ impl Backend {
         let offset = line_index.offset_at(pos);
         if let Ok(path) = uri.to_file_path()
             && let Some(root) = find_project_root(&path)
-            && let Some(items) =
-                crate::locale::editor_completions(&root, text, offset, &*self.docs.lock().await)
+            && let Some(items) = crate::host::locale::editor_completions(
+                &root,
+                text,
+                offset,
+                &*self.docs.lock().await,
+            )
         {
             return items;
         }
@@ -180,7 +184,7 @@ impl Backend {
         let line_index = LineIndex::new(text);
         if let Ok(path) = uri.to_file_path()
             && let Some(root) = find_project_root(&path)
-            && let Some(hover) = crate::locale::editor_hover(
+            && let Some(hover) = crate::host::locale::editor_hover(
                 &root,
                 text,
                 line_index.offset_at(pos),
@@ -307,7 +311,7 @@ impl Backend {
             match cache.as_ref() {
                 Some((p, t)) if *p == project => t.clone(),
                 _ => {
-                    let t = crate::stylekit::project_theme_css(&project);
+                    let t = crate::host::stylekit::project_theme_css(&project);
                     *cache = Some((project.clone(), t.clone()));
                     t
                 }

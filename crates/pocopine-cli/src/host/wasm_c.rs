@@ -1,6 +1,6 @@
 //! Supply the upstream Tree-sitter mini-sysroot to grammar crates whose build
 //! scripts do not yet forward tree-sitter-language's WASM header metadata.
-use crate::tools::ProjectTools;
+use crate::host::tools::ProjectTools;
 use anyhow::{Context, Result, bail};
 use std::{
     path::{Path, PathBuf},

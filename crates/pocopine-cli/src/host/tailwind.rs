@@ -3,8 +3,8 @@ use std::process::{Child, Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::TailwindConfig;
-use crate::tools;
+use crate::host::config::TailwindConfig;
+use crate::host::tools;
 
 /// A running Tailwind watcher child. Dropped via [`TailwindChild::kill`]
 /// on CLI exit so the process doesn't outlive us.

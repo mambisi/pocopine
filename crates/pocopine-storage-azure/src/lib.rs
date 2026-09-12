@@ -10,9 +10,8 @@
 //! replica or wait for a future provider-side block-blob backend before using
 //! it for large or horizontally written uploads.
 
-mod layout;
-mod state;
-mod storage;
-mod util;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server;
 
-pub use storage::AzureBlobStorageBackend;
+#[cfg(not(target_arch = "wasm32"))]
+pub use server::*;

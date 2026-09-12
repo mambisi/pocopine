@@ -108,11 +108,13 @@ Raw artifacts: [final benchmark](validation/performance.json),
 
 ## Workspace-wide blockers
 
-`cargo clippy --workspace --target wasm32-unknown-unknown` and the matching
-workspace build fail because `mio` does not support this target with networking
-enabled. The unchanged main checkout reproduces the Clippy failure with a
-fresh target directory. This is distinct from the passing scoped editor WASM
-checks.
+Resolved on 2026-09-12: `cargo clippy --workspace --target
+wasm32-unknown-unknown` and the matching workspace build both pass. The CLI,
+asset client and S3/Azure/GCS storage adapters now gate their implementations
+and dependencies to host targets. `mio` no longer appears in the workspace's
+WASM dependency graph. CI includes these five crates in its WASM check, and
+253 affected host tests passed, including the storage emulator integrations.
+Clippy still reports existing workspace warnings.
 
 `cargo test --workspace` did not complete. A run with socket access failed
 compiling `pocopine-live` at `src/lib.rs:1820`, with incompatible `http` type

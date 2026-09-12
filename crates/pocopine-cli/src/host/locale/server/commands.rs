@@ -15,7 +15,7 @@ use pocopine_locale::{
 };
 use serde::Serialize;
 
-use crate::args::{LocaleArgs, LocaleCmd};
+use crate::host::args::{LocaleArgs, LocaleCmd};
 
 type Catalogs = BTreeMap<Locale, SourceMessages>;
 

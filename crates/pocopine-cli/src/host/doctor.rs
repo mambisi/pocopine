@@ -4,8 +4,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use crate::args::DoctorArgs;
-use crate::{client_modules, config, server, tools};
+use crate::host::args::DoctorArgs;
+use crate::host::{client_modules, config, server, tools};
 
 pub fn run(args: &DoctorArgs) -> Result<()> {
     let mut report = Report::default();

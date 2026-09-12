@@ -15,9 +15,8 @@
 //! replica or wait for the future provider-side multipart backend before using
 //! it for large or horizontally written uploads.
 
-mod layout;
-mod state;
-mod storage;
-mod util;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server;
 
-pub use storage::S3StorageBackend;
+#[cfg(not(target_arch = "wasm32"))]
+pub use server::*;

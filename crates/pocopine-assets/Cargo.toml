@@ -10,7 +10,7 @@ description = "RFC-100 content-addressed asset-bucket client, shared by the CLI 
 # AssetStore, and pocopine-storage(-s3) sits *above* pocopine-server
 # in the dependency graph (the upload protocol uses its axum
 # re-exports), so the asset client cannot live there without a cycle.
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-sdk-s3 = "1"
 tracing = { workspace = true }
 

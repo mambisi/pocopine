@@ -166,7 +166,6 @@ jobs:
       # do not compile for wasm32 and are covered by host checks.
       - run: >
           cargo clippy --workspace
-          --exclude pocopine-cli
           --exclude pocopine-auth-credentials
           --exclude pocopine-auth-jwt
           --exclude pocopine-deploy
@@ -178,10 +177,6 @@ jobs:
           --exclude pocopine-server
           --exclude pocopine-native
           --exclude pocopine-native-tauri
-          --exclude pocopine-storage-azure
-          --exclude pocopine-storage-gcs
-          --exclude pocopine-storage-s3
-          --exclude pocopine-assets
           --exclude pocopine-sync
           --exclude pocopine-sync-sqlite
           --exclude blog

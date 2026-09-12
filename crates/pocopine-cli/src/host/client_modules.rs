@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use pocopine_client_codegen::{self as client_codegen, DiscoveryPolicy};
 use serde_json::{Map, Value, json};
 
-use crate::tools;
+use crate::host::tools;
 
 pub const CLIENT_BUNDLE_URL: &str = "/pkg/pocopine-client.js";
 

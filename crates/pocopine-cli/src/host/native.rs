@@ -23,9 +23,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::args::{NativeArgs, NativeBuildArgs, NativeCmd, NativeDevArgs};
-use crate::config::{self, PocopineConfig};
-use crate::{build, client_modules, stylekit, tailwind};
+use crate::host::args::{NativeArgs, NativeBuildArgs, NativeCmd, NativeDevArgs};
+use crate::host::config::{self, PocopineConfig};
+use crate::host::{build, client_modules, stylekit, tailwind};
 
 /// Environment variable the native shell reads for the dev static root.
 /// Must match `pocopine_native::DEV_DIR_ENV` (RFC-104 contract); the CLI
@@ -301,7 +301,7 @@ const GITIGNORE: &str = "/target\n/gen\n";
 /// Placeholder window icon written into a scaffolded `src-tauri/icons/`.
 /// Tauri's `generate_context!` requires one at compile time; users swap
 /// in their own with `cargo tauri icon`.
-const NATIVE_ICON: &[u8] = include_bytes!("../assets/native-icon.png");
+const NATIVE_ICON: &[u8] = include_bytes!("../../assets/native-icon.png");
 
 /// `src-tauri/Cargo.toml` for an external project (published crates). The
 /// in-repo `examples/file-browser/src-tauri` uses path dependencies.

@@ -26,7 +26,7 @@ use pocopine_deploy::{
     Constraint, DeployAdapter, Hint, StagedFiles, config, credentials, docker::DockerClient, spec,
 };
 
-use crate::args::{AuthArgs, ConfigArgs, ConfigCmd, DeployArgs, DeployCmd, StatusArgs};
+use crate::host::args::{AuthArgs, ConfigArgs, ConfigCmd, DeployArgs, DeployCmd, StatusArgs};
 
 pub fn run(args: &DeployArgs) -> Result<()> {
     match &args.cmd {
@@ -102,7 +102,7 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
     // RFC-100 Mode A — a public bucket/CDN base in
     // `[package.metadata.pocopine.assets] public-base` becomes the
     // server-side asset base. Explicit [deploy.env] declarations win.
-    if let Some(public_base) = crate::config::load(project)?
+    if let Some(public_base) = crate::host::config::load(project)?
         .assets
         .as_ref()
         .and_then(|a| a.public_base.clone())
@@ -207,17 +207,17 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
     //    is the workspace root or another member) and the wrong path
     //    would skip the member's Tailwind / configured-bin settings.
     if !args.skip_build {
-        let cfg = crate::config::load(project)?;
-        crate::build::wasm(project, true)?;
-        crate::client_modules::build(project, true)?;
+        let cfg = crate::host::config::load(project)?;
+        crate::host::build::wasm(project, true)?;
+        crate::host::client_modules::build(project, true)?;
         if spec.mode == pocopine_deploy::Mode::Fullstack {
-            crate::build::configured_bins(project, &cfg, true)?;
+            crate::host::build::configured_bins(project, &cfg, true)?;
         }
         if let Some(tw) = cfg.tailwind.as_ref() {
-            crate::tailwind::run_once(project, tw, true)?;
+            crate::host::tailwind::run_once(project, tw, true)?;
         }
-        if crate::stylekit::enabled(&cfg, false, false) {
-            crate::stylekit::run_once(project, &cfg, false, true)?;
+        if crate::host::stylekit::enabled(&cfg, false, false) {
+            crate::host::stylekit::run_once(project, &cfg, false, true)?;
         }
     }
 
@@ -229,10 +229,10 @@ fn deploy_one_project(args: &DeployArgs, project: &Path) -> Result<()> {
     //     --skip-build deploys: CI may have built the image, but the
     //     bucket still has to be brought up to date.
     {
-        let cfg = crate::config::load(project)?;
+        let cfg = crate::host::config::load(project)?;
         if let Some(assets_cfg) = cfg.assets.as_ref() {
             eprintln!("▶ syncing assets to bucket `{}`", assets_cfg.bucket);
-            crate::assets_sync::push(project, assets_cfg)
+            crate::host::assets_sync::push(project, assets_cfg)
                 .context("asset sync failed; aborting before the app flip")?;
         }
     }

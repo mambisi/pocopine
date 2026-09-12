@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use notify::{Config, ErrorKind, Event, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::args::ServeArgs;
-use crate::{build, client_modules, config, env, server, stylekit, tailwind};
+use crate::host::args::ServeArgs;
+use crate::host::{build, client_modules, config, env, server, stylekit, tailwind};
 
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CHANGE_QUIET_WINDOW: Duration = Duration::from_millis(350);
@@ -19,7 +19,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     server::check_configured_port_available(&cfg, args.port)?;
     // Ahead of cargo, so unreadable text in an inline template is reported as
     // that, rather than as a bare `unknown start of token` naming no template.
-    crate::inline_lint::check_project(&project)?;
+    crate::host::inline_lint::check_project(&project)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;
@@ -110,7 +110,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                     println!("↻ rebuilding wasm…");
                     // On a watch tick this is the common case: the edit that
                     // just broke the build was typing prose into a template.
-                    if let Err(e) = crate::inline_lint::check_project(&project) {
+                    if let Err(e) = crate::host::inline_lint::check_project(&project) {
                         eprintln!("{e:#}");
                         continue;
                     }

@@ -11,10 +11,8 @@
 //! locks, so route a given upload session to one server replica before using it
 //! for horizontally written uploads.
 
-mod control;
-mod layout;
-mod state;
-mod storage;
-mod util;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server;
 
-pub use storage::GcsStorageBackend;
+#[cfg(not(target_arch = "wasm32"))]
+pub use server::*;

@@ -8,9 +8,9 @@ use google_cloud_storage::model::compose_object_request::SourceObject;
 use pocopine_codec::{AsciiSet, CONTROLS, percent_encode_set};
 use pocopine_storage::{StorageError, StorageResult};
 
-use crate::layout::GcsKeyLayout;
-use crate::state::{GcsObjectAttrs, GcsObjectWrite};
-use crate::util::{gcs_error, is_gcs_not_found, is_gcs_precondition_failed, non_empty};
+use crate::server::layout::GcsKeyLayout;
+use crate::server::state::{GcsObjectAttrs, GcsObjectWrite};
+use crate::server::util::{gcs_error, is_gcs_not_found, is_gcs_precondition_failed, non_empty};
 
 /// One source component for a compose request.
 pub(crate) struct ComposeSource {

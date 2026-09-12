@@ -30,7 +30,7 @@ use anyhow::{Context, Result, bail};
 use pocopine_assets::{ASSET_CACHE_CONTROL, AssetStore, AssetStoreConfig};
 use pocopine_deploy::credentials;
 
-use crate::config::AssetsConfig;
+use crate::host::config::AssetsConfig;
 
 /// Env var carrying the combined `assets/`-tree fingerprint into
 /// cargo invocations. Must stay in lockstep with the constant of the
@@ -335,7 +335,7 @@ fn prompt(label: &str) -> Result<String> {
 /// Resolve the `[package.metadata.pocopine.assets]` block, with a
 /// pointed error when it is missing (push without config is always a
 /// user mistake worth a precise message).
-pub(crate) fn require_config(cfg: &crate::config::PocopineConfig) -> Result<&AssetsConfig> {
+pub(crate) fn require_config(cfg: &crate::host::config::PocopineConfig) -> Result<&AssetsConfig> {
     cfg.assets.as_ref().context(
         "no `[package.metadata.pocopine.assets]` in Cargo.toml — declare at least `bucket` \
          (plus `endpoint` for non-AWS stores) to use the asset pipeline. See RFC 100 §5.",

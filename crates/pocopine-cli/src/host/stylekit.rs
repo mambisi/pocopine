@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use pocopine_stylekit::{CompileOptions, ProjectCss, SourceFile, compile_project, render};
 
-use crate::config::{PocopineConfig, StylekitConfig};
+use crate::host::config::{PocopineConfig, StylekitConfig};
 
 /// Whether the Stylekit stage should run (RFC 092 step 7 — on by
 /// default). Precedence: `--no-stylekit` off, `--stylekit` on, then the
@@ -62,7 +62,7 @@ fn resolve(cfg: &PocopineConfig) -> StylekitConfig {
 /// tokens + known component classes the build does — no false positives on
 /// project-defined color tokens or author CSS classes.
 pub fn project_theme_css(project: &Path) -> Option<String> {
-    let cfg = crate::config::load(project).ok()?;
+    let cfg = crate::host::config::load(project).ok()?;
     if !enabled(&cfg, false, false) {
         return None;
     }
@@ -234,7 +234,7 @@ pub fn run_command(path: &Path, dump: bool, docs: bool, metadata: bool) -> Resul
         return Ok(());
     }
     let project = path.canonicalize()?;
-    let cfg = crate::config::load(path)?;
+    let cfg = crate::host::config::load(path)?;
     let scfg = resolve(&cfg);
     let (out, files) = compile(&project, &scfg)?;
     report(&out, &files);
@@ -260,7 +260,7 @@ pub fn output_path(project: &Path, cfg: &PocopineConfig) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{StylekitConfig, TailwindConfig};
+    use crate::host::config::{StylekitConfig, TailwindConfig};
 
     // ─── RFC-116 inline templates ────────────────────────────────
 

@@ -6,7 +6,7 @@ use pocopine_locale::{
 };
 use tower_lsp::lsp_types::*;
 
-use crate::lsp::LineIndex;
+use crate::host::lsp::LineIndex;
 
 #[derive(Clone, Copy)]
 enum Form {

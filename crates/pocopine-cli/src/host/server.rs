@@ -10,13 +10,13 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
 use pocopine_assets::{ASSET_CACHE_CONTROL, is_hashed_bundle_name};
-// Re-export so `crate::server::is_asset_hash` keeps resolving for
+// Re-export so `crate::host::server::is_asset_hash` keeps resolving for
 // `build.rs`; the shared predicate lives in `pocopine-assets`.
 pub(crate) use pocopine_assets::is_asset_hash;
 
-use crate::client_modules;
-use crate::config::PocopineConfig;
-use crate::tools;
+use crate::host::client_modules;
+use crate::host::config::PocopineConfig;
+use crate::host::tools;
 
 pub struct BinChild {
     child: Child,
@@ -746,7 +746,7 @@ fn looks_like_asset_path(rel: &str) -> bool {
 // The MIME table lives in `assets_sync` (RFC-100: one canonical table
 // for the dev server, the bucket sync, and — via stored content
 // types — the Mode B proxy).
-use crate::assets_sync::{asset_hash_prefix, mime_of};
+use crate::host::assets_sync::{asset_hash_prefix, mime_of};
 
 #[cfg(test)]
 mod tests {

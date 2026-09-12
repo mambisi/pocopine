@@ -27,9 +27,11 @@ use tokio::io::AsyncReadExt as _;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
-use crate::layout::{DEFAULT_INTERNAL_PREFIX, S3KeyLayout};
-use crate::state::{NativeUploadState, S3CompletedPart, S3MultipartState, StoredUploadSession};
-use crate::util::{
+use crate::server::layout::{DEFAULT_INTERNAL_PREFIX, S3KeyLayout};
+use crate::server::state::{
+    NativeUploadState, S3CompletedPart, S3MultipartState, StoredUploadSession,
+};
+use crate::server::util::{
     ensure_completable, is_get_object_not_found, is_head_object_not_found, is_no_such_upload,
     is_precondition_failed, is_put_conditional_header_unsupported, is_put_precondition_failed,
     normalize_etag, put_error_code, put_error_message, put_error_status, s3_error, s3_put_error,

@@ -4,8 +4,8 @@ use std::process::Output;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::PocopineConfig;
-use crate::tools;
+use crate::host::config::PocopineConfig;
+use crate::host::tools;
 
 // `wasm-pack` mutates a shared `pkg/` in several non-atomic steps. In
 // particular it removes `package.json` near the start, then interprets any
@@ -26,7 +26,7 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("could not resolve project path: {}", path.display()))?;
     with_wasm_build_lock(&path, || {
-        let locale = crate::locale::prepare(&path, release)?;
+        let locale = crate::host::locale::prepare(&path, release)?;
         println!("▶ wasm-pack build ({})", path.display());
         let project_tools = tools::ProjectTools::load(&path)?;
         let mut cmd = project_tools.wasm_pack().command();
@@ -35,7 +35,10 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
             // A project may name its own profile so the wasm can be tuned for
             // size without dragging the server build with it; see
             // `PocopineConfig::wasm_profile`.
-            match crate::config::load(&path).ok().and_then(|c| c.wasm_profile) {
+            match crate::host::config::load(&path)
+                .ok()
+                .and_then(|c| c.wasm_profile)
+            {
                 Some(profile) if profile != "release" => {
                     cmd.arg("--profile").arg(profile);
                 }
@@ -47,13 +50,13 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
             cmd.arg("--dev");
         }
         cmd.current_dir(&path);
-        crate::wasm_c::configure(&path, &project_tools, &mut cmd)?;
+        crate::host::wasm_c::configure(&path, &project_tools, &mut cmd)?;
         if let Some(locale) = &locale {
             locale.configure(&mut cmd);
         }
         // RFC-100 §6 — export the assets/ fingerprint so `asset!`
         // re-expands (and re-hashes) when the assets tree changed.
-        crate::assets_sync::apply_fingerprint_env(&mut cmd, &path);
+        crate::host::assets_sync::apply_fingerprint_env(&mut cmd, &path);
         let status = cmd
             .status()
             .context("failed to invoke wasm-pack (is it on $PATH?)")?;
@@ -61,7 +64,7 @@ pub fn wasm(path: &Path, release: bool) -> Result<()> {
             bail!("wasm-pack build failed with status {status}");
         }
         if let Some(locale) = &locale {
-            crate::locale::publish(&path, locale)?;
+            crate::host::locale::publish(&path, locale)?;
         }
         hash_pkg_bundle(&path)?;
         Ok(())
@@ -316,7 +319,7 @@ fn is_hashed_variant(file: &str, prefix: &str, suffix: &str) -> bool {
         .unwrap_or(file);
     file.strip_prefix(prefix)
         .and_then(|rest| rest.strip_suffix(suffix))
-        .is_some_and(crate::server::is_asset_hash)
+        .is_some_and(crate::host::server::is_asset_hash)
 }
 
 /// Write `pkg/index.html` — a copy of the project's source
@@ -341,10 +344,10 @@ fn write_pkg_index_html(project: &Path, hashed: &[(String, String)]) -> Result<(
     for (name, hash) in hashed {
         html = rewrite_bundle_refs(&html, name, hash);
     }
-    if let Some(locale) = crate::locale::load(project)? {
-        html = crate::locale::inject_html(&html, &locale)?;
+    if let Some(locale) = crate::host::locale::load(project)? {
+        html = crate::host::locale::inject_html(&html, &locale)?;
     }
-    let loader = crate::config::load(project)
+    let loader = crate::host::config::load(project)
         .ok()
         .and_then(|c| c.loader)
         .unwrap_or_default();
@@ -365,12 +368,12 @@ fn write_pkg_index_html(project: &Path, hashed: &[(String, String)]) -> Result<(
 /// and the controller script. The script is classic (not a module) so it
 /// runs before the app's deferred module boot and can wrap `fetch` to
 /// report the wasm download as progress. No-op if already injected.
-fn inject_loader(html: &str, loader: &crate::config::LoaderConfig) -> String {
+fn inject_loader(html: &str, loader: &crate::host::config::LoaderConfig) -> String {
     if html.contains("id=\"pp-loader-style\"") {
         return html.to_string();
     }
-    const CSS: &str = include_str!("../assets/loader.css");
-    const JS: &str = include_str!("../assets/loader.js");
+    const CSS: &str = include_str!("../../assets/loader.css");
+    const JS: &str = include_str!("../../assets/loader.js");
     let mut out = html.to_string();
 
     if let Some(at) = out.find("</head>") {
@@ -463,7 +466,7 @@ fn bundle_js_ref_len(tail: &str) -> Option<usize> {
         return Some(2);
     }
     if tail.is_char_boundary(8)
-        && crate::server::is_asset_hash(&tail[..8])
+        && crate::host::server::is_asset_hash(&tail[..8])
         && let Some(rest) = tail[8..].strip_prefix(".js")
         && boundary(rest)
     {
@@ -499,7 +502,7 @@ fn build_bin(path: &Path, bin: &str, release: bool) -> Result<()> {
     let project_tools = tools::ProjectTools::load(&project)?;
     let mut cmd = project_tools.cargo().command();
     cmd.arg("build").arg("--bin").arg(bin);
-    if let Some(locale) = crate::locale::load(&project)? {
+    if let Some(locale) = crate::host::locale::load(&project)? {
         locale.configure(&mut cmd);
     }
     if release {
@@ -508,7 +511,7 @@ fn build_bin(path: &Path, bin: &str, release: bool) -> Result<()> {
     cmd.current_dir(&project);
     // RFC-100 §6 — same fingerprint export as the wasm build; server
     // bins can call `asset!` too.
-    crate::assets_sync::apply_fingerprint_env(&mut cmd, &project);
+    crate::host::assets_sync::apply_fingerprint_env(&mut cmd, &project);
     println!("▶ building `{bin}`");
     let output = cmd
         .output()

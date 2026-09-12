@@ -15,7 +15,7 @@ use pocopine_locale::{
 use serde::Deserialize;
 
 use super::Prepared;
-use crate::tools::ProjectTools;
+use crate::host::tools::ProjectTools;
 
 mod commands;
 pub use commands::run;
@@ -140,7 +140,7 @@ fn targets(
     release: bool,
     features: &[String],
 ) -> Result<Vec<SourceTarget>> {
-    let config = crate::config::load(project)?;
+    let config = crate::host::config::load(project)?;
     let library = package.targets.iter().find(|target| {
         target
             .kind

@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 description = "Google Cloud Storage backend adapter for pocopine-storage."
 
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
 google-cloud-storage = "1"

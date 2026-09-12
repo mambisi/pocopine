@@ -43,7 +43,7 @@ pub fn inject_html(html: &str, prepared: &Prepared) -> anyhow::Result<String> {
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026");
-    let script = include_str!("../../assets/locale-loader.js");
+    let script = include_str!("../../../assets/locale-loader.js");
     let addition = format!(
         "<script type=\"application/json\" id=\"pp-locale-manifest\">{json}</script>\n<script>\n{script}</script>\n"
     );
