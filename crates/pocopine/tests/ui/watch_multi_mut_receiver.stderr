@@ -1,0 +1,5 @@
+error: #[watch] handlers take no self receiver; use named T, &T, or Change<T> inputs, or Changes<Self> for a bare #[watch]
+  --> tests/ui/watch_multi_mut_receiver.rs:11:5
+   |
+11 |     fn on_when_changed(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

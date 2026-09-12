@@ -81,6 +81,7 @@ impl<T: 'static> Handle<T> {
     /// inside the closure still resolve — even when `update` is
     /// invoked from an async task outside any `Scope::invoke` chain.
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        crate::watch_update::assert_writes_allowed();
         let sid = self.scope_id;
         // Keep the safe-point frame alive through the dirty sweep and
         // reactive trigger. Any renderer reconciliation requested by `f`
@@ -132,6 +133,7 @@ impl<T: 'static> Handle<T> {
     /// Unlike [`Self::update`], this deliberately returns no value: queued
     /// work cannot produce a synchronous result.
     pub fn defer_update(&self, f: impl FnOnce(&mut T) + 'static) {
+        crate::watch_update::assert_writes_allowed();
         let handle = self.clone();
         crate::defer_component_callback_for(self.scope_id, move || handle.update(f));
     }
@@ -145,11 +147,13 @@ impl<T: 'static> Handle<T> {
     /// [`Handle::update`] for that. Reach for this only when you need a
     /// `RefMut` that outlives a single closure.
     pub fn borrow_mut(&self) -> RefMut<'_, T> {
+        crate::watch_update::assert_writes_allowed();
         self.inner.borrow_mut()
     }
 
     /// Fallible mutable borrow. Does not trigger reactivity.
     pub fn try_borrow_mut(&self) -> Result<RefMut<'_, T>, BorrowMutError> {
+        crate::watch_update::assert_writes_allowed();
         self.inner.try_borrow_mut()
     }
 
@@ -299,6 +303,7 @@ impl<T: Serialize + DeserializeOwned> FieldHandle<T> {
     /// apply unchanged — `set` is indistinguishable from a swept
     /// handler that changed only this field.
     pub fn set(&self, value: T) {
+        crate::watch_update::assert_writes_allowed();
         // serde_wasm_bindgen::to_value is the same serializer the proxy
         // SET trap and `ComponentState::set` round-trip through, so the
         // value lands in the field exactly as `self.x = value` would.
@@ -319,6 +324,7 @@ impl<T: Serialize + DeserializeOwned> FieldHandle<T> {
     where
         T: Default,
     {
+        crate::watch_update::assert_writes_allowed();
         let mut value = self.get();
         f(&mut value);
         self.set(value);

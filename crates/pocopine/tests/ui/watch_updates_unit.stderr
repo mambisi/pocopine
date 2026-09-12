@@ -1,0 +1,5 @@
+error: a watcher with updates(...) must return Update<Self>
+ --> tests/ui/watch_updates_unit.rs:6:1
+  |
+6 | fn empty(value: u32) { let _ = value; }
+  | ^^^^^^^^^^^^^^^^^^^^

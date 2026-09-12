@@ -193,15 +193,18 @@ impl FlattenWatchChild {
     // RFC-044 §5.10.5 — one watcher for the whole flattened struct.
     // Dual-key triggering must fire it when any leaf changes.
     #[watch(common)]
-    fn on_common(&mut self, new: WatchLeaves, _: Option<WatchLeaves>) {
+    fn on_common(common: Change<WatchLeaves>) {
+        let new = common.current;
         COMMON_FIRES.with(|c| c.set(c.get() + 1));
         LAST_COMMON_LABEL.with(|s| *s.borrow_mut() = new.label.clone());
     }
 
-    // the per-leaf watch must keep firing for the same write
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        LABEL_FIRES.with(|c| c.set(c.get() + 1));
+    // Snapshot watchers name the Rust container; compare a leaf to observe it selectively.
+    #[watch(common)]
+    fn on_label(common: Change<WatchLeaves>) {
+        if common.previous.as_ref().map(|p| &p.label) != Some(&common.current.label) {
+            LABEL_FIRES.with(|c| c.set(c.get() + 1));
+        }
     }
 }
 
@@ -259,7 +262,7 @@ async fn writing_a_leaf_fires_both_the_leaf_and_the_container_watch() {
     assert_eq!(
         LABEL_FIRES.with(|c| c.get()),
         1,
-        "the per-leaf #[watch(label)] still fires for the same write",
+        "the label observer still fires for the same write",
     );
     assert_eq!(
         LAST_COMMON_LABEL.with(|s| s.borrow().clone()),
@@ -382,14 +385,17 @@ impl BareFlattenWatchChild {
     // the bare-flatten path, not just the explicit-list path PR #102
     // tested.
     #[watch(common)]
-    fn on_common(&mut self, new: BareWatchLeaves, _: Option<BareWatchLeaves>) {
+    fn on_common(common: Change<BareWatchLeaves>) {
+        let new = common.current;
         BARE_COMMON_FIRES.with(|c| c.set(c.get() + 1));
         BARE_LAST_COMMON_LABEL.with(|s| *s.borrow_mut() = new.label.clone());
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        BARE_LABEL_FIRES.with(|c| c.set(c.get() + 1));
+    #[watch(common)]
+    fn on_label(common: Change<BareWatchLeaves>) {
+        if common.previous.as_ref().map(|p| &p.label) != Some(&common.current.label) {
+            BARE_LABEL_FIRES.with(|c| c.set(c.get() + 1));
+        }
     }
 }
 
@@ -442,7 +448,7 @@ async fn bare_flatten_pp_bind_fires_both_leaf_and_container_watch() {
     assert_eq!(
         BARE_LABEL_FIRES.with(|c| c.get()),
         1,
-        "per-leaf #[watch(label)] still fires alongside",
+        "the label observer still fires alongside",
     );
     assert_eq!(
         BARE_LAST_COMMON_LABEL.with(|s| s.borrow().clone()),

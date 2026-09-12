@@ -113,9 +113,10 @@ impl Drop for ComponentCallbackFrame {
 /// Whether a callback frame currently owns (or may own) the state for
 /// `scope_id`.
 ///
-/// Scope dispatch uses this to defer only re-entry into an already-active
-/// component. A nested callback for another scope remains synchronous while
-/// still participating in the same outer safe point.
+/// Outside watcher evaluation, scope dispatch uses this to defer only re-entry
+/// into an already-active component. During watcher evaluation, scope dispatch
+/// defers handler invocations for every scope until evaluation and patch commit
+/// finish. All cases participate in the same outer safe point.
 pub(crate) fn scope_is_active(scope_id: ScopeId) -> bool {
     CALLBACK_STATE.with(|state| {
         state

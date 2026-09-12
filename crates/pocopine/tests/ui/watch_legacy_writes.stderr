@@ -1,0 +1,5 @@
+error: writes(...) was renamed to updates(...); or declare outputs in Update<Self, (Self::Field, ...)>
+ --> tests/ui/watch_legacy_writes.rs:5:16
+  |
+5 | #[watch(value, writes(output))]
+  |                ^^^^^^

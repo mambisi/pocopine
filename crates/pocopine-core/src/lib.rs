@@ -72,6 +72,9 @@ pub mod text;
 pub mod tick;
 pub mod timers;
 pub mod watch;
+#[doc(hidden)]
+pub mod watch_update;
+pub use watch_update::{Change, Changes, Field, Update};
 pub mod web;
 
 pub use app::{

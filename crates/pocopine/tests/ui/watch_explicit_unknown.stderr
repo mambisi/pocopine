@@ -1,0 +1,13 @@
+error[E0432]: unresolved import `StateField`
+ --> tests/ui/watch_explicit_unknown.rs:5:1
+  |
+5 | #[handlers]
+  | ^^^^^^^^^^^ no `Missing` in `StateField::setters`
+  |
+  = note: this error originates in the attribute macro `handlers` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0425]: cannot find type `Missing` in module `StateField`
+ --> tests/ui/watch_explicit_unknown.rs:8:47
+  |
+8 | fn unknown(value: u32) -> Update<Self, (Self::Missing,)> { let _ = value; Update::new() }
+  |                                               ^^^^^^^ not found in `StateField`

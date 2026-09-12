@@ -1,0 +1,5 @@
+error: unexpected end of input, #[watch] requires at least one input field
+ --> tests/ui/watch_all_writes.rs:5:27
+  |
+5 |     #[watch(updates(value))]
+  |                           ^

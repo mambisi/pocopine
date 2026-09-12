@@ -1,4 +1,4 @@
-// The reported bug shape: a `#[watch]` handler that takes only `&mut self`
+// The reported bug shape: a `#[watch]` handler that takes only `&self`
 // used to compile green and silently never install — the watch never fired.
 use pocopine::prelude::*;
 
@@ -9,7 +9,7 @@ struct Editor {
 #[handlers]
 impl Editor {
     #[watch(start_time)]
-    fn on_start_time(&mut self) {}
+    fn on_start_time(&self) {}
 }
 
 fn main() {}

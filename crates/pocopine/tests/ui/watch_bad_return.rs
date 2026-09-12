@@ -1,0 +1,8 @@
+use pocopine::prelude::*;
+struct State { a: u32, b: u32, c: u32 }
+#[handlers]
+impl State {
+#[watch(a, updates(b))]
+fn bad(a: Change<u32>) -> bool { true }
+}
+fn main() {}

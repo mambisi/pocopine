@@ -1,0 +1,28 @@
+error: #[watch] handlers take no self receiver; use named T, &T, or Change<T> inputs, or Changes<Self> for a bare #[watch]
+  --> tests/ui/watch_mutation.rs:12:5
+   |
+12 |     fn on_count(&self, next: i32, _prev: Option<i32>) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `EditorStore: pocopine::__private::HandlerDispatch` is not satisfied
+ --> tests/ui/watch_mutation.rs:4:1
+  |
+4 | #[store(name = "watch-mutation")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `pocopine::__private::HandlerDispatch` is not implemented for `EditorStore`
+ --> tests/ui/watch_mutation.rs:5:1
+  |
+5 | struct EditorStore {
+  | ^^^^^^^^^^^^^^^^^^
+  = note: this error originates in the attribute macro `store` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated item named `__pocopine_computed_install` found for struct `EditorStore` in the current scope
+ --> tests/ui/watch_mutation.rs:4:1
+  |
+4 | #[store(name = "watch-mutation")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated item not found in `EditorStore`
+5 | struct EditorStore {
+  | ------------------ associated item `__pocopine_computed_install` not found for this struct
+  |
+  = note: this error originates in the attribute macro `store` (in Nightly builds, run with -Z macro-backtrace for more info)

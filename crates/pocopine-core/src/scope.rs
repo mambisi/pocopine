@@ -965,14 +965,18 @@ impl Scope {
     /// Browser APIs can synchronously dispatch an event back into the same
     /// component while its first handler still owns `&mut state` (`focus()` is
     /// the common case). Such same-scope re-entry joins the shared callback
-    /// FIFO instead of attempting an aliased `RefCell::borrow_mut`. Nested
-    /// handlers for different scopes may remain synchronous, but all share
-    /// one outer safe point: queued work drains only after every component
-    /// borrow and dirty sweep has finished. A queued invocation returns
+    /// FIFO instead of attempting an aliased `RefCell::borrow_mut`. During
+    /// watcher evaluation, handler invocations for every scope join that FIFO
+    /// so DOM events cannot mutate state before the returned patch commits.
+    /// Otherwise, nested handlers for different scopes may remain synchronous.
+    /// All share one outer safe point: queued work drains only after every
+    /// component borrow and dirty sweep has finished. A queued invocation returns
     /// `undefined` to its immediate caller because its real result cannot
     /// exist until that caller unwinds.
     pub fn invoke(&self, key: &str, args: &Array) -> JsValue {
-        if crate::component_callback::scope_is_active(self.id) {
+        if crate::watch_update::is_evaluating()
+            || crate::component_callback::scope_is_active(self.id)
+        {
             let scope = self.clone();
             let key = key.to_string();
             // The nested call returns before it executes, so retain the values
@@ -990,7 +994,8 @@ impl Scope {
     }
 
     /// One non-reentrant handler invocation. [`Scope::invoke`] owns the
-    /// component callback frame and same-scope deferral around this method.
+    /// component callback frame and watch-evaluation/same-scope deferral around
+    /// this method.
     fn invoke_now(&self, key: &str, args: &Array) -> JsValue {
         let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(self.id)));
         #[cfg(feature = "devtools")]
