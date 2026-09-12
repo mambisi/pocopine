@@ -4380,8 +4380,8 @@ fn reject_uncompiled_component_keys(nodes: &[Node], ctx: &mut AnalysisCtx) {
         let Node::Element(el) = node else { continue };
         if !is_plan_native(&el.tag) && el.attrs.iter().any(|(name, _)| name == "pp-key") {
             ctx.diagnostics.push(format!(
-                "`pp-key` on `<{}>` requires compiled slot content; move `pp-route` \
-                 outside this slot or isolate it in a separate component",
+                "`pp-key` on `<{}>` requires compiled slot content; move unsupported \
+                 content (such as `pp-route`) outside this slot or isolate it in a separate component",
                 el.tag,
             ));
         }

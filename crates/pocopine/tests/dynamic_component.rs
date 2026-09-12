@@ -331,11 +331,11 @@ struct DynamicCollection {
 #[handlers]
 impl DynamicCollection {
     #[computed]
-    fn rows_text(rows: &Vec<String>) -> String {
+    fn rows_text(rows: &[String]) -> String {
         rows.join(",")
     }
     #[computed]
-    fn items_text(items: &Vec<String>) -> String {
+    fn items_text(items: &[String]) -> String {
         items.join(",")
     }
     fn edit(&mut self) {
@@ -368,8 +368,8 @@ struct CollectionHost {
 #[handlers]
 impl CollectionHost {
     #[computed]
-    fn make_items(first: &String, second: &String) -> Vec<String> {
-        vec![first.clone(), second.clone()]
+    fn make_items(first: &str, second: &str) -> Vec<String> {
+        vec![first.to_owned(), second.to_owned()]
     }
     fn on_setup(&mut self) {
         self.active = Some(ComponentRef::of::<DynamicCollection>());
