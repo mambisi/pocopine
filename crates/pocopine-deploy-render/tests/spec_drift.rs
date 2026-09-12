@@ -26,18 +26,16 @@ use pocopine_crypto::sha256_hex;
 const RENDER_OPENAPI_URL: &str =
     "https://api-docs.render.com/v1.0/openapi/render-public-api-1.json";
 
-/// SHA-256 of the canonicalised live spec, last reconciled 2026-08-15.
+/// SHA-256 of the canonicalised live spec, last reconciled 2026-09-12.
 /// Update this when the drift test reports a new hash for a reviewed,
-/// deliberate upstream change. (2026-07-11: benign content churn —
-/// every `REQUIRED_OPERATIONS` endpoint and method still present, so no
-/// client change. 2026-08-15: benign again — structural assertions
-/// passed, and every field [`client`] deserializes was verified present
-/// in the live spec: `Service` {id,name,type,url,serviceDetails,
-/// dashboardUrl,region}, `Deploy` {id,status,image,createdAt,finishedAt}
-/// + `DeployImage` {ref,sha}, and `RenderLog` {timestamp,message} —
-/// the last reached through the `/logs` → `/logs/subscribe` 101 `$ref`,
-/// where both are still upstream-`required`. No client change.)
-const EXPECTED_SHA256: &str = "e04fd03f55a210a67d291dcab5c6c881efcb9f6775fd4615f294aeccc5bd98fa";
+/// deliberate upstream change. Required operations, image-service creation
+/// and updates, deploys, env vars, scaling, and registry credentials remain
+/// compatible. Response IDs/names, nested serviceDetails.url, deploy image
+/// ref/sha and timestamps, and required log timestamp/message fields were
+/// reviewed, including the /logs/subscribe 101 reference. The client already
+/// tolerates absent legacy top-level service url/region fields. No client
+/// change is required.
+const EXPECTED_SHA256: &str = "e884fced6304e82f5ccd47b9db163323de9f2e8b5c461111ff098bf0ff3d9b89";
 
 /// Operations `crate::client` calls.
 const REQUIRED_OPERATIONS: &[(&str, &[&str])] = &[
