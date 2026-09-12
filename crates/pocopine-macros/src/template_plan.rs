@@ -2641,6 +2641,19 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         let has_pp_as = el.attrs.iter().any(|(name, _)| name == "pp-as");
         if !has_pp_as {
             for (name, value) in &el.attrs {
+                if el.tag == "pp-component" && name == "pp-key" {
+                    if let Some(expr_src) = check_template_expr(value, "pp-key", ctx) {
+                        host_bindings.push(ChildHostBindingLite {
+                            arg: "pp-key".into(),
+                            expr_src,
+                        });
+                        ctx.stripped.push(StrippedAttr {
+                            node_path: path.clone(),
+                            name: name.clone(),
+                        });
+                    }
+                    continue;
+                }
                 match classify_child_host_attr(name, value, ctx) {
                     ChildHostAttrOutcome::Show(expr_src) => {
                         ctx.stripped.push(StrippedAttr {
@@ -4724,6 +4737,21 @@ mod tests {
         let plan = valid.plan_tokens.unwrap().to_string();
         assert!(plan.contains("pp-component"), "{plan}");
         assert!(plan.contains("active"), "{plan}");
+    }
+
+    #[test]
+    fn pp_component_key_is_a_compiled_identity_binding() {
+        let emitted = analyze(
+            r#"<pp-component pp-key="source_id" :is="active" :key="child_key"></pp-component>"#,
+        );
+        assert!(!diagnostics(&emitted).contains("compile_error"));
+        assert!(!emitted.cleaned_html.as_ref().unwrap().contains("pp-key"));
+        let plan = emitted.plan_tokens.unwrap().to_string();
+        assert!(plan.contains("pp-key"));
+        assert!(plan.contains("source_id"));
+        assert!(plan.contains("child_key"));
+        let invalid = analyze(r#"<pp-component :is="active" pp-key=""></pp-component>"#);
+        assert!(diagnostics(&invalid).contains("compile_error"));
     }
 
     #[test]

@@ -28,12 +28,15 @@ thread_local! {
         <span class="dc-alpha-setup" pp-text="setup_label"></span>
         <span class="dc-alpha-count" pp-text="count"></span>
         <button class="dc-alpha-bump" @click="bump">bump</button>
+        <button class="dc-alpha-edit" @click="edit_label">edit label</button>
     </article>}
 )]
 struct DynamicAlpha {
     #[prop]
     label: String,
     setup_label: String,
+    #[prop]
+    note: String,
     count: u32,
 }
 
@@ -46,6 +49,10 @@ impl DynamicAlpha {
 
     pub fn on_unmount(&mut self) {
         ALPHA_UNMOUNTS.with(|count| count.set(count.get() + 1));
+    }
+
+    fn edit_label(&mut self) {
+        self.label = "local draft".into();
     }
 
     pub fn bump(&mut self) {
@@ -236,6 +243,66 @@ struct ForeignSelectionHost {}
 #[handlers]
 impl ForeignSelectionHost {}
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "dc-keyed-host",
+    uses = [DynamicAlpha, DynamicBeta],
+    template = poco! {<section>
+        <pp-component pp-key="identity" :is="active" :label="label" :note="note" :keep-alive="keep"></pp-component>
+        <button class="dc-keyed-note" @click="change_note">note</button>
+        <button class="dc-keyed-next" @click="next">next</button>
+        <button class="dc-keyed-first" @click="first">first</button>
+        <button class="dc-keyed-rename" @click="rename">rename</button>
+        <button class="dc-keyed-keep" @click="enable_keep">keep</button>
+        <button class="dc-keyed-number" @click="number">number</button>
+        <button class="dc-keyed-invalid" @click="invalid">invalid</button>
+        <button class="dc-keyed-empty" @click="empty">empty</button>
+    </section>}
+)]
+struct KeyedHost {
+    active: Option<ComponentRef<KeyedHost>>,
+    identity: serde_json::Value,
+    label: String,
+    note: String,
+    keep: bool,
+}
+
+#[handlers]
+impl KeyedHost {
+    fn on_setup(&mut self) {
+        self.first();
+    }
+    fn first(&mut self) {
+        self.identity = serde_json::json!("1");
+        self.active = Some(ComponentRef::of::<DynamicAlpha>());
+        self.label = "first".into();
+    }
+    fn next(&mut self) {
+        self.identity = serde_json::json!("2");
+        self.label = "second".into();
+    }
+    fn rename(&mut self) {
+        self.label = "renamed".into();
+    }
+    fn change_note(&mut self) {
+        self.note = "updated note".into();
+    }
+    fn enable_keep(&mut self) {
+        self.keep = true;
+    }
+    fn number(&mut self) {
+        self.identity = serde_json::json!(1);
+        self.label = "numeric".into();
+    }
+    fn invalid(&mut self) {
+        self.identity = serde_json::json!([1]);
+    }
+    fn empty(&mut self) {
+        self.identity = serde_json::Value::Null;
+        self.active = None;
+    }
+}
+
 fn document() -> web_sys::Document {
     window().unwrap().document().unwrap()
 }
@@ -400,4 +467,107 @@ fn transition_configuration_is_forwarded_to_each_dynamic_child() {
 
     handle.unmount();
     host.remove();
+}
+
+#[wasm_bindgen_test]
+fn keyed_replacement_seeds_current_props_and_releases_previous_state() {
+    reset_counts();
+    pocopine::animate::disable_transitions();
+    let (host, handle) = mount::<KeyedHost>();
+    let first = host.query_selector("dc-dynamic-alpha").unwrap().unwrap();
+    assert_eq!(text(&host, ".dc-alpha-setup"), "first");
+    assert!(!first.has_attribute("pp-key"));
+    click(&host, ".dc-alpha-bump");
+    click(&host, ".dc-keyed-rename");
+    flush_sync();
+    flush_sync();
+    assert_eq!(text(&host, ".dc-alpha-count"), "1");
+    assert_eq!(text(&host, ".dc-alpha-label"), "renamed");
+    assert_eq!(ALPHA_MOUNTS.with(Cell::get), 1);
+
+    click(&host, ".dc-alpha-edit");
+    flush_sync();
+    click(&host, ".dc-keyed-note");
+    flush_sync();
+    flush_sync();
+    assert_eq!(
+        text(&host, ".dc-alpha-label"),
+        "local draft",
+        "an unrelated prop must not replay an unchanged binding"
+    );
+
+    click(&host, ".dc-keyed-next");
+    flush_sync();
+    assert_eq!(text(&host, ".dc-alpha-setup"), "second");
+    assert_eq!(text(&host, ".dc-alpha-count"), "0");
+    assert!(!first.is_connected());
+    assert_eq!(ALPHA_MOUNTS.with(Cell::get), 2);
+    assert_eq!(ALPHA_UNMOUNTS.with(Cell::get), 1);
+
+    click(&host, ".dc-keyed-empty");
+    flush_sync();
+    assert!(host.query_selector("dc-dynamic-alpha").unwrap().is_none());
+    assert_eq!(ALPHA_UNMOUNTS.with(Cell::get), 2);
+    handle.unmount();
+    host.remove();
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+fn keyed_keep_alive_caches_by_type_and_key_and_releases_every_instance() {
+    reset_counts();
+    pocopine::animate::disable_transitions();
+    let (host, handle) = mount::<KeyedHost>();
+    click(&host, ".dc-keyed-keep");
+    click(&host, ".dc-alpha-bump");
+    flush_sync();
+    let first = host.query_selector("dc-dynamic-alpha").unwrap().unwrap();
+
+    click(&host, ".dc-keyed-number");
+    flush_sync();
+    assert!(first.has_attribute("hidden"));
+    assert_eq!(
+        ALPHA_MOUNTS.with(Cell::get),
+        2,
+        "number and string keys are distinct"
+    );
+    click(&host, ".dc-keyed-next");
+    flush_sync();
+    assert_eq!(ALPHA_MOUNTS.with(Cell::get), 3);
+    click(&host, ".dc-keyed-first");
+    flush_sync();
+    assert!(!first.has_attribute("hidden"));
+    assert_eq!(
+        first
+            .query_selector(".dc-alpha-count")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap(),
+        "1"
+    );
+    assert_eq!(ALPHA_MOUNTS.with(Cell::get), 3);
+    assert_eq!(ALPHA_UNMOUNTS.with(Cell::get), 0);
+
+    handle.unmount();
+    assert_eq!(ALPHA_UNMOUNTS.with(Cell::get), 3);
+    host.remove();
+    pocopine::animate::enable_transitions();
+}
+
+#[wasm_bindgen_test]
+fn object_keys_are_rejected_instead_of_using_unstable_reference_identity() {
+    reset_counts();
+    pocopine::animate::disable_transitions();
+    let (host, handle) = mount::<KeyedHost>();
+    click(&host, ".dc-keyed-invalid");
+    flush_sync();
+    assert!(host.query_selector("dc-dynamic-alpha").unwrap().is_none());
+    assert_eq!(ALPHA_UNMOUNTS.with(Cell::get), 1);
+    click(&host, ".dc-keyed-first");
+    flush_sync();
+    assert_eq!(text(&host, ".dc-alpha-setup"), "first");
+    handle.unmount();
+    host.remove();
+    pocopine::animate::enable_transitions();
 }

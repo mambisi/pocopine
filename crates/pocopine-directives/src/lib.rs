@@ -284,7 +284,7 @@ pub const DIRECTIVES: &[DirectiveSpec] = &[
         None,
         ArgReq::Forbidden,
         Host::Any,
-        "**pp-key** — keyed-diffing identifier for `pp-for` (typically `item.id`). _RFC-063 (deferred) converges this to `:key` on the row root._",
+        "**pp-key** — keyed-diffing identifier for `pp-for` (typically `item.id`), or instance identity on `<pp-component>`. Changing a component key starts fresh state; `keep-alive` caches by type and key.",
         Some("rfc-007-pp-for-keys"),
     ),
     d(

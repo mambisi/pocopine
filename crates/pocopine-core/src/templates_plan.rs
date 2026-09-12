@@ -841,24 +841,14 @@ fn install_child_host_directives(
         };
         directives::show::install_eval(el, proxy, evaluator);
     }
-    // RFC-112 — seed every forwarded prop before evaluating `:is`, so the
-    // dynamic child's first setup observes the complete authored prop set.
-    // Static child components retain source-order installation.
+    // A dynamic region evaluates selection, identity, and props together so a
+    // replacement sees the complete current prop set, regardless of source order.
     let dynamic = child.tag == "pp-component";
+    let mut dynamic_bindings = Vec::new();
     if dynamic {
         crate::dynamic_component::configure_host(el, template_name);
     }
-    for b in child
-        .bindings
-        .iter()
-        .filter(|binding| !dynamic || binding.arg != "is")
-        .chain(
-            child
-                .bindings
-                .iter()
-                .filter(|binding| dynamic && binding.arg == "is"),
-        )
-    {
+    for b in child.bindings {
         let Some(evaluator) = scoped_static_evaluator(scope_id, b.compiled, b.expr_src) else {
             fail(
                 "child-host-binding-parse",
@@ -869,10 +859,13 @@ fn install_child_host_directives(
             continue;
         };
         if dynamic {
-            crate::dynamic_component::install_binding(el, proxy, b.arg, evaluator);
+            dynamic_bindings.push((b.arg, evaluator));
         } else {
             directives::bind::install_eval(el, proxy, b.arg, evaluator);
         }
+    }
+    if dynamic {
+        crate::dynamic_component::install_bindings(el, proxy, dynamic_bindings);
     }
     for l in child.listeners {
         let Ok(ast) = listener_ast_for_install(
