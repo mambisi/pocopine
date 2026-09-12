@@ -133,6 +133,22 @@ WASM dependency graph. CI includes these five crates in its WASM check, and
 253 affected host tests passed, including the storage emulator integrations.
 Clippy still reports existing workspace warnings.
 
+The PR's initial CI run exposed additional configuration gaps: raw Cargo
+needed the Tree-sitter package's WASM headers, the CLI fingerprint integration
+test needed a host-only gate, and a WASM-only `Cell` import caused a host
+warning. These are corrected. Both WASM Clippy commands from CI now pass
+locally with `RUSTFLAGS="-D warnings"`, `--all-targets`, and Clippy warnings
+denied. The full workspace formatting, WASM Clippy, and WASM build commands
+also pass after these corrections.
+
+The exact CI host command, `cargo test --workspace --exclude pine --exclude
+observability-smoke --exclude pocopine-sync-query-macros --tests`, passes
+with **3,694 tests**, using `RUSTFLAGS="-D warnings"` and an isolated Cargo
+target directory. CI's separate sync Query macro and storage image-compression
+steps also pass. The full run uncovered Render OpenAPI checksum drift; the
+adapter's live request/response contracts were reviewed before refreshing the
+pin, and the dedicated drift test passes with offline skipping disabled.
+
 `cargo test --workspace` did not complete. After rebasing onto `a3c55fbb` on
 2026-09-12, it failed with incompatible compiled `pocopine_core` identities and
 a missing `pocopine_server` dependency. Clearing build artifacts for the core,
@@ -140,8 +156,12 @@ live, server and sync packages and retrying still reported colliding
 `libpocopine_core` output filenames, then failed to load `pocopine_sync` from
 `pocopine-sync-query/src/client.rs:20`. Earlier attempts failed at
 `pocopine-live/src/lib.rs:1820` with incompatible `http` type identities.
-These workspace host build failures remain unresolved; no complete host
-workspace pass is claimed.
+After the CI repair, repeating the broader command with warnings denied in
+the same isolated target directory used by the passing CI command failed
+while linking `pocopine-auth-jwt`'s `jwks_resolver_wiremock` test, with undefined
+symbols from dependencies including `tracing` and `h2`. No passing run of
+the broader command is claimed; CI's package selection and isolated macro
+job pass as recorded above.
 
 ## Manual release checks still required
 

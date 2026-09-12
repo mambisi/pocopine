@@ -24,7 +24,7 @@
 //! position (`delete_selection`, `toggle_mark`, `insert_text`, etc.)
 //! get the up-to-date DOM selection that way.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -1425,7 +1425,7 @@ fn log_input_perf(enabled: bool, event: &str, payload: impl FnOnce() -> Value) {
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    static NEXT_FRAME_PERF_PENDING: Cell<bool> = const { Cell::new(false) };
+    static NEXT_FRAME_PERF_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -9,6 +9,7 @@ const richtextSmokeUrl = `http://127.0.0.1:${richtextSmokePort}`;
 const serveDir = process.env.PLAYWRIGHT_SERVE_DIR ?? 'examples/richtext';
 const codeEditor = process.env.PLAYWRIGHT_EXAMPLE === 'code-editor';
 const richtextInputMatrix = process.env.RICHTEXT_INPUT_MATRIX === '1';
+const richtextRelease = process.env.RICHTEXT_RELEASE === '1';
 const codePort = process.env.CODE_EDITOR_PORT ?? '3044';
 const codeUrl = `http://127.0.0.1:${codePort}`;
 
@@ -48,9 +49,10 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
   } : {
-    command: `pocopine run --path ${serveDir} --port ${richtextSmokePort}`,
+    command: `pocopine run --path ${serveDir} --port ${richtextSmokePort}${richtextRelease ? ' --release' : ''}`,
     url: richtextSmokeUrl,
     reuseExistingServer: !process.env.CI,
-    timeout: 240_000,
+    // Release startup includes the build and wasm-opt, including on cold CI.
+    timeout: richtextRelease ? 600_000 : 240_000,
   },
 });

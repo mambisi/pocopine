@@ -72,6 +72,18 @@ Additional checks passed:
 The compact [browser result artifact](validation/native-input.json) records
 individual cases, projects, engines, versions, and run times.
 
+The PR CI repair was additionally checked with warnings denied on the host
+and WASM targets. The performance job now builds this branch's Pocopine CLI
+and lets Playwright build and serve the release demo once. Release startup
+allows time for compilation and `wasm-opt`; the test performance thresholds
+are unchanged. All **7 performance scenarios passed** using a fresh CLI
+server and bundled Chromium. These runs validate the CI path; concurrent
+workspace compilation makes their timings unsuitable as new benchmark data.
+The exact CI workspace host command also passes with **3,694 tests** and
+warnings denied; its separately isolated macro and image-compression steps
+pass too. See the [workspace report](../code-editor/VALIDATION.md#workspace-wide-blockers)
+for the command and the distinction from the broader host invocation below.
+
 ## Repeating the checks
 
 From the worktree root, with the Pocopine CLI and Playwright browsers available:
@@ -106,10 +118,11 @@ and export or save. Confirm the saved text agrees with the visible text and
 that formatting and caret placement survive. Touch selection and screen-reader
 acceptance also remain open.
 
-The full host `cargo test --workspace` attempts on 2026-09-12 remain blocked
-by compiled dependency identity/output collisions, including after clearing
-the affected packages' build artifacts and retrying on the rebased branch.
-No complete host workspace pass is claimed.
+The broader host `cargo test --workspace` still fails locally. Earlier runs
+reported compiled dependency identity/output collisions; the latest retry
+after the CI repair failed while linking the JWT `jwks_resolver_wiremock`
+test with undefined dependency symbols. No passing run of that broader
+command is claimed. CI's exact host command passes as recorded above.
 The separate `mio` WASM blocker has been resolved by host-gating CLI, asset,
 and cloud-storage implementations and dependencies; see the
 [workspace validation report](../code-editor/VALIDATION.md#workspace-wide-blockers).
