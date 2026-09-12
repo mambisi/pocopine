@@ -4,11 +4,11 @@ use pocopine::prelude::*;
 struct State { a: u32, b: u32, c: u32 }
 #[handlers]
 impl State {
-#[watch(a, writes(b))]
+#[watch(a, updates(b))]
 fn first(a: Change<u32>) -> Update<Self> { Update::new().b(a.current) }
-#[watch(b, writes(c))]
+#[watch(b, updates(c))]
 fn second(b: Change<u32>) -> Update<Self> { Update::new().c(b.current) }
-#[watch(c, writes(a))]
+#[watch(c, updates(a))]
 fn third(c: Change<u32>) -> Update<Self> { Update::new().a(c.current) }
 }
 fn main() {}

@@ -1,11 +1,24 @@
-error[E0599]: no method named `c` found for struct `pocopine::Update<C, W>` in the current scope
- --> tests/ui/watch_forbidden_setter.rs:8:69
+error[E0277]: the trait bound `(StateField::B,): pocopine::__private::UpdateField<State, StateField::C, _>` is not satisfied
+ --> tests/ui/watch_forbidden_setter.rs:8:102
   |
-8 | fn bad(a: Change<u32>) -> Update<Self> { Update::new().b(a.current).c(3) }
-  |                                                                     ^
+8 | fn bad(a: Change<u32>) -> Update<Self> { use StateField::setters::C as _; Update::new().b(a.current).c(3) }
+  |                                                                                                      ^ the trait `pocopine::__private::UpdateField<State, StateField::C, _>` is not implemented for `(StateField::B,)`
   |
-help: there is a method `b` with a similar name
+  = help: the following other types implement trait `pocopine::__private::UpdateField<C, F, INDEX>`:
+            `(F0, F1)` implements `pocopine::__private::UpdateField<C, F0, 0>`
+            `(F0, F1)` implements `pocopine::__private::UpdateField<C, F1, 1>`
+            `(F0, F1, F2)` implements `pocopine::__private::UpdateField<C, F0, 0>`
+            `(F0, F1, F2)` implements `pocopine::__private::UpdateField<C, F1, 1>`
+            `(F0, F1, F2)` implements `pocopine::__private::UpdateField<C, F2, 2>`
+            `(F0, F1, F2, F3)` implements `pocopine::__private::UpdateField<C, F0, 0>`
+            `(F0, F1, F2, F3)` implements `pocopine::__private::UpdateField<C, F1, 1>`
+            `(F0, F1, F2, F3)` implements `pocopine::__private::UpdateField<C, F2, 2>`
+          and $N others
+note: required by a bound in `setters::C::c`
+ --> tests/ui/watch_forbidden_setter.rs:3:1
   |
-8 - fn bad(a: Change<u32>) -> Update<Self> { Update::new().b(a.current).c(3) }
-8 + fn bad(a: Change<u32>) -> Update<Self> { Update::new().b(a.current).b(3) }
-  |
+3 | #[store(name = "test")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `C::c`
+4 | struct State { a: u32, b: u32, c: u32 }
+  |                                - required by a bound in this associated function
+  = note: this error originates in the attribute macro `store` (in Nightly builds, run with -Z macro-backtrace for more info)

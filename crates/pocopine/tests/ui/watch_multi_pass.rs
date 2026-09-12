@@ -15,8 +15,8 @@ struct Editor {
 #[handlers]
 impl Editor {
     // Parameters bind by name, not position. Outputs can have private types.
-    #[watch(start, end, writes(errors, valid))]
-    fn check(end: Change<String>, start: Change<String>) -> Update<Self> {
+    #[watch(start, end)]
+    fn check(end: Change<String>, start: Change<String>) -> Update<Self, (Self::Errors, Self::Valid)> {
         let valid = start.current <= end.current;
         Update::new().errors(Errors::default()).valid(valid)
     }

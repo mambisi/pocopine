@@ -179,7 +179,7 @@ impl CrossScopeWatchParent {
         CROSS_PARENT.with(|scope| scope.set(current_scope_id()));
     }
 
-    #[watch(step, writes(applied))]
+    #[watch(step, updates(applied))]
     fn on_step(step: u32) -> Update<Self> {
         let child_scope = CROSS_CHILD.with(Cell::get).unwrap();
         let child = Scope::find(child_scope)

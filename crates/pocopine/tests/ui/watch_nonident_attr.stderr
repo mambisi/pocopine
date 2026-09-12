@@ -1,4 +1,4 @@
-error: #[watch] expects field identifiers and optional writes(field, ...)
+error: #[watch] expects field identifiers and optional updates(field, ...)
   --> tests/ui/watch_nonident_attr.rs:11:13
    |
 11 |     #[watch("start_time")]

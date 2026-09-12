@@ -1,0 +1,12 @@
+error: use of deprecated constant `State::empty::_::__pocopine_template_warning_73cf72d2a66f209e`: pocopine::empty_watch_update: this watcher declares no outputs; return () instead of Update<Self, ()> or updates()
+ --> tests/ui/watch_empty_updates.rs:5:1
+  |
+5 | #[handlers]
+  | ^^^^^^^^^^^
+  |
+note: the lint level is defined here
+ --> tests/ui/watch_empty_updates.rs:7:8
+  |
+7 | #[deny(deprecated)]
+  |        ^^^^^^^^^^
+  = note: this error originates in the attribute macro `handlers` (in Nightly builds, run with -Z macro-backtrace for more info)

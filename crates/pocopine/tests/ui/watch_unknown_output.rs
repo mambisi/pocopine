@@ -4,7 +4,7 @@ use pocopine::prelude::*;
 struct State { value: u32 }
 #[handlers]
 impl State {
-#[watch(value, writes(missing))]
+#[watch(value, updates(missing))]
 fn bad(value: Change<u32>) -> Update<Self> { Update::new().missing(value.current) }
 }
 fn main() {}

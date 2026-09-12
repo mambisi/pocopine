@@ -1,0 +1,5 @@
+error: an Update field tuple supports at most 32 fields
+ --> tests/ui/watch_tuple_too_large.rs:7:27
+  |
+7 | ...2) -> Update<Self, (Self::F0, Self::F1, Self::F2, Self::F3, Self...::F30, Self::F31, Self::F32)> {
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^...^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

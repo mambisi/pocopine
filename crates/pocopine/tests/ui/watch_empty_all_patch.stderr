@@ -1,0 +1,5 @@
+error: bare #[watch] observes every watchable field and must return (); patches are not allowed
+ --> tests/ui/watch_empty_all_patch.rs:6:34
+  |
+6 | fn empty(changes: Changes<Self>) -> Update<Self, ()> { let _ = changes; Update::new() }
+  |                                  ^^^^^^^^^^^^^^^^^^^

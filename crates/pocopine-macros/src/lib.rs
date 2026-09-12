@@ -1687,13 +1687,14 @@ fn interior_mut_rejection(
 /// collide with a field accessor (different receiver type). Shared by
 /// `#[component]` and `#[store]`.
 fn field_handles_tokens(
-    struct_ident: &syn::Ident,
-    ident_str: &str,
+    input: &ItemStruct,
     field_idents: &[syn::Ident],
     field_names: &[String],
     field_types: &[Type],
     field_is_serde_skip: &[bool],
 ) -> TokenStream2 {
+    let struct_ident = &input.ident;
+    let ident_str = struct_ident.to_string();
     let fields_struct = proc_macro2::Ident::new(&format!("{ident_str}Fields"), struct_ident.span());
     let ext_trait = proc_macro2::Ident::new(&format!("{ident_str}FieldsExt"), struct_ident.span());
     let mut struct_fields: Vec<TokenStream2> = Vec::new();
@@ -1719,7 +1720,7 @@ fn field_handles_tokens(
         });
     }
     let watch_fields =
-        watchers::field_metadata(struct_ident, field_idents, field_types, field_is_serde_skip);
+        watchers::field_metadata(input, field_idents, field_types, field_is_serde_skip);
     let struct_doc = format!(
         "RFC-097 field handles for [`{ident_str}`]. Obtain via \
          `this::<{ident_str}>().fields()` (or `store::<{ident_str}>().fields()`); each public \
@@ -3626,8 +3627,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // RFC-097 §3.2 — the `<Name>Fields` extension trait of typed
     // single-field handles, impl'd for `Handle<Name>`.
     let field_handles_tokens = field_handles_tokens(
-        &struct_ident,
-        &ident_str,
+        &input,
         &field_idents,
         &field_names,
         &field_types,
@@ -4475,8 +4475,8 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
     let watch_installs = watches.iter().map(|watch| watch.install(&ty));
-    let watch_definitions = watches.iter().map(|watch| watch.definitions(&ty));
-    let mut watch_nodes: Vec<_> = watches.iter().map(|watch| watch.graph_node()).collect();
+    let watch_definitions = watches.iter().map(|watch| watch.definitions());
+    let mut watch_nodes: Vec<_> = watches.iter().map(|watch| watch.graph_node(&ty)).collect();
     for computed in &computed_methods {
         let output = &computed.field_name;
         let reads: Vec<_> = computed
@@ -4990,8 +4990,7 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // RFC-097 §3.2 — store field handles (`store::<Name>().field()`).
     let field_handles_tokens = field_handles_tokens(
-        &struct_ident,
-        &ident_str,
+        &input,
         &field_idents,
         &field_names,
         &field_types,

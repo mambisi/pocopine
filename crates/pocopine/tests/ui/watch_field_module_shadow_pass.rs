@@ -38,7 +38,7 @@ mod nested {
 
     #[handlers]
     impl Watched {
-        #[watch(theme, writes(config))]
+        #[watch(theme, updates(config))]
         fn configure(theme: &theme::Theme) -> Update<Self> {
             Update::new().config(config::Config { value: theme.value })
         }

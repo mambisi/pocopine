@@ -13,8 +13,50 @@ fn name(id: &Ident) -> String {
     id.to_string().trim_start_matches("r#").to_string()
 }
 fn fields_module(id: &Ident) -> Ident {
-    format_ident!("__pocopine_watch_fields_{}", name(id))
+    format_ident!("{}Field", name(id))
 }
+fn marker(id: &Ident) -> Ident {
+    let mut pascal: String = name(id)
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            let mut word = chars.next().unwrap().to_uppercase().collect::<String>();
+            word.extend(chars);
+            word
+        })
+        .collect();
+    if pascal.starts_with(|c: char| c.is_ascii_digit()) {
+        pascal.insert(0, '_');
+    }
+    if pascal == "Self" {
+        pascal.push('_');
+    }
+    // A Rust field may consist entirely of underscores. Keep its marker a
+    // valid identifier and let the owner check for normalization collisions.
+    format_ident!(
+        "{}",
+        if pascal.is_empty() {
+            "Underscore"
+        } else {
+            &pascal
+        },
+        span = id.span()
+    )
+}
+
+fn check_duplicates(fields: &[Ident], label: &str) -> syn::Result<()> {
+    for (i, field) in fields.iter().enumerate() {
+        if fields[..i].iter().any(|f| name(f) == name(field)) {
+            return Err(syn::Error::new_spanned(
+                field,
+                format!("duplicate field `{field}` in the {label} list"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn all_fields_macro(id: &Ident) -> Ident {
     format_ident!("__pocopine_watch_all_{}", name(id))
 }
@@ -48,7 +90,9 @@ struct Param {
 
 pub struct Args {
     pub reads: Vec<Ident>,
+    /// Resolved output marker names, shared by explicit and shorthand forms.
     pub writes: Vec<Ident>,
+    has_updates: bool,
     pub all: bool,
 }
 
@@ -57,6 +101,7 @@ impl Args {
         Self {
             reads: Vec::new(),
             writes: Vec::new(),
+            has_updates: false,
             all: true,
         }
     }
@@ -66,29 +111,35 @@ impl Parse for Args {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut reads = Vec::new();
         let mut writes = Vec::new();
-        let mut saw_writes = false;
+        let mut has_updates = false;
         while !input.is_empty() {
             let id: Ident = input.parse().map_err(|_| {
-                input.error("#[watch] expects field identifiers and optional writes(field, ...)")
+                input.error("#[watch] expects field identifiers and optional updates(field, ...)")
             })?;
             if id == "writes" && input.peek(syn::token::Paren) {
-                if saw_writes {
+                return Err(syn::Error::new_spanned(
+                    id,
+                    "writes(...) was renamed to updates(...); or declare outputs in Update<Self, (Self::Field, ...)>",
+                ));
+            }
+            if id == "updates" && input.peek(syn::token::Paren) {
+                if has_updates {
                     return Err(syn::Error::new_spanned(
                         id,
-                        "only one writes(...) list is allowed",
+                        "only one updates(...) list is allowed",
                     ));
                 }
-                saw_writes = true;
+                has_updates = true;
                 let content;
                 parenthesized!(content in input);
                 writes = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?
                     .into_iter()
                     .collect();
             } else {
-                if saw_writes {
+                if has_updates {
                     return Err(syn::Error::new_spanned(
                         id,
-                        "watched fields must precede writes(...)",
+                        "watched fields must precede updates(...)",
                     ));
                 }
                 reads.push(id);
@@ -100,27 +151,12 @@ impl Parse for Args {
         if reads.is_empty() {
             return Err(input.error("#[watch] requires at least one input field"));
         }
-        for (fields, label) in [(&reads, "watch"), (&writes, "writes")] {
-            for (i, field) in fields.iter().enumerate() {
-                if fields[..i].iter().any(|f| name(f) == name(field)) {
-                    return Err(syn::Error::new_spanned(
-                        field,
-                        format!("duplicate field `{field}` in the {label} list"),
-                    ));
-                }
-            }
-        }
-        for field in &writes {
-            if reads.iter().any(|f| name(f) == name(field)) {
-                return Err(syn::Error::new_spanned(
-                    field,
-                    "a watcher cannot write a watched input field",
-                ));
-            }
-        }
+        check_duplicates(&reads, "watch")?;
+        check_duplicates(&writes, "updates")?;
         Ok(Self {
             reads,
-            writes,
+            writes: writes.iter().map(marker).collect(),
+            has_updates,
             all: false,
         })
     }
@@ -134,11 +170,10 @@ pub struct Watch {
     fields_module: Ident,
     all_fields_macro: Ident,
     pub cfg: Vec<Attribute>,
-    patch: bool,
 }
 
 impl Watch {
-    pub fn parse(method: &mut ImplItemFn, args: Args, owner: &Type) -> syn::Result<Self> {
+    pub fn parse(method: &mut ImplItemFn, mut args: Args, owner: &Type) -> syn::Result<Self> {
         if method.sig.receiver().is_some() {
             return Err(syn::Error::new_spanned(
                 &method.sig,
@@ -259,24 +294,69 @@ impl Watch {
                 "#[watch] requires one named T, &T, or Change<T> parameter for each watched field",
             ));
         }
+        let mut explicit = None;
         let patch = match &method.sig.output {
             ReturnType::Default => false,
             ReturnType::Type(_, ty) if matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty()) => {
                 false
             }
             ReturnType::Type(_, ty) => {
-                let valid = match ty.as_ref() {
-                    Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
-                        segment.ident == "Update" && matches!(&segment.arguments,
-                            PathArguments::AngleBracketed(a) if a.args.len() == 1 && matches!(a.args.first(), Some(GenericArgument::Type(Type::Path(p))) if p.path.is_ident("Self")))
-                    }),
-                    _ => false,
-                };
-                if !valid {
+                let Type::Path(path) = ty.as_ref() else {
                     return Err(syn::Error::new_spanned(
                         ty,
-                        "#[watch] must return Update<Self> or ()",
+                        "#[watch] must return Update<Self, (Self::Field, ...)> or (); updates(...) permits Update<Self>",
                     ));
+                };
+                let segment = path.path.segments.last().unwrap();
+                let PathArguments::AngleBracketed(generics) = &segment.arguments else {
+                    return Err(syn::Error::new_spanned(
+                        ty,
+                        "#[watch] must return Update<Self, (Self::Field, ...)> or (); updates(...) permits Update<Self>",
+                    ));
+                };
+                if segment.ident != "Update"
+                    || !(1..=2).contains(&generics.args.len())
+                    || !matches!(generics.args.first(), Some(GenericArgument::Type(Type::Path(p))) if p.path.is_ident("Self"))
+                {
+                    return Err(syn::Error::new_spanned(
+                        ty,
+                        "#[watch] must return Update<Self, (Self::Field, ...)> or (); updates(...) permits Update<Self>",
+                    ));
+                }
+                if generics.args.len() == 2 {
+                    let Some(GenericArgument::Type(Type::Tuple(tuple))) = generics.args.last()
+                    else {
+                        return Err(syn::Error::new_spanned(
+                            &generics.args,
+                            "output fields must be a tuple: (Self::Field,) for one field",
+                        ));
+                    };
+                    let mut outputs = Vec::new();
+                    for field in &tuple.elems {
+                        let Type::Path(path) = field else {
+                            return Err(syn::Error::new_spanned(
+                                field,
+                                "output fields must use Self::FieldName markers",
+                            ));
+                        };
+                        if path.qself.is_some()
+                            || path.path.leading_colon.is_some()
+                            || path.path.segments.len() != 2
+                            || path.path.segments[0].ident != "Self"
+                            || path
+                                .path
+                                .segments
+                                .iter()
+                                .any(|s| !matches!(s.arguments, PathArguments::None))
+                        {
+                            return Err(syn::Error::new_spanned(
+                                field,
+                                "output fields must use Self::FieldName markers",
+                            ));
+                        }
+                        outputs.push(path.path.segments[1].ident.clone());
+                    }
+                    explicit = Some(outputs);
                 }
                 true
             }
@@ -287,25 +367,77 @@ impl Watch {
                 "bare #[watch] observes every watchable field and must return (); patches are not allowed",
             ));
         }
-        if !patch && !args.writes.is_empty() {
+        if !patch && args.has_updates {
             return Err(syn::Error::new_spanned(
                 &method.sig,
-                "a watcher with writes(...) must return Update<Self>",
+                "a watcher with updates(...) must return Update<Self>",
             ));
         }
+        if let Some(outputs) = explicit {
+            if args.has_updates {
+                return Err(syn::Error::new_spanned(
+                    &method.sig.output,
+                    "declare outputs once: use an explicit field tuple or updates(...), not both",
+                ));
+            }
+            args.writes = outputs;
+        } else if patch && !args.has_updates {
+            return Err(syn::Error::new_spanned(
+                &method.sig.output,
+                "Update<Self> requires updates(...); declare an explicit field tuple or return () for observation",
+            ));
+        }
+        check_duplicates(&args.writes, "output")?;
+        if args.writes.len() > 32 {
+            return Err(syn::Error::new_spanned(
+                &method.sig.output,
+                "an Update field tuple supports at most 32 fields",
+            ));
+        }
+        for field in &args.writes {
+            if args.reads.iter().any(|read| marker(read) == *field) {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "a watcher cannot update a watched input field",
+                ));
+            }
+        }
+        let fields_module = fields_module(owner_id);
         if patch {
-            method.sig.output = syn::parse_quote!(-> ::pocopine::Update<Self, #module::Policy>);
-            method.block.stmts.insert(
-                0,
-                syn::parse_quote!(#[allow(unused_imports)] use #module::Setters as _;),
-            );
+            let ReturnType::Type(_, ty) = &mut method.sig.output else {
+                unreachable!()
+            };
+            let Type::Path(path) = ty.as_mut() else {
+                unreachable!()
+            };
+            let PathArguments::AngleBracketed(generics) =
+                &mut path.path.segments.last_mut().unwrap().arguments
+            else {
+                unreachable!()
+            };
+            let outputs = &args.writes;
+            // Preserve the author's Update path, and resolve both forms to
+            // the same tuple of owner markers rather than a per-watch policy.
+            generics.args = syn::parse_quote!(Self, (#(#fields_module::#outputs,)*));
+            if !outputs.is_empty() {
+                method.block.stmts.insert(
+                    0,
+                    syn::parse_quote!(#[allow(unused_imports)] use #fields_module::setters::{#(#outputs as _,)*};),
+                );
+            }
+            if outputs.is_empty() {
+                let warning = crate::build_warning_tokens(
+                    "pocopine::empty_watch_update: this watcher declares no outputs; return () instead of Update<Self, ()> or updates()",
+                );
+                method.block.stmts.insert(0, syn::parse2(warning)?);
+            }
         }
         Ok(Self {
             method: method.sig.ident.clone(),
             args,
             params,
             module,
-            fields_module: fields_module(owner_id),
+            fields_module,
             all_fields_macro: all_fields_macro(owner_id),
             cfg: method
                 .attrs
@@ -313,11 +445,10 @@ impl Watch {
                 .filter(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"))
                 .cloned()
                 .collect(),
-            patch,
         })
     }
 
-    pub fn definitions(&self, owner: &Type) -> TokenStream {
+    pub fn definitions(&self) -> TokenStream {
         if self.args.all {
             let Self {
                 module,
@@ -327,44 +458,7 @@ impl Watch {
             } = self;
             return quote! { #(#cfg)* self::#all_fields_macro!(#module); };
         }
-        if !self.patch {
-            return quote! {};
-        }
-        let Self {
-            module,
-            fields_module,
-            cfg,
-            ..
-        } = self;
-        let fields = &self.args.writes;
-        let types: Vec<_> = fields.iter().map(|f| quote!(<#fields_module::#f as ::pocopine::__private::WatchField<#owner>>::Value)).collect();
-        quote! {
-            #(#cfg)*
-            #[doc(hidden)]
-            #[allow(non_snake_case, unused_imports, unused_variables, dead_code)]
-            mod #module {
-                use super::*;
-                pub struct Policy;
-                #[derive(Default)]
-                pub struct Patch { #(#fields: Option<#types>,)* }
-                impl ::pocopine::__private::WatchSpec<#owner> for Policy {
-                    type Patch = Patch;
-                    fn is_empty(patch: &Patch) -> bool { true #(&& patch.#fields.is_none())* }
-                    fn apply(patch: Patch, state: &mut #owner) {
-                        #(if let Some(value) = patch.#fields {
-                            <#fields_module::#fields as ::pocopine::__private::WatchField<#owner>>::set(state, value);
-                        })*
-                    }
-                }
-                pub trait Setters: Sized { #(fn #fields(self, value: #types) -> Self;)* }
-                impl Setters for ::pocopine::Update<#owner, Policy> {
-                    #(fn #fields(mut self, value: #types) -> Self {
-                        self.__patch_mut().#fields = Some(value);
-                        self
-                    })*
-                }
-            }
-        }
+        quote! {}
     }
 
     pub fn install(&self, owner: &Type) -> TokenStream {
@@ -400,7 +494,8 @@ impl Watch {
         let mut checks = Vec::new();
         for (i, Param { field, ty, mode }) in self.params.iter().enumerate() {
             let local = format_ident!("__watch_input_{i}");
-            checks.push(quote! { let _: &<#fields_module::#field as ::pocopine::__private::WatchField<#owner>>::Value = &state.#field; });
+            let field_marker = marker(field);
+            checks.push(quote! { let _: &<#fields_module::#field_marker as ::pocopine::Field<#owner>>::Value = &state.#field; });
             inputs.push(match mode {
                 InputMode::Owned => quote! { let #local: #ty = state.#field.clone(); },
                 InputMode::Borrowed => quote! { let #local: #ty = &state.#field; },
@@ -435,7 +530,7 @@ impl Watch {
         }
     }
 
-    pub fn graph_node(&self) -> TokenStream {
+    pub fn graph_node(&self, owner: &Type) -> TokenStream {
         let cfg = &self.cfg;
         if self.args.all {
             // All-fields observers have no outputs, so they cannot create
@@ -443,17 +538,44 @@ impl Watch {
             return quote! { #(#cfg)* ::pocopine::__private::WatchNode { reads: &[], writes: &[] } };
         }
         let reads: Vec<_> = self.args.reads.iter().map(name).collect();
-        let writes: Vec<_> = self.args.writes.iter().map(name).collect();
+        let fields_module = &self.fields_module;
+        let writes: Vec<_> = self
+            .args
+            .writes
+            .iter()
+            .map(|f| quote!(<#fields_module::#f as ::pocopine::Field<#owner>>::NAME))
+            .collect();
         quote! { #(#cfg)* ::pocopine::__private::WatchNode { reads: &[#(#reads),*], writes: &[#(#writes),*] } }
     }
 }
 
+fn marker_visibility(vis: &syn::Visibility) -> syn::Visibility {
+    match vis {
+        syn::Visibility::Inherited => syn::parse_quote!(pub(super)),
+        syn::Visibility::Restricted(restricted) => {
+            let mut vis = restricted.clone();
+            let first = &mut vis.path.segments[0].ident;
+            if *first == "self" {
+                *first = syn::parse_quote!(super);
+            } else if *first == "super" {
+                let path = &vis.path;
+                vis.path = Box::new(syn::parse_quote!(super::#path));
+            }
+            vis.in_token = Some(Default::default());
+            syn::Visibility::Restricted(vis)
+        }
+        _ => vis.clone(),
+    }
+}
+
 pub fn field_metadata(
-    owner: &Ident,
+    input: &syn::ItemStruct,
     fields: &[Ident],
     types: &[Type],
     skipped: &[bool],
 ) -> TokenStream {
+    let owner = &input.ident;
+    let visibility = &input.vis;
     let module = fields_module(owner);
     let all_macro = all_fields_macro(owner);
     let active: Vec<_> = fields
@@ -462,32 +584,70 @@ pub fn field_metadata(
         .filter(|(_, skip)| !**skip)
         .map(|(field, _)| field)
         .collect();
+    let markers: Vec<_> = active.iter().map(|field| marker(field)).collect();
+    if let Err(error) = check_duplicates(&markers, "generated field marker") {
+        return error.to_compile_error();
+    }
     let names: Vec<_> = active.iter().map(|field| name(field)).collect();
-    let active_types: Vec<_> = active
+    let active_types: Vec<_> = markers
         .iter()
-        .map(|field| quote!(<#module::#field as ::pocopine::__private::WatchField<#owner>>::Value))
+        .map(|field| quote!(<#module::#field as ::pocopine::Field<#owner>>::Value))
         .collect();
-    let items = fields
+    let mut marker_items = Vec::new();
+    let mut setter_items = Vec::new();
+    let mut field_impls = Vec::new();
+    for (((field, ty), skip), original) in fields
         .iter()
         .zip(types)
         .zip(skipped)
-        .filter(|(_, skip)| !**skip)
-        .map(|((field, ty), _)| {
-            quote! {
-                impl ::pocopine::__private::WatchField<#owner> for #module::#field {
-                    type Value = #ty;
-                    fn set(state: &mut #owner, value: Self::Value) { state.#field = value; }
+        .zip(input.fields.iter())
+    {
+        if *skip {
+            continue;
+        }
+        let marker = marker(field);
+        let setter = &marker;
+        let vis = marker_visibility(&original.vis);
+        let setter_vis = marker_visibility(&vis);
+        let field_name = name(field);
+        let value = quote!(<super::#marker as ::pocopine::Field<super::super::#owner>>::Value);
+        marker_items.push(quote! {
+            #[doc = concat!("Descriptor for `", stringify!(#owner), "::", stringify!(#field), "`.")]
+            #vis enum #marker {}
+        });
+        setter_items.push(quote! {
+            #setter_vis trait #setter<W: ::pocopine::__private::WatchSpec<super::super::#owner>>: Sized {
+                fn #field<const INDEX: usize>(self, value: #value) -> Self
+                where W: ::pocopine::__private::UpdateField<super::super::#owner, super::#marker, INDEX>;
+            }
+            impl<W: ::pocopine::__private::WatchSpec<super::super::#owner>> #setter<W> for ::pocopine::Update<super::super::#owner, W> {
+                fn #field<const INDEX: usize>(mut self, value: #value) -> Self
+                where W: ::pocopine::__private::UpdateField<super::super::#owner, super::#marker, INDEX> {
+                    <W as ::pocopine::__private::UpdateField<super::super::#owner, super::#marker, INDEX>>::set_field(self.__patch_mut(), value);
+                    self
                 }
             }
         });
+        // Resolve original field types in the declaration module, where
+        // `theme::Theme`, `self::` and `super::` retain their meaning.
+        field_impls.push(quote! {
+            impl ::pocopine::Field<#owner> for #module::#marker {
+                type Value = #ty;
+                const NAME: &'static str = #field_name;
+                fn get(state: &#owner) -> &Self::Value { &state.#field }
+                fn set(state: &mut #owner, value: Self::Value) { state.#field = value; }
+            }
+        });
+    }
     quote! {
-        #[doc(hidden)]
+        #[doc = concat!("Typed field descriptors for [`", stringify!(#owner), "`]. The setters module contains fluent Update extension traits.")]
         #[allow(non_snake_case, non_camel_case_types, unused_imports, dead_code)]
-        mod #module { #(pub(super) enum #active {})* }
-        // Resolve field types where the owner was declared. Moving them into
-        // the marker module would shadow paths like `theme::Theme` with the
-        // `theme` marker and change the meaning of `self::`/`super::` paths.
-        #(#items)*
+        #visibility mod #module {
+            #(#marker_items)*
+            /// Import each selected field's trait as `_` for fluent Update setters.
+            pub mod setters { #(#setter_items)* }
+        }
+        #(#field_impls)*
 
         // Generate history only when an active bare observer requests it.
         // Components with borrowed-only watches need no Clone implementations.

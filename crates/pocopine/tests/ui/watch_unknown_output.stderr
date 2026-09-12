@@ -1,5 +1,19 @@
-error[E0425]: cannot find type `missing` in module `__pocopine_watch_fields_State`
- --> tests/ui/watch_unknown_output.rs:7:23
+error[E0432]: unresolved import `StateField`
+ --> tests/ui/watch_unknown_output.rs:5:1
   |
-7 | #[watch(value, writes(missing))]
-  |                       ^^^^^^^ not found in `__pocopine_watch_fields_State`
+5 | #[handlers]
+  | ^^^^^^^^^^^ no `Missing` in `StateField::setters`
+  |
+  = note: this error originates in the attribute macro `handlers` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0425]: cannot find type `Missing` in module `StateField`
+ --> tests/ui/watch_unknown_output.rs:7:24
+  |
+7 | #[watch(value, updates(missing))]
+  |                        ^^^^^^^ not found in `StateField`
+
+error[E0599]: no method named `missing` found for struct `pocopine::Update<C, W>` in the current scope
+ --> tests/ui/watch_unknown_output.rs:8:60
+  |
+8 | fn bad(value: Change<u32>) -> Update<Self> { Update::new().missing(value.current) }
+  |                                                            ^^^^^^^ method not found in `pocopine::Update<_, _>`

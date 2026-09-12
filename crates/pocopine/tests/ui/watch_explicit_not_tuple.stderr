@@ -1,0 +1,5 @@
+error: output fields must be a tuple: (Self::Field,) for one field
+ --> tests/ui/watch_explicit_not_tuple.rs:6:36
+  |
+6 | fn not_tuple(value: u32) -> Update<Self, (Self::Output)> { Update::new().output(value) }
+  |                                    ^^^^^^^^^^^^^^^^^^^^

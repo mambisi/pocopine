@@ -34,9 +34,10 @@ pub trait WatchAllSpec<C> {
     fn read(state: &C, previous: Option<&Self::History>) -> (Self::Changes, Self::History);
 }
 
-/// A watcher-specific patch. In `#[watch]` signatures, `Update<Self>` is
-/// expanded to include the generated policy. Fluent setters exist only for
-/// the fields declared in `writes(...)`; omitted fields remain unchanged.
+/// A patch restricted to a tuple of field markers. In `#[watch]` signatures,
+/// `Self::FieldName` resolves to an owner field marker; `updates(...)` supplies
+/// the tuple for the `Update<Self>` shorthand. Only fields in that tuple can
+/// be set; omitted fields remain unchanged.
 /// An optional field uses an outer option for presence, so explicitly setting
 /// it to `None` remains different from omitting it.
 #[must_use = "return the update from the watcher so the runtime can apply it"]
@@ -48,7 +49,7 @@ pub struct Update<C, W: WatchSpec<C>> {
 impl<C, W: WatchSpec<C>> Default for Update<C, W> {
     fn default() -> Self {
         Self {
-            patch: W::Patch::default(),
+            patch: W::empty(),
             component: PhantomData,
         }
     }
@@ -65,20 +66,107 @@ impl<C, W: WatchSpec<C>> Update<C, W> {
     }
 }
 
-/// Metadata implemented by generated watcher policies.
+/// Storage and commit operations for a tuple of output field markers.
 #[doc(hidden)]
 pub trait WatchSpec<C> {
-    type Patch: Default;
+    type Patch;
+    fn empty() -> Self::Patch;
     fn is_empty(patch: &Self::Patch) -> bool;
     fn apply(patch: Self::Patch, state: &mut C);
 }
 
-/// Typed field metadata shared by `#[component]`/`#[store]` and `#[handlers]`.
-#[doc(hidden)]
-pub trait WatchField<C> {
+/// A generated, reusable descriptor for one component or store field.
+/// `EditorField::Draft`, for example, implements `Field<Editor>` and retains
+/// the field's value type and Rust name. `get` borrows the value without a
+/// reactive handle or a mutation capability.
+pub trait Field<C> {
     type Value;
+    const NAME: &'static str;
+    fn get(state: &C) -> &Self::Value;
+    #[doc(hidden)]
     fn set(state: &mut C, value: Self::Value);
 }
+
+/// A statically checked slot in a field tuple. The generated fluent setter
+/// infers INDEX from the selected field, so it cannot address another slot.
+#[doc(hidden)]
+pub trait UpdateField<C, F: Field<C>, const INDEX: usize>: WatchSpec<C> {
+    fn set_field(patch: &mut Self::Patch, value: F::Value);
+}
+
+impl<C> WatchSpec<C> for () {
+    type Patch = ();
+    fn empty() {}
+    fn is_empty(_: &()) -> bool {
+        true
+    }
+    fn apply(_: (), _: &mut C) {}
+}
+
+macro_rules! tuple_slots {
+    ([$($all:ident),+];) => {};
+    ([$($all:ident),+]; $field:ident:$index:tt $(, $rest:ident:$rest_index:tt)*) => {
+        impl<C, $($all: Field<C>),+> UpdateField<C, $field, $index> for ($($all,)+) {
+            fn set_field(patch: &mut Self::Patch, value: $field::Value) {
+                patch.$index = Some(value);
+            }
+        }
+        tuple_slots!([$($all),+]; $($rest:$rest_index),*);
+    };
+}
+
+macro_rules! field_tuples {
+    () => {};
+    ($field:ident:$index:tt $(, $rest:ident:$rest_index:tt)*) => {
+        impl<C, $field: Field<C>, $($rest: Field<C>),*> WatchSpec<C> for ($field, $($rest,)*) {
+            type Patch = (Option<$field::Value>, $(Option<$rest::Value>,)*);
+            fn empty() -> Self::Patch {
+                (None::<$field::Value>, $(None::<$rest::Value>,)*)
+            }
+            fn is_empty(patch: &Self::Patch) -> bool {
+                patch.0.is_none() $(&& patch.$rest_index.is_none())*
+            }
+            fn apply(patch: Self::Patch, state: &mut C) {
+                if let Some(value) = patch.0 { $field::set(state, value); }
+                $(if let Some(value) = patch.$rest_index { $rest::set(state, value); })*
+            }
+        }
+        tuple_slots!([$field $(, $rest)*]; $field:0 $(, $rest:$rest_index)*);
+    };
+}
+
+field_tuples!(F0:0);
+field_tuples!(F0:0, F1:1);
+field_tuples!(F0:0, F1:1, F2:2);
+field_tuples!(F0:0, F1:1, F2:2, F3:3);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24, F25:25);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24, F25:25, F26:26);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24, F25:25, F26:26, F27:27);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24, F25:25, F26:26, F27:27, F28:28);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24, F25:25, F26:26, F27:27, F28:28, F29:29);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24, F25:25, F26:26, F27:27, F28:28, F29:29, F30:30);
+field_tuples!(F0:0, F1:1, F2:2, F3:3, F4:4, F5:5, F6:6, F7:7, F8:8, F9:9, F10:10, F11:11, F12:12, F13:13, F14:14, F15:15, F16:16, F17:17, F18:18, F19:19, F20:20, F21:21, F22:22, F23:23, F24:24, F25:25, F26:26, F27:27, F28:28, F29:29, F30:30, F31:31);
 
 mod sealed {
     pub trait Sealed<C> {}
@@ -243,6 +331,70 @@ pub const fn assert_watch_graph<const N: usize>(nodes: [WatchNode; N]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct State {
+        draft: String,
+        issue: Option<String>,
+    }
+    enum Draft {}
+    enum Issue {}
+    impl Field<State> for Draft {
+        type Value = String;
+        const NAME: &'static str = "draft";
+        fn get(state: &State) -> &String {
+            &state.draft
+        }
+        fn set(state: &mut State, value: String) {
+            state.draft = value;
+        }
+    }
+    impl Field<State> for Issue {
+        type Value = Option<String>;
+        const NAME: &'static str = "issue";
+        fn get(state: &State) -> &Option<String> {
+            &state.issue
+        }
+        fn set(state: &mut State, value: Option<String>) {
+            state.issue = value;
+        }
+    }
+
+    #[test]
+    fn tuple_patch_preserves_omitted_fields_and_clears_optional_values() {
+        type Outputs = (Issue, Draft);
+        let mut patch = Update::<State, Outputs>::new();
+        assert!(Outputs::is_empty(&patch.patch));
+        <Outputs as UpdateField<State, Issue, 0>>::set_field(&mut patch.patch, None);
+        assert!(!Outputs::is_empty(&patch.patch));
+        let mut state = State {
+            draft: "keep".into(),
+            issue: Some("clear".into()),
+        };
+        Outputs::apply(patch.patch, &mut state);
+        assert_eq!(Draft::get(&state), "keep");
+        assert_eq!(Issue::get(&state), &None);
+
+        let mut patch = Update::<State, Outputs>::new();
+        <Outputs as UpdateField<State, Draft, 1>>::set_field(&mut patch.patch, "first".into());
+        <Outputs as UpdateField<State, Draft, 1>>::set_field(&mut patch.patch, "last".into());
+        Outputs::apply(patch.patch, &mut state);
+        assert_eq!(state.draft, "last");
+    }
+
+    #[test]
+    fn empty_tuple_patch_has_no_storage_or_mutation() {
+        let patch = Update::<State, ()>::new();
+        assert_eq!(std::mem::size_of_val(&patch), 0);
+        assert!(<() as WatchSpec<State>>::is_empty(&patch.patch));
+        let mut state = State {
+            draft: "keep".into(),
+            issue: Some("keep".into()),
+        };
+        <() as WatchSpec<State>>::apply(patch.patch, &mut state);
+        assert_eq!(state.draft, "keep");
+        assert_eq!(state.issue.as_deref(), Some("keep"));
+    }
 
     #[test]
     fn evaluation_guard_blocks_writes_and_restores_after_unwind() {

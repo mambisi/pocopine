@@ -1,4 +1,4 @@
-error: #[watch] must return Update<Self> or ()
+error: #[watch] must return Update<Self, (Self::Field, ...)> or (); updates(...) permits Update<Self>
  --> tests/ui/watch_bad_return.rs:6:27
   |
 6 | fn bad(a: Change<u32>) -> bool { true }

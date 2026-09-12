@@ -41,4 +41,23 @@ fn handlers_marker_contract() {
     cases.compile_fail("tests/ui/watch_all_patch.rs");
     cases.compile_fail("tests/ui/watch_all_input.rs");
     cases.compile_fail("tests/ui/watch_all_writes.rs");
+    cases.pass("tests/ui/watch_explicit_pass.rs");
+    cases.pass("tests/ui/watch_empty_allowed_pass.rs");
+    cases.compile_fail("tests/ui/watch_empty_tuple.rs");
+    cases.compile_fail("tests/ui/watch_empty_updates.rs");
+    cases.compile_fail("tests/ui/watch_outputs_missing.rs");
+    cases.compile_fail("tests/ui/watch_outputs_both.rs");
+    cases.compile_fail("tests/ui/watch_explicit_duplicate.rs");
+    cases.compile_fail("tests/ui/watch_explicit_self_write.rs");
+    cases.compile_fail("tests/ui/watch_explicit_unknown.rs");
+    cases.compile_fail("tests/ui/watch_explicit_not_tuple.rs");
+    cases.compile_fail("tests/ui/watch_legacy_writes.rs");
+    cases.compile_fail("tests/ui/watch_empty_all_patch.rs");
+    cases.compile_fail("tests/ui/watch_updates_unit.rs");
+    cases.compile_fail("tests/ui/watch_explicit_cycle.rs");
+
+    cases.pass("tests/ui/watch_large_tuple_pass.rs");
+    cases.compile_fail("tests/ui/watch_tuple_too_large.rs");
+    cases.compile_fail("tests/ui/watch_marker_collision.rs");
+    cases.compile_fail("tests/ui/watch_marker_visibility.rs");
 }

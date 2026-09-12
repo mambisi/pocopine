@@ -1,0 +1,5 @@
+error: duplicate field `Output` in the output list
+ --> tests/ui/watch_explicit_duplicate.rs:6:63
+  |
+6 | fn duplicate(value: u32) -> Update<Self, (Self::Output, Self::Output)> { let _ = value; Update::new() }
+  |                                                               ^^^^^^

@@ -11,7 +11,7 @@ struct EditorStore {
 
 #[handlers]
 impl EditorStore {
-    #[watch(start_time, writes(error, valid))]
+    #[watch(start_time, updates(error, valid))]
     fn on_start_time(start_time: Change<String>) -> Update<Self> {
         let valid = !start_time.current.is_empty();
         Update::new().valid(valid).error(None)

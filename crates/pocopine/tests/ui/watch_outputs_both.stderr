@@ -1,0 +1,5 @@
+error: declare outputs once: use an explicit field tuple or updates(...), not both
+ --> tests/ui/watch_outputs_both.rs:6:21
+  |
+6 | fn both(value: u32) -> Update<Self, (Self::Output,)> { Update::new().output(value) }
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

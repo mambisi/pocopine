@@ -60,7 +60,7 @@ impl MixedFixture {
         MIXED_OWNER.with(|s| s.set(current_scope_id()));
     }
 
-    #[watch(owned, borrowed, history, writes(output))]
+    #[watch(owned, borrowed, history, updates(output))]
     fn sum(owned: Counted, borrowed: &NotClone, history: Change<Counted>) -> Update<Self> {
         MIXED_INPUTS.with(|runs| {
             runs.borrow_mut().push((
@@ -126,8 +126,11 @@ impl Fixture {
         OWNER.with(|s| s.set(current_scope_id()));
     }
 
-    #[watch(a, b, writes(total, label, issue))]
-    fn sum(b: Change<u32>, a: Change<u32>) -> Update<Self> {
+    #[watch(a, b)]
+    fn sum(
+        b: Change<u32>,
+        a: Change<u32>,
+    ) -> Update<Self, (Self::Total, Self::Label, Self::Issue)> {
         assert!(pocopine_core::reactive::current_effect().is_none());
         INPUTS.with(|v| v.borrow_mut().push((a.clone(), b.clone())));
         if a.current == 99 {
@@ -148,7 +151,7 @@ impl Fixture {
         OBSERVED.with(|v| v.borrow_mut().push((total.current, label.current)));
     }
 
-    #[watch(total, writes(summary))]
+    #[watch(total, updates(summary))]
     fn summarize(total: Change<u32>) -> Update<Self> {
         Update::new().summary(format!("Sum = {}", total.current))
     }

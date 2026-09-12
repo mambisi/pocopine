@@ -4,7 +4,7 @@ use pocopine::prelude::*;
 struct State { a: u32, b: u32, c: u32 }
 #[handlers]
 impl State {
-#[watch(a, writes(b))]
-fn bad(a: Change<u32>) -> Update<Self> { Update::new().b(a.current).c(3) }
+#[watch(a, updates(b))]
+fn bad(a: Change<u32>) -> Update<Self> { use StateField::setters::C as _; Update::new().b(a.current).c(3) }
 }
 fn main() {}

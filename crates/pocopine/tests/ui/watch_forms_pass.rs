@@ -10,7 +10,7 @@ struct State { payload: Payload, name: String, count: u32, output: u32 }
 
 #[handlers]
 impl State {
-    #[watch(payload, name, count, writes(output))]
+    #[watch(payload, name, count, updates(output))]
     fn mixed(payload: &Payload, name: String, count: Change<u32>) -> Update<Self> {
         Update::new().output(payload.value + name.len() as u32 + count.current)
     }
