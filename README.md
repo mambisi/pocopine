@@ -388,6 +388,9 @@ PRs welcome — non-trivial features should open an RFC first (or be
 paired with one in the same PR). See [`rfcs/README.md`](./rfcs/README.md)
 for the convention.
 
+Dependency update scheduling, grouping, and Renovate setup are documented in
+[`docs/dependency-updates.md`](./docs/dependency-updates.md).
+
 ## Inspiration
 
 * [**Alpine.js**][alpine] — the directive model and author ergonomics.

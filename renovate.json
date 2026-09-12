@@ -1,0 +1,68 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Asia/Dubai",
+  "schedule": ["* 0-8 * * 1"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "automerge": false,
+  "enabledManagers": [
+    "cargo",
+    "npm",
+    "github-actions",
+    "docker-compose",
+    "dockerfile",
+    "rust-toolchain",
+    "custom.regex"
+  ],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/target/**",
+    "**/pkg/**",
+    "**/pkg-debug/**",
+    "**/vendor/**",
+    "tmp/**"
+  ],
+  "lockFileMaintenance": {
+    "enabled": false
+  },
+  "packageRules": [
+    {
+      "description": "Require dashboard approval before opening major upgrades.",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Keep browser tooling updates together.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "JavaScript dependencies"
+    },
+    {
+      "description": "Keep the wasm-bindgen crates and installed CLI versions together.",
+      "matchDatasources": ["crate"],
+      "matchPackageNames": ["wasm-bindgen", "wasm-bindgen-*", "js-sys", "web-sys"],
+      "groupName": "wasm-bindgen",
+      "separateMajorMinor": false
+    },
+    {
+      "description": "Update the pinned nightly and CI toolchains together after approval.",
+      "matchDatasources": ["rust-version"],
+      "groupName": "Rust toolchain",
+      "ignoreUnstable": false,
+      "dependencyDashboardApproval": true,
+      "schedule": ["* 0-8 1 * *"]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track Cargo binaries installed by CI and the build container.",
+      "managerFilePatterns": ["/^\\.github/workflows/.*\\.ya?ml$/", "/^docker/build/Dockerfile$/"],
+      "matchStrings": [
+        "(?:tool:\\s*|cargo install --locked )(?<depName>[a-z][a-z0-9-]+)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "crate"
+    }
+  ]
+}
