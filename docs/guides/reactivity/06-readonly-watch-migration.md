@@ -132,10 +132,17 @@ into the same component or another component. During watcher evaluation,
 named handler invocations (such as `@click="on_click"`) join the callback
 FIFO and run after evaluation and patch commit, if their target scope is
 still live. Outside evaluation, handlers on other scopes may run
-synchronously. Inline event assignments (such as `@click="count = count + 1"`)
-and model or prop mirror writes do not use named-handler dispatch and remain
-guarded. Direct handle, field-handle, and signal writes during evaluation
-also remain rejected.
+synchronously.
+
+Inline event expressions (such as `@click="count = count + 1"`) retain the
+existing same-scope queue: if their target scope already has an active
+callback frame, the whole expression waits for the callback frames to
+unwind. This includes events targeting the watcher owner's scope. Otherwise
+the expression evaluates synchronously, and any field write during watcher
+evaluation is rejected. Named-handler deferral does not extend this queue
+to inline expressions targeting an inactive scope. Direct handle,
+field-handle, signal, and model or prop mirror writes executed during
+evaluation also remain rejected.
 
 ## Cycle and mutation checks
 

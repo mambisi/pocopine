@@ -413,12 +413,17 @@ incidental reactive reads in the callback or model writeback do not add
 dependencies. External values that should trigger a transition need an
 explicit owning action or a declared local input.
 
-The named-handler deferral above does not permit direct `Handle`,
-`FieldHandle`, or signal writes during evaluation. Inline event assignments
-(such as `@click="count = count + 1"`) and model or prop mirror writes also
-remain guarded; they do not pass through named-handler dispatch. These
-writes still fail immediately during evaluation; queued named handlers
-execute after the guard has ended.
+Inline event expressions (such as `@click="count = count + 1"`) retain the
+existing same-scope queue: if their target scope already has an active
+callback frame, the whole expression waits for the callback frames to
+unwind. This includes events targeting the watcher owner's scope. Otherwise
+the expression evaluates synchronously, and any field write during watcher
+evaluation is rejected. Named-handler deferral does not extend this queue
+to inline expressions targeting an inactive scope.
+
+Direct `Handle`, `FieldHandle`, signal, and model or prop mirror writes do
+not use named-handler dispatch. Any such write executed during evaluation
+still fails immediately; queued callbacks execute after the guard has ended.
 
 These are framework API guarantees. Shared references and cloned values
 can contain interior mutability, and hidden macro support APIs are not a
