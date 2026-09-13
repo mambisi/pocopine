@@ -504,6 +504,8 @@ jobs:
           firefox-version: latest
       - uses: browser-actions/setup-geckodriver@latest
         id: setup-geckodriver
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-firefox-${{ matrix.name }}
