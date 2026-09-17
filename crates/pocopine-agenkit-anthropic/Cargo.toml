@@ -25,6 +25,10 @@ tokio = { version = "1", features = ["rt", "sync"] }
 tokio-stream = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `tests/wire.rs` drives a flow through `FlowCall::stream()`, which lives behind
+# agenkit's `server-bridge` feature. The provider itself never touches it, so the
+# feature is asked for here rather than in the dependency above.
+pocopine-agenkit = { workspace = true, features = ["server-bridge"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 wiremock = "0.6"
 # A structured-output type for the forced-tool / streaming tests.
