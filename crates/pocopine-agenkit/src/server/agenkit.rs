@@ -16,10 +16,12 @@ use pocopine_agenkit_core::{
     events,
 };
 use pocopine_auth::Principal;
+#[cfg(feature = "server-bridge")]
 use pocopine_core::{ServerError, StreamServerResult};
 use serde::{Serialize, de::DeserializeOwned};
 use std::future::Future;
 use tokio::sync::mpsc::UnboundedSender;
+#[cfg(feature = "server-bridge")]
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 tokio::task_local! {
@@ -386,6 +388,7 @@ impl FlowCall {
     ///         .stream()
     /// }
     /// ```
+    #[cfg(feature = "server-bridge")]
     pub fn stream(self) -> StreamServerResult<FlowStreamEvent> {
         stream_flow_to_client(
             self.agenkit,
@@ -479,6 +482,7 @@ impl<F: FlowDef> TypedFlowCall<F> {
 
     /// Expose this flow as a streaming `#[server]` fn (RFC-107). See
     /// [`FlowCall::stream`].
+    #[cfg(feature = "server-bridge")]
     pub fn stream(self) -> StreamServerResult<FlowStreamEvent> {
         stream_flow_to_client(
             self.agenkit,
@@ -495,6 +499,7 @@ impl<F: FlowDef> TypedFlowCall<F> {
 /// return a redacted [`StreamServerResult`] of public [`FlowStreamEvent`]s. The
 /// redaction chokepoint ([`super::bridge::stream_filter`]) is applied to every
 /// event before it reaches the SSE frame (§D8/§D10).
+#[cfg(feature = "server-bridge")]
 fn stream_flow_to_client(
     agenkit: Agenkit,
     id: String,

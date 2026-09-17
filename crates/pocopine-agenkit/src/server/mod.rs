@@ -25,6 +25,7 @@ pub mod observe;
 pub mod overflow;
 pub mod parallel;
 mod partial_json;
+#[cfg(feature = "server-plugin")]
 pub mod plugin;
 pub mod provider;
 pub mod reduce;
@@ -49,7 +50,9 @@ pub use artifact::{
     ArtifactSinkCapabilities, Artifacts, BlobArtifactSink, MediaStream, MediaStreamMode,
     MediaStreamSpec, MemoryArtifactSink, NewArtifact, verify_artifact_sink,
 };
-pub use bridge::{stream_filter, to_server_error};
+pub use bridge::stream_filter;
+#[cfg(feature = "server-bridge")]
+pub use bridge::to_server_error;
 pub use catalog::{
     GenerationKind, GenerationModel, ImageGenerationConfig, Model, ModelPricing,
     VideoGenerationConfig, generation_models, lookup_generation, models,
@@ -66,6 +69,7 @@ pub use oauth::{
 pub use observe::{emit_trace_event, to_observed_event};
 pub use overflow::{ContextHeadroom, context_headroom, estimate_input_tokens, is_context_overflow};
 pub use parallel::ParallelBuilder;
+#[cfg(feature = "server-plugin")]
 pub use plugin::{PrincipalLayer, PrincipalService, agenkit_server_plugin, principal_layer};
 pub use pocopine_agenkit_core::FlowDescriptor;
 // Re-exported for apps implementing `ProviderCredentials` (the `resolve` callback
