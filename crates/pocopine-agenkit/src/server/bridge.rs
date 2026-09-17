@@ -18,7 +18,10 @@
 //! streaming, which an app exposes as a streaming `#[server]` fn via
 //! `agenkit.flow(..).stream()` (RFC-107).
 
-use pocopine_agenkit_core::{AgenkitError, FlowStreamEvent, StreamMode};
+#[cfg(feature = "server-bridge")]
+use pocopine_agenkit_core::AgenkitError;
+use pocopine_agenkit_core::{FlowStreamEvent, StreamMode};
+#[cfg(feature = "server-bridge")]
 use pocopine_core::ServerError;
 
 use super::agenkit::Agenkit;
@@ -28,6 +31,7 @@ use super::agenkit::Agenkit;
 /// Validation and tool-policy errors carry their (Agenkit-internal) message;
 /// everything that could quote provider internals (provider, config, budget,
 /// cancellation, reducer) collapses to the error *kind* only (§D10).
+#[cfg(feature = "server-bridge")]
 pub fn to_server_error(error: &AgenkitError) -> ServerError {
     match error {
         AgenkitError::Validation { message } => {
@@ -165,6 +169,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "server-bridge")]
     fn provider_errors_do_not_leak_details() {
         let error = AgenkitError::provider("503 from secret-host:8443 with bearer abc");
         let mapped = to_server_error(&error);
@@ -175,18 +180,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "server-bridge")]
     fn validation_maps_to_bad_request() {
         let mapped = to_server_error(&AgenkitError::validation("missing field `q`"));
         assert!(matches!(mapped, ServerError::BadRequest(_)));
     }
 
     #[test]
+    #[cfg(feature = "server-bridge")]
     fn tool_policy_maps_to_forbidden() {
         let mapped = to_server_error(&AgenkitError::tool_policy("not allowlisted"));
         assert!(matches!(mapped, ServerError::Forbidden(_)));
     }
 
     #[test]
+    #[cfg(feature = "server-bridge")]
     fn context_overflow_surfaces_a_stable_detectable_kind() {
         // The raw provider message stays server-side; the client sees a stable
         // "context_overflow" kind it can detect to trigger compaction.

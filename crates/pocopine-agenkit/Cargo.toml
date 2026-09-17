@@ -9,6 +9,19 @@ description = "Pocopine Agenkit runtime facade — the unified generative-AI app
 [features]
 default = []
 sqlite-session = ["dep:rusqlite"]
+# The DC-5 server integration: `agenkit_server_plugin` (ServerPlugin) plus the
+# principal-scoping tower layer. Off by default so a host that only embeds the
+# agent runtime — a desktop app, a CLI — does not link an HTTP server framework
+# and, through pocopine-server's zero-config asset tier, the aws-sdk-s3 stack.
+# Enabling it also brings rustls's aws-lc-rs provider, which conflicts with a
+# host already using the ring provider. Pocopine's own server turns this on.
+server-plugin = ["dep:pocopine-server", "dep:axum", "dep:tower"]
+# The `#[server]`-boundary bridge: `FlowCall::stream()` / `TypedFlowCall::stream()`
+# and `to_server_error`, which speak pocopine-core's `ServerError` and
+# `StreamServerResult`. Off by default so an embedding host does not compile the
+# browser-facing surface pocopine-core carries (wasm-bindgen, web-sys, js-sys).
+# `stream_filter` and `redact_reasoning` stay available either way.
+server-bridge = ["dep:pocopine-core"]
 
 [dependencies]
 pocopine-agenkit-core = { workspace = true }
@@ -19,16 +32,18 @@ pocopine-agenkit-core = { workspace = true }
 #   * Phase 3    pocopine-auth + pocopine-server (server-fn + principal adapter)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Public flows map AgenkitError -> ServerError at the client boundary (§D9/§D10).
-pocopine-core = { workspace = true }
+# Optional: only the `server-bridge` surface speaks these types.
+pocopine-core = { workspace = true, optional = true }
 # Tools/retrieval run under the caller principal threaded in by the in-facade
 # adapter (§D5/§D10, §D15 DC-5) — no #[server] macro change.
 pocopine-auth = { workspace = true }
 # The DC-5 server integration: `agenkit_server_plugin` (ServerPlugin) + the
 # principal-scoping layer, so a `#[server]` fn runs flows under the caller.
 # Mirrors how pocopine-sync/pocopine-storage expose a `*_server_plugin`.
-pocopine-server = { workspace = true }
+# Optional: only the `server-plugin` surface needs it.
+pocopine-server = { workspace = true, optional = true }
 # The principal-scoping middleware is a hand-rolled tower Layer/Service.
-tower = { version = "0.5" }
+tower = { version = "0.5", optional = true }
 # Authoring macros (`#[ai_tool]` / `#[ai_flow]`), re-exported as
 # `pocopine_agenkit::{ai_tool, ai_flow}` (RFC-093 §D14). Server-only: the
 # generated code references the host runtime.
@@ -47,8 +62,8 @@ tokio = { version = "1", features = ["macros", "rt", "time", "sync", "fs", "io-u
 # Type-driven JSON Schemas for robust structured output (§D10).
 schemars = "0.8"
 # The public AI-flow streaming route (SSE) + Provider::generate_stream, matching
-# pocopine-server/live (§D8).
-axum = "0.7"
+# pocopine-server/live (§D8). Used only by the `server-plugin` module.
+axum = { version = "0.7", optional = true }
 futures = "0.3"
 tokio-stream = "0.1"
 # The `SecretString` credential primitive (re-exported as
@@ -79,3 +94,13 @@ http-body-util = "0.1"
 wiremock = "0.6"
 # Temp dirs for the durable JSONL session-store tests (W7).
 tempfile = "3"
+
+# These two exercise the `#[server]`-boundary surface, so they need the feature
+# that compiles it. `cargo test --all-features` runs them.
+[[test]]
+name = "flow_stream"
+required-features = ["server-bridge"]
+
+[[test]]
+name = "secret_boundary"
+required-features = ["server-bridge"]
