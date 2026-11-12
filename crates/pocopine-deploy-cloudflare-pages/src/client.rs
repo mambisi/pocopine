@@ -436,7 +436,9 @@ fn map_deploy_state(stage: Option<&DeploymentStage>) -> DeployState {
     match stage.status.to_ascii_lowercase().as_str() {
         "success" => DeployState::Live,
         "failure" | "failed" => DeployState::Failed,
-        "canceled" | "cancelled" => DeployState::Canceled,
+        // `skipped`: Cloudflare did not run the stage, e.g. a queued build
+        // superseded by a newer one (`skip_reason: superseded_queued_build`).
+        "canceled" | "cancelled" | "skipped" => DeployState::Canceled,
         "queued" | "pending" | "idle" => DeployState::Pending,
         "active" | "running" | "in_progress" => {
             if stage.name.to_ascii_lowercase().contains("build") {
@@ -848,5 +850,16 @@ mod tests {
         assert_eq!(status.process, "static");
         assert_eq!(status.state, DeployState::Live);
         assert_eq!(status.deploy_id.as_deref(), Some("dep-1"));
+    }
+
+    #[test]
+    fn a_skipped_stage_is_canceled_not_unknown() {
+        let stage = DeploymentStage {
+            name: "queued".into(),
+            status: "skipped".into(),
+            started_on: None,
+            ended_on: None,
+        };
+        assert_eq!(map_deploy_state(Some(&stage)), DeployState::Canceled);
     }
 }
