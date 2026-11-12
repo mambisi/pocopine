@@ -39,7 +39,7 @@ grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
 # Network tool (net.fetch): in-process DNS for resolve-then-pin + HTML→markdown.
-hickory-resolver = "0.25"
+hickory-resolver = "0.26"
 fast_html2md = "0.0"
 # Network tool (SSRF guard): CIDR deny-list matching + WHATWG URL parsing.
 ipnet = "2"
@@ -53,7 +53,7 @@ pocopine-crypto = { workspace = true }
 # We inject OUR OWN transports (sandboxed stdio + SSRF/egress-guarded HTTP), so
 # default features (which pull rmcp's own child-process spawn + reqwest client)
 # stay off. `auth`/`schemars` get added when Phase 4 (HTTP/OAuth) lands.
-rmcp = { version = "=2.0.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
 # net.fetch HTTP client: rustls + streaming (read the body under a byte cap) +
 # transparent gzip/deflate/brotli. The read-loop cap is applied to the
 # *decompressed* stream, so it doubles as the decompression-bomb ceiling.

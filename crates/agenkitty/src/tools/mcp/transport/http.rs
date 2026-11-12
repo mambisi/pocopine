@@ -60,6 +60,80 @@ const MAX_REDIRECTS: usize = 5;
 /// SSE `GET` stream is exempt (it is framed incrementally by rmcp; see the note
 /// on [`GuardedHttpClient::get_stream`]).
 const MAX_HTTP_BODY_BYTES: usize = 8 * 1024 * 1024;
+
+/// The most one SSE event may hold, counted on the raw bytes before they are
+/// parsed, so a server cannot make this client buffer an endless event
+/// (RUSTSEC-2026-0462; rmcp bounds its own client the same way, at the same
+/// default).
+const MAX_SSE_EVENT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Why an SSE response body stopped.
+#[derive(Debug)]
+enum SseBodyError {
+    Read(reqwest::Error),
+    EventTooLarge,
+}
+
+impl std::fmt::Display for SseBodyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Read(err) => write!(f, "reading the SSE stream failed: {err}"),
+            Self::EventTooLarge => write!(f, "an SSE event exceeded {MAX_SSE_EVENT_BYTES} bytes"),
+        }
+    }
+}
+
+impl std::error::Error for SseBodyError {}
+
+/// The size of the SSE event being read: bytes since the last blank line.
+#[derive(Default)]
+struct SseEventSize {
+    event: usize,
+    line: usize,
+    after_cr: bool,
+}
+
+impl SseEventSize {
+    fn observe(&mut self, chunk: &[u8]) -> Result<(), SseBodyError> {
+        for &byte in chunk {
+            if std::mem::take(&mut self.after_cr) && byte == b'\n' {
+                continue;
+            }
+            match byte {
+                b'\r' | b'\n' => {
+                    if self.line == 0 {
+                        self.event = 0;
+                    }
+                    self.line = 0;
+                    self.after_cr = byte == b'\r';
+                }
+                _ => {
+                    self.line += 1;
+                    self.event += 1;
+                    if self.event > MAX_SSE_EVENT_BYTES {
+                        return Err(SseBodyError::EventTooLarge);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// An SSE response's bytes, failing once one event grows past
+/// [`MAX_SSE_EVENT_BYTES`].
+fn bounded_sse_bytes<S, D>(bytes: S) -> impl futures::Stream<Item = Result<D, SseBodyError>>
+where
+    S: futures::Stream<Item = Result<D, reqwest::Error>>,
+    D: AsRef<[u8]>,
+{
+    let mut size = SseEventSize::default();
+    bytes.map(move |chunk| {
+        let chunk = chunk.map_err(SseBodyError::Read)?;
+        size.observe(chunk.as_ref())?;
+        Ok(chunk)
+    })
+}
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Total-request timeout for POST/DELETE. **Not** applied to the SSE `GET`
 /// stream, which is long-lived by design.
@@ -504,7 +578,9 @@ impl StreamableHttpClient for GuardedHttpClient {
 
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME.as_bytes()) => {
-                let stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+                let stream =
+                    SseStream::from_bytes_stream(bounded_sse_bytes(response.bytes_stream()))
+                        .boxed();
                 Ok(StreamableHttpPostResponse::Sse(stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME.as_bytes()) => {
@@ -568,7 +644,7 @@ impl StreamableHttpClient for GuardedHttpClient {
     async fn get_stream(
         &self,
         uri: Arc<str>,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -577,9 +653,12 @@ impl StreamableHttpClient for GuardedHttpClient {
         self.validate_bearer(auth_header.as_deref())?;
         let response = self
             .send_guarded(&uri, Method::GET, true, |builder, same_origin| {
-                let mut builder = builder
-                    .header(ACCEPT, format!("{EVENT_STREAM_MIME}, {JSON_MIME}"))
-                    .header(HEADER_SESSION_ID, session_id.as_ref());
+                let mut builder =
+                    builder.header(ACCEPT, format!("{EVENT_STREAM_MIME}, {JSON_MIME}"));
+                // None when a stateless response resumes by its last event id.
+                if let Some(id) = &session_id {
+                    builder = builder.header(HEADER_SESSION_ID, id.as_ref());
+                }
                 if let Some(id) = &last_event_id {
                     builder = builder.header(HEADER_LAST_EVENT_ID, id.clone());
                 }
@@ -616,7 +695,7 @@ impl StreamableHttpClient for GuardedHttpClient {
         // stream is unbounded over time). The per-result post-parse caps in the
         // adapter / resource verbs remain the defense-in-depth bound on what any
         // one event can deliver to the model.
-        Ok(SseStream::from_byte_stream(response.bytes_stream()).boxed())
+        Ok(SseStream::from_bytes_stream(bounded_sse_bytes(response.bytes_stream())).boxed())
     }
 }
 
@@ -664,6 +743,26 @@ pub fn server_net_policy(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_sse_event_past_the_bound_stops_the_stream() {
+        let mut size = SseEventSize::default();
+        // Events end at a blank line, in LF or CRLF; each starts again at 0.
+        let half = vec![b'x'; MAX_SSE_EVENT_BYTES / 2];
+        for _ in 0..3 {
+            size.observe(b"data: ").unwrap();
+            size.observe(&half).unwrap();
+            size.observe(b"\r\n\r\n").unwrap();
+        }
+        // Lines of one event add up, however the chunks fall.
+        size.observe(b"data: ").unwrap();
+        size.observe(&half).unwrap();
+        size.observe(b"\ndata: ").unwrap();
+        assert!(matches!(
+            size.observe(&half),
+            Err(SseBodyError::EventTooLarge)
+        ));
+    }
     use super::*;
     use crate::tools::network::ssrf::Resolve;
     use pocopine_agenkit::server::BoxFuture;

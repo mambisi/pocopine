@@ -86,7 +86,10 @@ async fn handshake_negotiates_and_discovers_paginated_tools() {
         .expect("connect should succeed against the fixture");
 
     assert_eq!(conn.protocol_version(), "2025-11-25");
-    assert_eq!(conn.server_info().name, "mcp_fixture_server");
+    assert_eq!(
+        conn.server_info().map(|i| i.name.as_str()),
+        Some("mcp_fixture_server")
+    );
 
     // Two pages (`alpha` + `nextCursor` → `beta`) prove cursor pagination.
     let names: Vec<&str> = conn.tools().iter().map(|t| t.name.as_str()).collect();

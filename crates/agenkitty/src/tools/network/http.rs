@@ -45,9 +45,13 @@ pub struct HickoryResolver {
 
 impl HickoryResolver {
     pub fn new() -> NetResult<Self> {
+        let init = |err: &dyn std::fmt::Display| {
+            NetError::not_accessible(format!("DNS resolver init failed: {err}"))
+        };
         let inner = TokioResolver::builder_tokio()
-            .map_err(|err| NetError::not_accessible(format!("DNS resolver init failed: {err}")))?
-            .build();
+            .map_err(|e| init(&e))?
+            .build()
+            .map_err(|e| init(&e))?;
         Ok(Self { inner })
     }
 }

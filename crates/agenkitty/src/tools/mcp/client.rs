@@ -170,7 +170,8 @@ pub struct McpConnection {
     child: Option<StdioChild>,
     protocol_version: String,
     capabilities: ServerCapabilities,
-    server_info: Implementation,
+    /// The server's name and version, when it gave them.
+    server_info: Option<Implementation>,
     instructions: Option<String>,
     tools: Vec<McpToolDef>,
     /// Per-request timeout (Phase 6): `tools/call` / `resources/read` /
@@ -629,8 +630,8 @@ impl McpConnection {
     }
 
     /// The server's `serverInfo` (implementation name + version).
-    pub fn server_info(&self) -> &Implementation {
-        &self.server_info
+    pub fn server_info(&self) -> Option<&Implementation> {
+        self.server_info.as_ref()
     }
 
     /// The server's bounded `instructions`, if any.
