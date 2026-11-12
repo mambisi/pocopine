@@ -20,7 +20,8 @@
 //!
 //! Downstream consumers (cost metering, context-overflow detection) call
 //! [`lookup`]; an unknown alias resolves to `None` and those features degrade
-//! rather than error.
+//! rather than error. A host that knows a model the generated data does not
+//! (a gateway's listing, a local model) describes it with [`register`].
 
 // The hand-written core; the file name mirrors this `catalog` module path on
 // purpose (the generated `generated.rs` sits alongside it).
@@ -29,7 +30,7 @@ mod catalog;
 mod generated;
 mod generation;
 
-pub use catalog::{Model, ModelPricing, all, lookup};
+pub use catalog::{Model, ModelPricing, all, lookup, register};
 pub use generation::{
     GenerationKind, GenerationModel, ImageGenerationConfig, VideoGenerationConfig,
     generation_models, lookup_generation,

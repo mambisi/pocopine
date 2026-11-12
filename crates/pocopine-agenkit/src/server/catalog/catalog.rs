@@ -2,9 +2,9 @@
 //! the [`lookup`]/[`all`] accessors. The data itself is generated (see
 //! [`super::generated`] for the descriptors and the typed `models` handles).
 
-use std::sync::OnceLock;
+use std::sync::{OnceLock, PoisonError, RwLock};
 
-use pocopine_agenkit_core::{CostEstimate, ModelRef, Usage};
+use pocopine_agenkit_core::{AgenkitError, AgenkitResult, CostEstimate, ModelRef, Usage};
 
 /// Per-million-token prices, in US dollars.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -74,6 +74,35 @@ pub struct Model {
 }
 
 impl Model {
+    /// A model with only its sizes known, otherwise treated like a model the
+    /// catalog does not list: nothing is refused on its account (`tools`,
+    /// `vision` and `structured_output` on, so the provider decides), nothing
+    /// is added for it (`reasoning` and `image_output` off), and it has no
+    /// prices (cost estimates read zero). Set what you know with struct update
+    /// syntax: `Model { reasoning: true, ..Model::new("ollama/qwen3", 32_768, 8_192) }`.
+    pub fn new(id: impl Into<ModelRef>, context_window: u32, max_output: u32) -> Self {
+        Self {
+            id: id.into(),
+            context_window,
+            max_output,
+            reasoning: false,
+            vision: true,
+            tools: true,
+            web_search: false,
+            audio_input: false,
+            audio_output: false,
+            image_output: false,
+            pdf_input: false,
+            structured_output: true,
+            pricing: ModelPricing {
+                input: 0.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_creation: 0.0,
+            },
+        }
+    }
+
     /// Estimate the USD cost of a call from its token [`Usage`] — uncached
     /// input, output, cache-read, and cache-creation tokens each priced at their
     /// own per-Mtok rate (`Usage.input_tokens` excludes the cached subset).
@@ -97,23 +126,78 @@ fn catalog() -> &'static [Model] {
     CATALOG.get_or_init(super::generated::generated)
 }
 
-/// All known models, in catalog order.
+/// Models registered at runtime ([`register`]), one per alias. Each
+/// descriptor is leaked so [`lookup`] keeps handing out `&'static Model`.
+fn registered() -> &'static RwLock<Vec<&'static Model>> {
+    static REGISTERED: OnceLock<RwLock<Vec<&'static Model>>> = OnceLock::new();
+    REGISTERED.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+/// All models in the generated catalog, in catalog order. Models added with
+/// [`register`] are not listed here; [`lookup`] finds them.
 pub fn all() -> &'static [Model] {
     catalog()
 }
 
+/// Describe a model the generated catalog does not list (a gateway's model, a
+/// local one), or replace what it says about one, for this process. Every
+/// [`lookup`] sees it from then on: compaction and in-turn trimming size the
+/// context window from it, cost metering prices with it, and providers read
+/// its capability flags.
+///
+/// Meant for startup or a periodic refresh of a provider's listing: each
+/// registration with new values keeps its descriptor for the life of the
+/// process (a few hundred bytes), so references already handed out stay
+/// valid; registering the same values again keeps nothing new.
+///
+/// Errors (config) for an alias without a provider part, a zero context
+/// window, or an output cap of zero or above the window.
+pub fn register(model: Model) -> AgenkitResult<()> {
+    if !model.id.as_str().contains('/') {
+        return Err(AgenkitError::config(format!(
+            "model `{}` is not a \"provider/model\" alias",
+            model.id
+        )));
+    }
+    if model.context_window == 0 || model.max_output == 0 || model.max_output > model.context_window
+    {
+        return Err(AgenkitError::config(format!(
+            "model `{}`: a context window of {} cannot hold {} output tokens",
+            model.id, model.context_window, model.max_output
+        )));
+    }
+    let mut list = registered().write().unwrap_or_else(PoisonError::into_inner);
+    match list.iter_mut().find(|m| m.id == model.id) {
+        Some(slot) if **slot == model => {}
+        Some(slot) => *slot = Box::leak(Box::new(model)),
+        None => list.push(Box::leak(Box::new(model))),
+    }
+    Ok(())
+}
+
 /// Resolve a [`ModelRef`] to its [`Model`] descriptor, if known.
 ///
-/// Matches the full `"provider/model"` alias first, then falls back to the
-/// model portion (so a bare `"gpt-4o"` resolves the same entry as
-/// `"openai/gpt-4o"`). Returns `None` for an unlisted alias — callers degrade.
+/// Matches the full `"provider/model"` alias first, a [`register`]ed model
+/// before the generated one, then falls back to the model portion (so a bare
+/// `"gpt-4o"` resolves the same entry as `"openai/gpt-4o"`), the generated
+/// catalog first: registering `"proxy/gpt-4o"` changes what that alias
+/// resolves to, not every bare `"gpt-4o"`. Returns `None` for an unlisted
+/// alias — callers degrade.
 pub fn lookup(model: &ModelRef) -> Option<&'static Model> {
-    let by_alias = catalog().iter().find(|m| m.id == *model);
-    if by_alias.is_some() {
-        return by_alias;
+    let registered = registered().read().unwrap_or_else(PoisonError::into_inner);
+    let exact = |m: &&Model| m.id == *model;
+    if let Some(found) = registered.iter().copied().find(exact) {
+        return Some(found);
+    }
+    if let Some(found) = catalog().iter().find(exact) {
+        return Some(found);
     }
     let wanted = model.model();
-    catalog().iter().find(|m| m.id.model() == wanted)
+    let portion = |m: &&Model| m.id.model() == wanted;
+    catalog()
+        .iter()
+        .find(portion)
+        .or_else(|| registered.iter().copied().find(portion))
 }
 
 #[cfg(test)]
@@ -217,6 +301,92 @@ mod tests {
         // a bare model name resolves to the same entry as the full alias
         let bare = lookup(&ModelRef::new("gpt-4o")).expect("known by model portion");
         assert_eq!(bare.id.as_str(), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn a_registered_model_is_found_and_can_be_replaced() {
+        let id = ModelRef::new("test-gateway/registered-model-a");
+        assert!(lookup(&id).is_none());
+        register(Model {
+            reasoning: true,
+            ..Model::new(id.clone(), 32_768, 4_096)
+        })
+        .unwrap();
+        let first = lookup(&id).expect("registered");
+        assert_eq!((first.context_window, first.reasoning), (32_768, true));
+        // By its model portion too, like a generated entry.
+        let bare = lookup(&ModelRef::new("registered-model-a")).unwrap();
+        assert_eq!(bare.id, id);
+
+        // The same values again keep the same descriptor.
+        register(Model {
+            reasoning: true,
+            ..Model::new(id.clone(), 32_768, 4_096)
+        })
+        .unwrap();
+        assert!(std::ptr::eq(first, lookup(&id).unwrap()));
+
+        // New values replace it; the old reference stays valid.
+        register(Model::new(id.clone(), 65_536, 4_096)).unwrap();
+        assert_eq!(lookup(&id).unwrap().context_window, 65_536);
+        assert_eq!(first.context_window, 32_768);
+    }
+
+    #[test]
+    fn a_registered_model_wins_over_the_generated_one() {
+        // A gateway serving a generated alias with a smaller window.
+        let id = ModelRef::new("test-proxy/gpt-4o");
+        register(Model::new(id.clone(), 8_192, 1_024)).unwrap();
+        assert_eq!(lookup(&id).unwrap().context_window, 8_192);
+        // The generated alias, and a bare name, still resolve to their own.
+        assert_eq!(
+            lookup(&models::openai::GPT_4O).unwrap().id,
+            models::openai::GPT_4O
+        );
+        assert_eq!(
+            lookup(&ModelRef::new("gpt-4o")).unwrap().id,
+            models::openai::GPT_4O
+        );
+    }
+
+    #[test]
+    fn a_model_registered_for_its_size_refuses_nothing() {
+        use crate::server::GenerateRequest;
+        use pocopine_agenkit_core::{
+            Content, ContentPart, MediaPart, Message, Role, ToolDescriptor,
+        };
+        let id = ModelRef::new("test-local/sized-only");
+        let image = Message::new(
+            Role::User,
+            Content::from_parts(vec![ContentPart::Media(MediaPart {
+                media_type: "image/png".to_string(),
+                url: Some("https://example.com/a.png".to_string()),
+                data_base64: None,
+                name: None,
+            })]),
+        );
+        let request = GenerateRequest {
+            model: id.clone(),
+            messages: vec![image],
+            tools: vec![ToolDescriptor::new("fs.read", "Read a file")],
+            ..GenerateRequest::default()
+        };
+        // As an unknown model: the provider decides.
+        assert!(request.ensure_tool_support().is_ok());
+        assert!(request.ensure_media_support().is_ok());
+        register(Model::new(id.clone(), 32_768, 4_096)).unwrap();
+        assert!(request.ensure_tool_support().is_ok());
+        assert!(request.ensure_media_support().is_ok());
+        let sized = lookup(&id).unwrap();
+        assert!(!sized.reasoning && !sized.image_output);
+    }
+
+    #[test]
+    fn register_rejects_a_model_that_cannot_be_sized() {
+        assert!(register(Model::new("no-provider-part", 8_192, 1_024)).is_err());
+        assert!(register(Model::new("test/zero-window", 0, 0)).is_err());
+        assert!(register(Model::new("test/output-too-big", 4_096, 8_192)).is_err());
+        assert!(lookup(&ModelRef::new("test/zero-window")).is_none());
     }
 
     #[test]

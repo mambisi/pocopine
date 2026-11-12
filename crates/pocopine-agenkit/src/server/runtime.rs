@@ -176,6 +176,14 @@ pub enum AgentEvent {
         /// The message, as queued.
         text: String,
     },
+    /// The turn grew past the model's context window, so the output of its
+    /// oldest tool results was replaced with a placeholder before the next
+    /// model call (compaction runs only between turns). The trimmed results
+    /// are stored trimmed, as the model last saw them.
+    Trimmed {
+        /// How many tool outputs were trimmed this time.
+        outputs: u64,
+    },
     /// The thread was compacted (L2): `folded` older messages → one summary.
     Compacted {
         /// How many messages were folded into the summary.
@@ -466,6 +474,7 @@ fn redact_agent_event(event: &AgentEvent, redactor: &Redactor) -> AgentWireEvent
         AgentEvent::Steered { text } => AgentWireEvent::Steered {
             text: redactor.text(text),
         },
+        AgentEvent::Trimmed { outputs } => AgentWireEvent::Trimmed { outputs: *outputs },
         AgentEvent::Compacted { folded } => AgentWireEvent::Compacted { folded: *folded },
         AgentEvent::Stopped { reason } => AgentWireEvent::Stopped {
             reason: match reason {
@@ -658,6 +667,11 @@ fn deliver_steer(messages: &mut Vec<Message>, events: &UnboundedSender<AgentEven
     let _ = events.send(AgentEvent::Steered { text });
 }
 
+/// The output reserved for each model call when sizing a turn's room in the
+/// context window, if the agent sets no `max_tokens`: the default of the
+/// Anthropic provider, which must send one.
+const DEFAULT_OUTPUT_RESERVE: u32 = 4_096;
+
 /// The in-memory conversational loop core (L1). It owns no durable state — it
 /// runs one model↔tool turn over a `messages` transcript, emitting
 /// [`AgentEvent`]s, and returns where it stopped. [`AgentSession`] (L2) wraps it
@@ -701,7 +715,11 @@ impl AgentLoop {
     /// and stop when the model answers without tool calls or the step budget is
     /// hit. Steered messages are read at step boundaries: all those queued
     /// while a tool batch ran go to the model with that batch's results, and
-    /// one queued when the model answers continues the turn. Appends every produced message (assistant text, tool-call turns, tool
+    /// one queued when the model answers continues the turn. When the
+    /// turn's messages outgrow the model's context window (as the catalog
+    /// or [`catalog::register`](super::catalog::register) sizes it), its
+    /// oldest tool outputs are trimmed before the next call
+    /// ([`AgentEvent::Trimmed`]). Appends every produced message (assistant text, tool-call turns, tool
     /// results) to `messages`, emits events, and returns the [`StopReason`].
     /// Returns the stop reason, the resolved [`ProviderContext`] it used (so the
     /// caller can reuse the credential for compaction instead of resolving it a
@@ -794,6 +812,17 @@ impl AgentLoop {
             append_budget: a.append_budget,
         });
 
+        // The room the turn's messages have in the model's context window, for
+        // trimming; unknown for a model neither the catalog nor the host sized.
+        let turn_start = messages.len();
+        let room = super::catalog::lookup(&model).map(|m| {
+            let fixed =
+                super::overflow::estimate_fixed_tokens(self.config.system.as_deref(), &tools);
+            let reserve = self.config.max_tokens.unwrap_or(DEFAULT_OUTPUT_RESERVE);
+            super::overflow::room_for_messages(m, reserve, fixed)
+        });
+        let keep_last_thinking = self.config.thinking != ThinkingLevel::Off;
+
         // The model↔tool steps, with the agent step closed afterwards so the trace
         // run is balanced on every exit (idle / steered / max-steps / error).
         let outcome: AgenkitResult<StopReason> = async {
@@ -815,6 +844,15 @@ impl AgentLoop {
                 if std::mem::take(&mut after_tools) {
                     for steer in controls.drain_steers() {
                         deliver_steer(messages, events, steer);
+                    }
+                }
+                // Within a turn compaction cannot run: when the turn has
+                // outgrown the window, its oldest tool outputs give way.
+                if let Some(room) = room {
+                    let outputs =
+                        super::overflow::trim_turn(messages, turn_start, room, keep_last_thinking);
+                    if outputs > 0 {
+                        let _ = events.send(AgentEvent::Trimmed { outputs });
                     }
                 }
 
@@ -2295,6 +2333,12 @@ mod tests {
         assert_eq!(args["api_key"], "[redacted]");
         assert_eq!(args["url"], "https://x.test");
 
+        // Counts cross as they are.
+        assert_eq!(
+            adapter.redact(&AgentEvent::Trimmed { outputs: 3 }),
+            Some(AgentWireEvent::Trimmed { outputs: 3 })
+        );
+
         // A steered message is the person's text, classified like any other.
         assert_eq!(
             adapter.redact(&AgentEvent::Steered {
@@ -2698,6 +2742,115 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_turn_that_outgrows_a_registered_window_trims_and_goes_on() {
+        // A model only the host knows, with a small window.
+        crate::server::catalog::register(crate::server::catalog::Model::new(
+            "local/tiny-window",
+            6_000,
+            1_000,
+        ))
+        .unwrap();
+        struct Big;
+        impl AiTool for Big {
+            const ID: &'static str = "big";
+            type Input = EchoIn;
+            type Output = EchoOut;
+            fn descriptor() -> Td {
+                Td::new("big", "Prints a lot")
+            }
+            fn call(
+                &self,
+                input: EchoIn,
+                _c: AiToolContext,
+            ) -> BoxFuture<'_, AgenkitResult<EchoOut>> {
+                // ~2,000 tokens a call.
+                let echoed = format!("{} {}", input.text, "x".repeat(8_000));
+                Box::pin(async move { Ok(EchoOut { echoed }) })
+            }
+        }
+        let call = |n: u32| serde_json::json!({ "text": format!("part-{n}") });
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("go", "big", call(1))
+                    .on_prompt_tool("part-1", "big", call(2))
+                    .on_prompt_tool("part-2", "big", call(3))
+                    .on_prompt_tool("part-3", "big", call(4))
+                    .default_text("done"),
+            )
+            .default_model(ModelRef::new("local/tiny-window"))
+            .tool(Big)
+            .build()
+            .unwrap();
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new().tools(["big"]).max_tokens(500),
+        );
+        let (tx, mut rx) = unbounded_channel();
+        let mut messages = vec![Message::user("go")];
+        let (stop, _, _) = loop_
+            .run_turn(&mut messages, &tx, &TurnControls::default())
+            .await
+            .unwrap();
+        drop(tx);
+        assert_eq!(stop, StopReason::Idle);
+
+        // Three results (~6,000 tokens) passed nine tenths of the ~5,200 the
+        // messages have: the two oldest went, once; the rest stayed.
+        let mut trims = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let AgentEvent::Trimmed { outputs } = event {
+                trims.push(outputs);
+            }
+        }
+        assert_eq!(trims, [2]);
+        let results: Vec<String> = messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| m.content.as_text())
+            .collect();
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0], crate::server::TRIMMED_TOOL_OUTPUT);
+        assert_eq!(results[1], crate::server::TRIMMED_TOOL_OUTPUT);
+        assert!(results[2].contains("part-3") && results[3].contains("part-4"));
+        assert_eq!(messages.last().unwrap().content.as_text(), "done");
+    }
+
+    #[tokio::test]
+    async fn a_model_nobody_sized_is_never_trimmed() {
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool(
+                        "go",
+                        "echo",
+                        serde_json::json!({ "text": "x".repeat(40_000) }),
+                    )
+                    .default_text("done"),
+            )
+            .default_model(ModelRef::new("local/unsized-model"))
+            .tool(Echo)
+            .build()
+            .unwrap();
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new().tools(["echo"]),
+        );
+        let (tx, mut rx) = unbounded_channel();
+        let mut messages = vec![Message::user("go")];
+        loop_
+            .run_turn(&mut messages, &tx, &TurnControls::default())
+            .await
+            .unwrap();
+        drop(tx);
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(event, AgentEvent::Trimmed { .. }), "{event:?}");
+        }
+    }
+
     // ── review fixes ─────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -2969,6 +3122,32 @@ mod tests {
             .map(|r| r.usage.input_tokens)
             .sum();
         assert_eq!(turn_input, 2_000);
+    }
+
+    #[tokio::test]
+    async fn a_session_on_a_registered_model_compacts_between_turns() {
+        // A gateway model the catalog does not list used to skip compaction
+        // ("can't size the window") and overflow; registered, it compacts.
+        crate::server::catalog::register(crate::server::catalog::Model::new(
+            "gateway/registered-small",
+            16_000,
+            4_000,
+        ))
+        .unwrap();
+        let agenkit = Agenkit::builder()
+            .provider(MockProvider::new("gateway").default_text("y".repeat(40_000)))
+            .default_model(ModelRef::new("gateway/registered-small"))
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let _ = session.prompt("first").collect::<Vec<_>>().await;
+        let events: Vec<AgentEvent> = session.prompt("second").collect().await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Compacted { folded } if *folded > 0)),
+            "{events:?}"
+        );
     }
 
     #[tokio::test]

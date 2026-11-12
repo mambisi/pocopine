@@ -94,6 +94,29 @@ summarized rather than retained — so the kept tail can never itself re-overflo
 the window, and an oversized (externalized) turn isn't re-inlined into the
 checkpoint.
 
+Compaction runs between turns. Inside a turn, where a coding agent's tool
+results pile up, the loop **trims** instead: before each model call, if the
+turn's messages would no longer fit, the output of its oldest tool results is
+replaced by a short placeholder (`TRIMMED_TOOL_OUTPUT`), oldest first, until
+they take six tenths of the room again; the results the model has not read yet
+go last. Only the running turn's own messages change, and they are stored as the
+model last saw them, so a resumed thread replays exactly that. Each trim emits
+`AgentEvent::Trimmed { outputs }`.
+
+Both need the model's context window. The generated catalog sizes the models it
+lists; for any other model (a gateway's, a local one) describe it once at
+startup, and compaction, trimming and cost metering use it:
+
+```rust
+use pocopine_agenkit::server::catalog::{self, Model};
+
+// Sizes only; otherwise it is treated like a model the catalog does not list.
+catalog::register(Model::new("ollama/qwen3-coder", 65_536, 8_192))?;
+```
+
+A model nobody sized is never compacted or trimmed; a provider that rejects an
+over-long request still surfaces it as `AgenkitError::ContextOverflow`.
+
 ## Custom stores
 
 Threads run on the durable **session layer** (`server::session`). The default —
