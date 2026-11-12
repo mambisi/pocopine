@@ -169,6 +169,13 @@ pub enum AgentEvent {
         /// Who produced it.
         origin: WireArtifactOrigin,
     },
+    /// A message queued with [`AgentSession::steer`] reached the model: it is
+    /// now the next user message of the running turn, read after the tool
+    /// batch that was running when it arrived, or when the model answered.
+    Steered {
+        /// The message, as queued.
+        text: String,
+    },
     /// The thread was compacted (L2): `folded` older messages → one summary.
     Compacted {
         /// How many messages were folded into the summary.
@@ -456,6 +463,9 @@ fn redact_agent_event(event: &AgentEvent, redactor: &Redactor) -> AgentWireEvent
             derived_from: derived_from.clone(),
             origin: origin.clone(),
         },
+        AgentEvent::Steered { text } => AgentWireEvent::Steered {
+            text: redactor.text(text),
+        },
         AgentEvent::Compacted { folded } => AgentWireEvent::Compacted { folded: *folded },
         AgentEvent::Stopped { reason } => AgentWireEvent::Stopped {
             reason: match reason {
@@ -631,6 +641,21 @@ impl TurnControls {
     fn next_steer(&self) -> Option<String> {
         self.queue.lock().ok().and_then(|mut q| q.pop_front())
     }
+
+    /// Take every queued steer, oldest first.
+    fn drain_steers(&self) -> Vec<String> {
+        self.queue
+            .lock()
+            .map(|mut q| q.drain(..).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// Hand a steered message to the model: it becomes the turn's next user
+/// message, and the host hears that it was read.
+fn deliver_steer(messages: &mut Vec<Message>, events: &UnboundedSender<AgentEvent>, text: String) {
+    messages.push(Message::user(text.clone()));
+    let _ = events.send(AgentEvent::Steered { text });
 }
 
 /// The in-memory conversational loop core (L1). It owns no durable state — it
@@ -674,7 +699,9 @@ impl AgentLoop {
     /// Run one turn over `messages` (which must already include the new user
     /// prompt as its last message): call the model, run any tool calls, re-enter,
     /// and stop when the model answers without tool calls or the step budget is
-    /// hit. Appends every produced message (assistant text, tool-call turns, tool
+    /// hit. Steered messages are read at step boundaries: all those queued
+    /// while a tool batch ran go to the model with that batch's results, and
+    /// one queued when the model answers continues the turn. Appends every produced message (assistant text, tool-call turns, tool
     /// results) to `messages`, emits events, and returns the [`StopReason`].
     /// Returns the stop reason, the resolved [`ProviderContext`] it used (so the
     /// caller can reuse the credential for compaction instead of resolving it a
@@ -770,12 +797,25 @@ impl AgentLoop {
         // The model↔tool steps, with the agent step closed afterwards so the trace
         // run is balanced on every exit (idle / steered / max-steps / error).
         let outcome: AgenkitResult<StopReason> = async {
+            // Whether the last step ran a tool batch, so steers queued meanwhile
+            // are read before the next model call.
+            let mut after_tools = false;
             for _ in 0..self.config.max_steps_per_turn.max(1) {
                 // Abort is checked between steps (cancels after the current call).
                 // A dropped event receiver is treated the same: the consumer left,
                 // so stop rather than make paid model/tool calls nobody reads.
                 if controls.aborted() || events.is_closed() {
                     return Ok(StopReason::Aborted);
+                }
+                // Steering mid-run: whatever the host said while the tools ran
+                // follows their results, so the model reads it before it plans
+                // its next call rather than when it next stops calling tools.
+                // After the abort check, so a stopped turn never ends on a
+                // steer nobody answers.
+                if std::mem::take(&mut after_tools) {
+                    for steer in controls.drain_steers() {
+                        deliver_steer(messages, events, steer);
+                    }
                 }
 
                 let request = GenerateRequest {
@@ -818,7 +858,7 @@ impl AgentLoop {
                     // ("talk to it mid-run"); otherwise the turn ends.
                     match controls.next_steer() {
                         Some(steer) => {
-                            messages.push(Message::user(steer));
+                            deliver_steer(messages, events, steer);
                             continue;
                         }
                         None => return Ok(StopReason::Idle),
@@ -843,6 +883,7 @@ impl AgentLoop {
                     )
                     .await?,
                 );
+                after_tools = true;
             }
             Ok(StopReason::MaxSteps)
         }
@@ -1029,11 +1070,13 @@ impl AgentSession {
         }
     }
 
-    /// Inject a follow-up message into the **currently running** turn: instead of
-    /// going idle when the model next answers, the loop continues with this
-    /// message (the "talk to it mid-run" steering). A steer queued just before a
-    /// `prompt` is picked up by that turn; anything left unconsumed is cleared
-    /// when the turn ends (it never leaks into a later prompt).
+    /// Inject a follow-up message into the **currently running** turn (the
+    /// "talk to it mid-run" steering). The loop reads it at the next step
+    /// boundary: right after the tool batch that is running, beside its
+    /// results, or, when the model answers without tools, instead of going
+    /// idle. [`AgentEvent::Steered`] reports each one read. A steer queued just
+    /// before a `prompt` is picked up by that turn; anything left unconsumed is
+    /// cleared when the turn ends (it never leaks into a later prompt).
     pub fn steer(&self, text: impl Into<String>) {
         if let Ok(mut queue) = self.controls.queue.lock() {
             queue.push_back(text.into());
@@ -2252,6 +2295,16 @@ mod tests {
         assert_eq!(args["api_key"], "[redacted]");
         assert_eq!(args["url"], "https://x.test");
 
+        // A steered message is the person's text, classified like any other.
+        assert_eq!(
+            adapter.redact(&AgentEvent::Steered {
+                text: "use sk-live-2".to_string()
+            }),
+            Some(AgentWireEvent::Steered {
+                text: "[redacted]".to_string()
+            })
+        );
+
         // Benign deltas and terminal reasons map across.
         assert_eq!(
             adapter.redact(&AgentEvent::AssistantDelta {
@@ -2513,6 +2566,136 @@ mod tests {
         let history = session.history().await.unwrap();
         assert_eq!(history[0].content.as_text(), "first");
         assert_eq!(history[2].content.as_text(), "and another thing");
+    }
+
+    /// A tool that, while it runs, does what a person does mid-run: queues a
+    /// steer, and with `abort` also presses stop.
+    struct Steerer {
+        controls: TurnControls,
+        abort: bool,
+    }
+    impl AiTool for Steerer {
+        const ID: &'static str = "steerer";
+        type Input = EchoIn;
+        type Output = EchoOut;
+        fn descriptor() -> Td {
+            Td::new("steerer", "Steers the turn while it runs")
+        }
+        fn call(&self, input: EchoIn, _c: AiToolContext) -> BoxFuture<'_, AgenkitResult<EchoOut>> {
+            if let Ok(mut queue) = self.controls.queue.lock() {
+                queue.push_back("also check b.rs".to_string());
+                queue.push_back("and c.rs".to_string());
+            }
+            if self.abort {
+                self.controls
+                    .abort
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Box::pin(async move { Ok(EchoOut { echoed: input.text }) })
+        }
+    }
+
+    async fn steered_mid_batch(abort: bool) -> (StopReason, Vec<Message>, Vec<AgentEvent>) {
+        let controls = TurnControls::default();
+        let agenkit = Agenkit::builder()
+            .provider(
+                MockProvider::new("local")
+                    .on_prompt_tool("go", "steerer", serde_json::json!({ "text": "a.rs" }))
+                    // The mock answers the latest message: the steer, when it
+                    // follows the tool result, else the result itself.
+                    .on_prompt_text("and c.rs", "checked b.rs and c.rs")
+                    .default_text("done with a.rs"),
+            )
+            .default_model(ModelRef::new("local/default"))
+            .tool(Steerer {
+                controls: controls.clone(),
+                abort,
+            })
+            .build()
+            .unwrap();
+        let loop_ = AgentLoop::new(
+            agenkit.inner.clone(),
+            Principal::anonymous(),
+            AgentConfig::new().tools(["steerer"]),
+        );
+        let (tx, mut rx) = unbounded_channel();
+        let mut messages = vec![Message::user("go")];
+        let (stop, _, _) = loop_.run_turn(&mut messages, &tx, &controls).await.unwrap();
+        drop(tx);
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        (stop, messages, events)
+    }
+
+    #[tokio::test]
+    async fn steers_queued_during_a_tool_batch_reach_the_next_step() {
+        let (stop, messages, events) = steered_mid_batch(false).await;
+        assert_eq!(stop, StopReason::Idle);
+        // go → tool call → tool result → both steers → the answer to them.
+        let texts: Vec<(Role, String)> = messages
+            .iter()
+            .map(|m| (m.role, m.content.as_text()))
+            .collect();
+        assert_eq!(texts.len(), 6, "{texts:?}");
+        assert_eq!(texts[2].0, Role::Tool);
+        assert_eq!(texts[3], (Role::User, "also check b.rs".to_string()));
+        assert_eq!(texts[4], (Role::User, "and c.rs".to_string()));
+        assert_eq!(
+            texts[5],
+            (Role::Assistant, "checked b.rs and c.rs".to_string())
+        );
+        // Each steer is reported once read: after the tool finished, before
+        // the model answered them.
+        let order: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolCompleted { .. } => Some("tool".to_string()),
+                AgentEvent::Steered { text } => Some(format!("steered: {text}")),
+                AgentEvent::AssistantText { text } => Some(format!("text: {text}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "tool",
+                "steered: also check b.rs",
+                "steered: and c.rs",
+                "text: checked b.rs and c.rs"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stopped_turn_does_not_end_on_an_unread_steer() {
+        let (stop, messages, events) = steered_mid_batch(true).await;
+        assert_eq!(stop, StopReason::Aborted);
+        // The turn ends with the tool result: the steers stay queued (the
+        // session clears them), never in the transcript unanswered.
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2].role, Role::Tool);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Steered { .. })),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_steer_that_continues_an_answered_turn_is_reported() {
+        let agenkit = chat("answer");
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        session.steer("and another thing");
+        let events: Vec<AgentEvent> = session.prompt("first").collect().await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Steered { text } if text == "and another thing")),
+            "{events:?}"
+        );
     }
 
     // ── review fixes ─────────────────────────────────────────────────────────
