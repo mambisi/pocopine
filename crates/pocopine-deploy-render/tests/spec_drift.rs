@@ -26,16 +26,23 @@ use pocopine_crypto::sha256_hex;
 const RENDER_OPENAPI_URL: &str =
     "https://api-docs.render.com/v1.0/openapi/render-public-api-1.json";
 
-/// SHA-256 of the canonicalised live spec, last reconciled 2026-09-12.
+/// SHA-256 of the canonicalised live spec, last reconciled 2026-11-12.
 /// Update this when the drift test reports a new hash for a reviewed,
-/// deliberate upstream change. Required operations, image-service creation
-/// and updates, deploys, env vars, scaling, and registry credentials remain
-/// compatible. Response IDs/names, nested serviceDetails.url, deploy image
-/// ref/sha and timestamps, and required log timestamp/message fields were
-/// reviewed, including the /logs/subscribe 101 reference. The client already
-/// tolerates absent legacy top-level service url/region fields. No client
-/// change is required.
-const EXPECTED_SHA256: &str = "e884fced6304e82f5ccd47b9db163323de9f2e8b5c461111ff098bf0ff3d9b89";
+/// deliberate upstream change.
+///
+/// 2026-11-12: no copy of the 2026-09-12 spec survives (Render does not
+/// version it), so every field the client uses was checked against the
+/// live spec instead: the service create body (`type`, `name`, `ownerId`,
+/// `envVars` key/value, `image` imagePath/ownerId/registryCredentialId,
+/// `serviceDetails` runtime `image`/region/plan, `starter` still a plan),
+/// the image PATCH, the `{service, cursor}` and `{deploy, cursor}` list
+/// envelopes, service id/name/type/serviceDetails/dashboardUrl, registry
+/// credential bodies (`GITHUB`/`GITLAB`/`DOCKER` still accepted, two
+/// registries added), the env-var PUT, `numInstances`, `imageUrl`, deploy
+/// id/status/image ref and sha/timestamps (every status the client
+/// matches is still in the enum), and the `/logs` query parameters and
+/// timestamp/message fields. No client change is required.
+const EXPECTED_SHA256: &str = "5435eeb49adad7072beafdbb32f2fe96e68759a7dfc210892e51e632078df8e0";
 
 /// Operations `crate::client` calls.
 const REQUIRED_OPERATIONS: &[(&str, &[&str])] = &[
