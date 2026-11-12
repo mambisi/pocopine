@@ -294,7 +294,10 @@ impl FrameworkRunner {
         })
     }
 
-    fn from_builder_with_repo_tools_and_session_root(
+    /// A runner over `builder`'s providers (a host's own, or a scripted
+    /// [`MockProvider`] in a host's tests) with the project's tools in
+    /// `root` and its sessions, memory and artifacts under `session_root`.
+    pub fn from_builder_with_repo_tools_and_session_root(
         builder: AgenkitBuilder,
         root: impl AsRef<Path>,
         session_root: impl AsRef<Path>,
@@ -382,7 +385,38 @@ impl FrameworkRunner {
         self
     }
 
+    /// Run one prompt to the end and return its report: the persisted
+    /// events, collected. A host that shows the turn as it happens, or talks
+    /// to it while it runs, uses [`start_prompt`](Self::start_prompt).
     pub async fn run_prompt(&self, options: AgentRunOptions) -> Result<AgentRunReport> {
+        self.run(options, None).await
+    }
+
+    /// Start one prompt and hand back the run while it goes: every
+    /// [`AgentEvent`] as it happens (text deltas included, which the report
+    /// leaves out), [`steer`](RunHandle::steer) and
+    /// [`abort`](RunHandle::abort) for the running turn, and
+    /// [`finish`](LiveRun::finish) for the same report
+    /// [`run_prompt`](Self::run_prompt) returns. The turn runs on a spawned
+    /// task, so this needs a Tokio runtime. Dropping the run before it
+    /// finishes aborts its turn at the next step boundary.
+    pub fn start_prompt(&self, options: AgentRunOptions) -> LiveRun {
+        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
+        let handle = RunHandle::default();
+        let runner = self.clone();
+        let live = Live {
+            tx,
+            handle: handle.clone(),
+        };
+        let task = tokio::spawn(async move { runner.run(options, Some(live)).await });
+        LiveRun {
+            events,
+            handle,
+            task: Some(task),
+        }
+    }
+
+    async fn run(&self, options: AgentRunOptions, live: Option<Live>) -> Result<AgentRunReport> {
         let agent_id = options.agent_id.clone();
         let model = options.model.clone();
         let system = options.system.clone();
@@ -584,8 +618,20 @@ impl FrameworkRunner {
             )
             .await?;
         let mut events = vec![started];
+        // Steers asked for before the turn opened are queued before
+        // `prompt`, which picks them up; an abort is applied again after it,
+        // since `prompt` clears the abort flag for the new turn.
+        if let Some(live) = &live {
+            live.handle.open(&session);
+        }
         let mut stream = session.prompt(options.prompt);
+        if let Some(live) = &live {
+            live.handle.started();
+        }
         while let Some(event) = stream.next().await {
+            if let Some(live) = &live {
+                let _ = live.tx.send(event.clone());
+            }
             let Some(event) = map_agent_event(event) else {
                 continue;
             };
@@ -597,6 +643,9 @@ impl FrameworkRunner {
                 )
                 .await?;
             events.push(event);
+        }
+        if let Some(live) = &live {
+            live.handle.detach();
         }
         if let Ok(mut current) = current_session.lock() {
             *current = None;
@@ -683,6 +732,116 @@ impl FrameworkRunner {
                 .await?;
         }
         Ok(())
+    }
+}
+
+/// What a live run sends to its host while it goes.
+struct Live {
+    tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    handle: RunHandle,
+}
+
+/// A prompt running (from [`FrameworkRunner::start_prompt`]): its events as
+/// they happen, and its controls.
+pub struct LiveRun {
+    events: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+    handle: RunHandle,
+    task: Option<tokio::task::JoinHandle<Result<AgentRunReport>>>,
+}
+
+impl LiveRun {
+    /// The next event of the turn, as it happens; `None` once the turn has
+    /// ended (its last event is [`AgentEvent::Stopped`] or
+    /// [`AgentEvent::Failed`]) or the run could not start (see
+    /// [`finish`](Self::finish)).
+    pub async fn next_event(&mut self) -> Option<AgentEvent> {
+        self.events.recv().await
+    }
+
+    /// The run's controls, to keep where the events are not read.
+    pub fn handle(&self) -> RunHandle {
+        self.handle.clone()
+    }
+
+    /// The report [`FrameworkRunner::run_prompt`] would have returned, once
+    /// the turn has ended; events not yet read are dropped.
+    pub async fn finish(mut self) -> Result<AgentRunReport> {
+        let task = self.task.take().context("the run was already finished")?;
+        task.await.context("the run's task stopped")?
+    }
+}
+
+impl Drop for LiveRun {
+    fn drop(&mut self) {
+        if self.task.as_ref().is_some_and(|t| !t.is_finished()) {
+            self.handle.abort();
+        }
+    }
+}
+
+/// The controls of a live run's turn. Cloneable; every clone reaches the
+/// same turn.
+#[derive(Clone, Default)]
+pub struct RunHandle(Arc<Mutex<RunControls>>);
+
+#[derive(Default)]
+struct RunControls {
+    /// The turn's session while it runs.
+    session: Option<AgentSession>,
+    /// Asked for before the turn opened.
+    steers: Vec<String>,
+    aborted: bool,
+    ended: bool,
+}
+
+impl RunHandle {
+    /// Queue a message for the running turn ([`AgentSession::steer`]): the
+    /// model reads it at the next step boundary, and
+    /// [`AgentEvent::Steered`] reports it read. False once the turn has
+    /// ended. A message queued as the turn ends may not be read either, so a
+    /// host sends what no `Steered` reported as the next prompt.
+    pub fn steer(&self, text: impl Into<String>) -> bool {
+        let mut c = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if c.ended {
+            return false;
+        }
+        match &c.session {
+            Some(session) => session.steer(text),
+            None => c.steers.push(text.into()),
+        }
+        true
+    }
+
+    /// Stop the turn at the next step boundary (between model and tool
+    /// calls); its last event is [`AgentEvent::Stopped`] with
+    /// [`StopReason::Aborted`].
+    pub fn abort(&self) {
+        let mut c = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        c.aborted = true;
+        if let Some(session) = &c.session {
+            session.abort_handle().abort();
+        }
+    }
+
+    fn open(&self, session: &AgentSession) {
+        let mut c = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        for text in c.steers.drain(..) {
+            session.steer(text);
+        }
+        c.session = Some(session.clone());
+    }
+
+    fn started(&self) {
+        let c = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let (true, Some(session)) = (c.aborted, &c.session) {
+            session.abort_handle().abort();
+        }
+    }
+
+    fn detach(&self) {
+        let mut c = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        c.session = None;
+        c.ended = true;
     }
 }
 
@@ -820,6 +979,112 @@ mod tests {
         .expect("tool completion maps to an event");
         let payload = event.payload.expect("tool payload");
         assert_eq!(payload["output"]["stdout"], "[redacted]");
+    }
+
+    fn live_options(prompt: &str, tool_ids: &[&str]) -> AgentRunOptions {
+        AgentRunOptions {
+            agent_id: "test".to_string(),
+            model: "local/default".to_string(),
+            system: "Use tools when needed.".to_string(),
+            prompt: prompt.to_string(),
+            thread_id: None,
+            max_steps_per_turn: 4,
+            tool_ids: tool_ids.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    async fn drain(run: &mut LiveRun) -> Vec<AgentEvent> {
+        let mut events = Vec::new();
+        while let Some(event) = run.next_event().await {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn a_live_run_hands_over_each_event_as_it_happens() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("note.txt"), "hello from repo\n").unwrap();
+        let provider = MockProvider::new("local")
+            .on_prompt_tool(
+                "read note",
+                "fs.read",
+                serde_json::json!({ "path": "note.txt", "start_line": 1, "max_lines": 1 }),
+            )
+            .default_text("done");
+        let builder = Agenkit::builder()
+            .provider(provider)
+            .default_model(ModelRef::new("local/default"));
+        let runner = FrameworkRunner::from_builder_with_repo_tools(builder, dir.path()).unwrap();
+        let mut run = runner.start_prompt(live_options("read note", &["fs.read"]));
+        let events = drain(&mut run).await;
+        let at = |pred: &dyn Fn(&AgentEvent) -> bool| events.iter().position(pred);
+        let tool =
+            at(&|e| matches!(e, AgentEvent::ToolCompleted { tool, .. } if tool == "fs.read"));
+        let delta = at(&|e| matches!(e, AgentEvent::AssistantDelta { .. }));
+        let text = at(&|e| matches!(e, AgentEvent::AssistantText { text } if text == "done"));
+        assert!(
+            matches!((tool, delta, text), (Some(t), Some(d), Some(x)) if t < d && d < x),
+            "{events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Stopped {
+                    reason: StopReason::Idle
+                })
+            ),
+            "{events:?}"
+        );
+        // The report is run_prompt's: the persisted events, no deltas.
+        let report = run.finish().await.unwrap();
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| e.tool.as_deref() == Some("fs.read"))
+        );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| e.message.as_deref() == Some("done"))
+        );
+        assert!(!report.thread_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_live_run_takes_a_steer_and_stops_when_asked() {
+        let runner = FrameworkRunner::mock();
+        // Asked for before the turn opened: the turn reads it.
+        let mut run = runner.start_prompt(live_options("hello", &[]));
+        assert!(run.handle().steer("and one more thing"));
+        let events = drain(&mut run).await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Steered { text } if text == "and one more thing")),
+            "{events:?}"
+        );
+        let handle = run.handle();
+        run.finish().await.unwrap();
+        assert!(
+            !handle.steer("too late"),
+            "a steer after the turn ended is refused"
+        );
+
+        let mut run = runner.start_prompt(live_options("hello", &[]));
+        run.handle().abort();
+        let events = drain(&mut run).await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Stopped {
+                    reason: StopReason::Aborted
+                })
+            ),
+            "{events:?}"
+        );
     }
 
     #[tokio::test]

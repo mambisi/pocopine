@@ -37,4 +37,6 @@ pub mod supervisor;
 pub mod tools;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use supervisor::{AgentRunOptions, AgentRunReport, FrameworkRunner, QwenProviderConfig};
+pub use supervisor::{
+    AgentRunOptions, AgentRunReport, FrameworkRunner, LiveRun, QwenProviderConfig, RunHandle,
+};
