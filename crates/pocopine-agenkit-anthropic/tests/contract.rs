@@ -181,3 +181,68 @@ async fn decodes_the_documented_message_response() {
     assert_eq!(response.text_output(), "Hi! My name is Claude.");
     assert_eq!(response.usage.unwrap().total(), 35);
 }
+
+/// A refusal as the API streamed it to `claude-opus-5` on 2026-11-12 (the
+/// explanation shortened): a safety classifier stopped the model before any
+/// content.
+const REFUSAL_SSE: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":14,"cache_creation_input_tokens":0,"cache_read_input_tokens":13632,"output_tokens":0}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":"cyber","explanation":"This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy."}},"usage":{"input_tokens":14,"cache_creation_input_tokens":0,"cache_read_input_tokens":13632,"output_tokens":0}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+#[tokio::test]
+async fn a_streamed_refusal_is_an_error_after_its_usage() {
+    let server = MockServer::start().await;
+    mount_sse(&server, REFUSAL_SSE).await;
+    let p = provider(&server);
+    let cx = ProviderContext::default();
+    let mut stream = p.generate_stream(text_request(), &cx);
+    let mut chunks = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        chunks.push(chunk);
+    }
+    assert_eq!(chunks.len(), 2, "usage, then the refusal");
+    match &chunks[0] {
+        Ok(StreamChunk::Usage(u)) => assert_eq!(u.cache_read_tokens, 13632),
+        other => panic!("expected usage, got {other:?}"),
+    }
+    let error = chunks[1].as_ref().unwrap_err().to_string();
+    assert!(
+        error.contains("refused the request (cyber): This request triggered"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_message_is_an_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": [],
+            "stop_reason": "refusal",
+            "stop_details": {"type": "refusal", "category": "cyber", "explanation": "Blocked."},
+            "usage": {"input_tokens": 10, "output_tokens": 0}
+        })))
+        .mount(&server)
+        .await;
+    let error = provider(&server)
+        .generate(text_request(), &ProviderContext::default())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("refused the request (cyber): Blocked."),
+        "{error}"
+    );
+}

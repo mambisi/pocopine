@@ -283,6 +283,9 @@ impl AnthropicProvider {
         })?;
         let parsed = serde_json::from_str::<MessagesResponse>(&body)
             .map_err(|err| AgenkitError::provider(format!("invalid response shape: {err}")))?;
+        if parsed.stop_reason.as_deref() == Some("refusal") {
+            return Err(wire::refusal(parsed.stop_details.as_ref()));
+        }
         Ok(parsed.into_agenkit(&names))
     }
 
@@ -406,6 +409,8 @@ struct SseDecoder<'a> {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
+    /// Set when the message stopped on a refusal: reported after the usage.
+    refused: Option<wire::StopDetails>,
     name_map: &'a ToolNameMap,
 }
 
@@ -418,6 +423,7 @@ impl<'a> SseDecoder<'a> {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            refused: None,
             name_map,
         }
     }
@@ -503,7 +509,12 @@ impl<'a> SseDecoder<'a> {
                 self.emit_tool(index, tx);
                 self.emit_thinking(index, tx);
             }
-            StreamEvent::MessageDelta { usage } => {
+            StreamEvent::MessageDelta { usage, delta } => {
+                if let Some(delta) = delta
+                    && delta.stop_reason.as_deref() == Some("refusal")
+                {
+                    self.refused = Some(delta.stop_details.unwrap_or_default());
+                }
                 if let Some(usage) = usage {
                     // `message_delta` usage is cumulative, so the latest value
                     // wins. It may also restate `input_tokens` (e.g. when a
@@ -553,6 +564,10 @@ impl<'a> SseDecoder<'a> {
                 Usage::new(self.input_tokens, self.output_tokens)
                     .with_cache(self.cache_read_tokens, self.cache_creation_tokens),
             )));
+        }
+        // After the usage, so the refused call is still metered.
+        if let Some(details) = self.refused.take() {
+            let _ = tx.send(Err(wire::refusal(Some(&details))));
         }
     }
 

@@ -16,8 +16,8 @@
 
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
 use pocopine_agenkit_core::{
-    AgenkitResult, Content, ContentPart, Message, ModelRef, Role, ThinkingLevel, ToolCall,
-    ToolDescriptor, ToolNameMap, Usage,
+    AgenkitError, AgenkitResult, Content, ContentPart, Message, ModelRef, Role, ThinkingLevel,
+    ToolCall, ToolDescriptor, ToolNameMap, Usage,
 };
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -695,6 +695,8 @@ pub(crate) struct MessagesResponse {
     #[serde(default)]
     pub(crate) stop_reason: Option<String>,
     #[serde(default)]
+    pub(crate) stop_details: Option<StopDetails>,
+    #[serde(default)]
     pub(crate) usage: Option<WireUsage>,
 }
 
@@ -803,6 +805,30 @@ impl WireUsage {
     }
 }
 
+/// What Anthropic says about a refused response (`stop_reason: "refusal"`):
+/// the safety classifier's category and its explanation.
+#[derive(Clone, Default, Deserialize)]
+pub(crate) struct StopDetails {
+    #[serde(default)]
+    pub(crate) category: Option<String>,
+    #[serde(default)]
+    pub(crate) explanation: Option<String>,
+}
+
+/// The error for a refused response. A safety classifier stopped the model
+/// (the 5 generation, Fable and Mythos have them), so whatever came before is
+/// not an answer, and an empty one would read as the model's.
+pub(crate) fn refusal(details: Option<&StopDetails>) -> AgenkitError {
+    let category = details.and_then(|d| d.category.as_deref());
+    let explanation = details.and_then(|d| d.explanation.as_deref());
+    AgenkitError::provider(match (category, explanation) {
+        (Some(c), Some(e)) => format!("the model refused the request ({c}): {e}"),
+        (Some(c), None) => format!("the model refused the request ({c})"),
+        (None, Some(e)) => format!("the model refused the request: {e}"),
+        (None, None) => "the model refused the request".to_string(),
+    })
+}
+
 pub(crate) fn finish_reason(raw: Option<&str>) -> FinishReason {
     match raw {
         Some("max_tokens") => FinishReason::Length,
@@ -812,6 +838,15 @@ pub(crate) fn finish_reason(raw: Option<&str>) -> FinishReason {
 }
 
 // ---- streaming events -------------------------------------------------------
+
+/// The `delta` of a `message_delta` event: how the message stopped.
+#[derive(Deserialize)]
+pub(crate) struct MessageDeltaBody {
+    #[serde(default)]
+    pub(crate) stop_reason: Option<String>,
+    #[serde(default)]
+    pub(crate) stop_details: Option<StopDetails>,
+}
 
 /// One decoded Anthropic SSE event. The `data:` payload is self-describing via
 /// its `type`, so the `event:` line is ignored.
@@ -835,6 +870,8 @@ pub(crate) enum StreamEvent {
     MessageDelta {
         #[serde(default)]
         usage: Option<WireUsage>,
+        #[serde(default)]
+        delta: Option<MessageDeltaBody>,
     },
     MessageStop,
     /// `ping` and any future event types.
