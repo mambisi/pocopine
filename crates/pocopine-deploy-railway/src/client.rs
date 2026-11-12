@@ -42,7 +42,8 @@ macro_rules! railway_op {
         #[graphql(
             schema_path = "schema.json",
             query_path = "graphql/railway.graphql",
-            response_derives = "Debug,Clone"
+            response_derives = "Debug,Clone",
+            variables_derives = "Default"
         )]
         struct $name;
     };
@@ -193,15 +194,9 @@ impl RailwayClient {
         info!(target: "pocopine.log", project = %name, "railway projectCreate");
         let vars = create_project::Variables {
             input: create_project::ProjectCreateInput {
-                default_environment_name: None,
-                description: None,
-                is_monorepo: None,
-                is_public: None,
                 name: Some(name.to_owned()),
-                pr_deploys: None,
-                repo: None,
-                runtime: None,
                 workspace_id: workspace_id.map(str::to_owned),
+                ..Default::default()
             },
         };
         self.run::<CreateProject>(vars, "projectCreate")?;
@@ -262,9 +257,7 @@ impl RailwayClient {
         };
         let vars = create_service::Variables {
             input: create_service::ServiceCreateInput {
-                branch: None,
                 environment_id: Some(environment_id.to_owned()),
-                icon: None,
                 name: Some(name.to_owned()),
                 project_id: project_id.to_owned(),
                 registry_credentials: registry_credentials.map(|c| {
@@ -275,11 +268,10 @@ impl RailwayClient {
                 }),
                 source: Some(create_service::ServiceSourceInput {
                     image: Some(image.to_owned()),
-                    repo: None,
+                    ..Default::default()
                 }),
-                template_id: None,
-                template_service_id: None,
                 variables: variables_json,
+                ..Default::default()
             },
         };
         let data = self.run::<CreateService>(vars, "serviceCreate")?;
@@ -303,9 +295,8 @@ impl RailwayClient {
         let vars = connect_service_image::Variables {
             id: service_id.to_owned(),
             input: connect_service_image::ServiceConnectInput {
-                branch: None,
                 image: Some(image.to_owned()),
-                repo: None,
+                ..Default::default()
             },
         };
         self.run::<ConnectServiceImage>(vars, "serviceConnect")?;
@@ -325,21 +316,8 @@ impl RailwayClient {
             service_id: service_id.to_owned(),
             environment_id: Some(environment_id.to_owned()),
             input: update_service_instance::ServiceInstanceUpdateInput {
-                build_command: None,
-                builder: None,
-                cron_schedule: None,
-                dockerfile_path: None,
-                draining_seconds: None,
-                pre_deploy_timeout_seconds: None,
                 healthcheck_path: cfg.healthcheck_path.clone(),
-                healthcheck_timeout: None,
-                ipv6_egress_enabled: None,
-                multi_region_config: None,
-                nixpacks_plan: None,
                 num_replicas: Some(i64::from(cfg.num_replicas)),
-                overlap_seconds: None,
-                pre_deploy_command: None,
-                railway_config_file: None,
                 region: cfg.region.clone(),
                 registry_credentials: cfg.registry_credentials.as_ref().map(|c| {
                     update_service_instance::RegistryCredentialsInput {
@@ -347,16 +325,11 @@ impl RailwayClient {
                         password: c.token.clone(),
                     }
                 }),
-                restart_policy_max_retries: None,
-                restart_policy_type: None,
-                root_directory: None,
-                sleep_application: None,
                 source: Some(update_service_instance::ServiceSourceInput {
                     image: Some(cfg.image.clone()),
-                    repo: None,
+                    ..Default::default()
                 }),
-                start_command: None,
-                watch_patterns: None,
+                ..Default::default()
             },
         };
         self.run::<UpdateServiceInstance>(vars, "serviceInstanceUpdate")?;
@@ -388,9 +361,9 @@ impl RailwayClient {
                 project_id: project_id.to_owned(),
                 replace: Some(false),
                 service_id: Some(service_id.to_owned()),
-                skip_deploys: None,
                 variables: serde_json::to_value(variables)
                     .context("railway: encoding service variables")?,
+                ..Default::default()
             },
         };
         self.run::<UpsertVariables>(vars, "variableCollectionUpsert")?;
@@ -572,8 +545,7 @@ impl RailwayClient {
                 environment_id: Some(environment_id.to_owned()),
                 project_id: Some(project_id.to_owned()),
                 service_id: Some(service_id.to_owned()),
-                include_deleted: None,
-                status: None,
+                ..Default::default()
             },
         };
         let data = self.run::<LatestDeployment>(vars, "deployments")?;
@@ -718,7 +690,7 @@ impl RailwayClient {
             input: create_service_domain::ServiceDomainCreateInput {
                 environment_id: environment_id.to_owned(),
                 service_id: service_id.to_owned(),
-                target_port: None,
+                ..Default::default()
             },
         };
         match self.run::<CreateServiceDomain>(vars, "serviceDomainCreate") {
