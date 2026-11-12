@@ -759,7 +759,16 @@ impl Provider for MockProvider {
             }
             Err(error) => vec![Err(error)],
         };
-        Box::pin(futures::stream::iter(chunks))
+        // The delay holds the first chunk back, as `generate`'s holds its
+        // answer: a streamed generation takes as long.
+        let delay = self.delay_ms;
+        let wait = futures::stream::once(async move {
+            if delay > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+        })
+        .filter_map(|()| async { None });
+        Box::pin(wait.chain(futures::stream::iter(chunks)))
     }
 }
 
@@ -834,6 +843,19 @@ mod tests {
             }
         }
         assert_eq!(tool_ids, vec!["search_docs".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_streamed_mock_answer_takes_its_delay() {
+        let provider = MockProvider::new("local")
+            .default_text("slow answer")
+            .with_delay_ms(50);
+        let cx = ProviderContext::default();
+        let started = tokio::time::Instant::now();
+        let mut stream = provider.generate_stream(request("hi", false), &cx);
+        let first = stream.next().await;
+        assert!(matches!(first, Some(Ok(StreamChunk::Text(_)))), "{first:?}");
+        assert!(started.elapsed() >= std::time::Duration::from_millis(50));
     }
 
     #[tokio::test]
