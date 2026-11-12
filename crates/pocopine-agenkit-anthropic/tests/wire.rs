@@ -7,7 +7,7 @@ use pocopine_agenkit::server::{
     Agenkit, AiFlowContext, AuthUser, BoxFuture, Flow, GenerateRequest, Principal, Provider,
     ProviderContext, ProviderCredential, ProviderCredentials, StreamChunk, models, with_principal,
 };
-use pocopine_agenkit_anthropic::AnthropicProvider;
+use pocopine_agenkit_anthropic::{AnthropicProvider, PromptCaching};
 use pocopine_agenkit_core::{
     AgenkitResult, Content, ContentPart, FlowStreamEvent, Message, StreamMode, ThinkingLevel,
     ToolDescriptor,
@@ -26,6 +26,15 @@ fn text_request(prompt: &str) -> GenerateRequest {
         messages: vec![Message::user(prompt)],
         ..GenerateRequest::default()
     }
+}
+
+/// The system prompt's text: one text block when it carries a cache marker
+/// (the default), a plain string otherwise.
+fn system_text(body: &serde_json::Value) -> &str {
+    body["system"]
+        .as_str()
+        .or_else(|| body["system"][0]["text"].as_str())
+        .unwrap_or_default()
 }
 
 /// Build one Anthropic SSE event (`event:` + `data:` lines, blank-line ended).
@@ -48,7 +57,11 @@ async fn maps_text_and_sends_anthropic_headers_with_required_max_tokens() {
             // The provider namespace is stripped and max_tokens is always set.
             assert_eq!(body["model"], "claude-opus-4-8");
             assert_eq!(body["max_tokens"], 4096);
-            assert_eq!(body["system"], "be brief");
+            // Cached by default: the system prompt is one marked text block.
+            assert_eq!(
+                body["system"],
+                json!([{"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}])
+            );
             ResponseTemplate::new(200).set_body_json(json!({
                 "content": [{"type": "text", "text": "uploads use presigned URLs"}],
                 "stop_reason": "end_turn",
@@ -174,7 +187,7 @@ async fn structured_with_user_tools_injects_prompt_not_forced_tool() {
                 vec!["weather_lookup"],
                 "no synthetic structured tool"
             );
-            let system = body["system"].as_str().unwrap_or_default();
+            let system = system_text(&body);
             assert!(
                 system.contains("conforms to this JSON Schema") && system.contains("title"),
                 "system prompt should carry the schema instruction: {system}"
@@ -540,9 +553,10 @@ fn debug_redacts_the_api_key() {
 
 #[tokio::test]
 async fn thinking_request_enables_budget_for_reasoning_model() {
-    // A reasoning-capable model (opus-4-8) with `ThinkingLevel::High` sends an
-    // `enabled` thinking block and bumps `max_tokens` above the budget so the
-    // model still has output room (Anthropic requires max_tokens > budget_tokens).
+    // A model that takes a thinking budget (haiku-4-5) with `ThinkingLevel::High`
+    // sends an `enabled` thinking block and bumps `max_tokens` above the budget
+    // so the model still has output room (Anthropic requires max_tokens >
+    // budget_tokens).
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -560,6 +574,7 @@ async fn thinking_request_enables_budget_for_reasoning_model() {
         .await;
 
     let request = GenerateRequest {
+        model: models::anthropic::CLAUDE_HAIKU_4_5,
         thinking: ThinkingLevel::High,
         ..text_request("think hard")
     };
@@ -573,7 +588,8 @@ async fn thinking_request_enables_budget_for_reasoning_model() {
 #[tokio::test]
 async fn thinking_adds_its_budget_on_top_of_an_explicit_max_tokens() {
     // A caller's explicit `max_tokens` is their OUTPUT budget; thinking is added
-    // on top, not overriding it (review #12): 500 output + 16384 thinking.
+    // on top, not overriding it (review #12): 500 output + 16384 thinking. On
+    // opus-4-8 that is adaptive thinking at high effort, with the same room.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -1042,4 +1058,36 @@ async fn no_store_match_falls_back_to_the_provider_credential() {
     // No principal in scope → anonymous → store None → baked "test-key".
     let answer = agenkit.ai().prompt("hi").generate_text().await.unwrap();
     assert_eq!(answer, "test-key");
+}
+
+#[tokio::test]
+async fn prompt_caching_off_sends_no_markers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(|req: &Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            assert_eq!(body["system"], "be brief");
+            assert!(
+                !String::from_utf8_lossy(&req.body).contains("cache_control"),
+                "no marker anywhere"
+            );
+            ResponseTemplate::new(200).set_body_json(json!({
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn"
+            }))
+        })
+        .mount(&server)
+        .await;
+    let request = GenerateRequest {
+        system: Some("be brief".to_string()),
+        tools: vec![ToolDescriptor::new("weather.lookup", "Look up weather")],
+        ..text_request("hi")
+    };
+    let response = provider(&server)
+        .with_prompt_caching(PromptCaching::Off)
+        .generate(request, &ProviderContext::default())
+        .await
+        .unwrap();
+    assert_eq!(response.text_output(), "ok");
 }

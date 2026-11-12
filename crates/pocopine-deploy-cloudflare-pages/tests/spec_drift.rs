@@ -46,7 +46,8 @@ const CLOUDFLARE_OPENAPI_URL: &str =
     "https://raw.githubusercontent.com/cloudflare/api-schemas/main/openapi.json";
 
 /// SHA-256 of the canonicalised pinned subtree, last reconciled
-/// 2026-08-15 against `tested_against` = `>=4.0.0, <5.0.0`.
+/// 2026-11-12 against cloudflare/api-schemas e411be7e
+/// (`tested_against` = `>=4.0.0, <5.0.0`).
 ///
 /// Update this when the drift test reports a new hash for a reviewed,
 /// deliberate upstream change. (2026-08-15: first pin. Every operation,
@@ -54,7 +55,15 @@ const CLOUDFLARE_OPENAPI_URL: &str =
 /// verified present upstream — including `commit_dirty` and both
 /// `_headers`/`_redirects` multipart parts on deployment creation, and
 /// `metadata.contentType` on asset upload.)
-const EXPECTED_SHA256: &str = "5d9d5ac0bb3e9cb3473c97d7fff2f36df3493962acaa0e3ede07c925b02d2499";
+///
+/// 2026-11-12, diffed against the 2026-09-03 pin (api-schemas d15601c7):
+/// stage `status` gains `skipped` (now mapped to `Canceled`) and
+/// `skip_reason` gains `superseded_queued_build`; projects gain the
+/// read-only `build_image_auto_upgrade`; the git `source` config moved
+/// into `pages_source_config` / `pages_source_type` refs with the same
+/// fields; the rest is descriptions, summaries and SDK metadata. Nothing
+/// the adapter sends or reads changed.
+const EXPECTED_SHA256: &str = "09b7dbe1da883512b534f8c5a7453dca35d91294022c0e93b86c12b268605915";
 
 const PROJECTS: &str = "/accounts/{account_id}/pages/projects";
 const PROJECT: &str = "/accounts/{account_id}/pages/projects/{project_name}";

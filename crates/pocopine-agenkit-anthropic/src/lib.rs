@@ -20,7 +20,11 @@
 //!
 //! Supports text + native **SSE streaming**, function **tools** (mapped to
 //! Anthropic content blocks), and schema-constrained **structured output** via
-//! a forced single tool (Anthropic has no `response_format`). The API key lives
+//! a forced single tool (Anthropic has no `response_format`). Requests are
+//! marked for Anthropic's **prompt cache** ([`PromptCaching`], on by default):
+//! the tools, the system prompt, and the history of a continuing conversation,
+//! so each step of an agent loop reads the prefix the step before it wrote,
+//! at a tenth of the input price or less. The API key lives
 //! only in the `x-api-key` header, is redacted from `Debug`, and never appears
 //! in errors (§D10).
 #![cfg(not(target_arch = "wasm32"))]
@@ -64,6 +68,25 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// Default retries on transient failures (429 / 5xx / network).
 const DEFAULT_MAX_RETRIES: u32 = 2;
 
+/// How requests are marked for Anthropic's prompt cache. A marked prefix is
+/// written once (at 1.25× the input price for five minutes, 2× for an hour)
+/// and read back by later requests that start with it, at a tenth of the
+/// input price or less; every read restarts its lifetime. Prefixes shorter
+/// than the model's minimum (512 to 4,096 tokens) are not cached, silently.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PromptCaching {
+    /// No cache markers: every request pays the full input price.
+    Off,
+    /// Entries live five minutes from their last read: the right choice when
+    /// steps or turns follow each other within minutes.
+    #[default]
+    FiveMinutes,
+    /// Entries live an hour from their last read: worth the dearer writes
+    /// only when requests sharing a prefix come 5 to 60 minutes apart.
+    OneHour,
+}
+
 /// A provider backed by the Anthropic Messages API (`/v1/messages`).
 #[derive(Clone)]
 pub struct AnthropicProvider {
@@ -74,6 +97,7 @@ pub struct AnthropicProvider {
     default_max_tokens: u32,
     request_timeout: Duration,
     max_retries: u32,
+    prompt_caching: PromptCaching,
     http: reqwest::Client,
 }
 
@@ -86,6 +110,7 @@ impl std::fmt::Debug for AnthropicProvider {
             .field("base_url", &self.base_url)
             .field("version", &self.version)
             .field("default_max_tokens", &self.default_max_tokens)
+            .field("prompt_caching", &self.prompt_caching)
             .field("credential", &self.credential)
             .finish()
     }
@@ -103,6 +128,7 @@ impl AnthropicProvider {
             default_max_tokens: DEFAULT_MAX_TOKENS,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_retries: DEFAULT_MAX_RETRIES,
+            prompt_caching: PromptCaching::default(),
             // Connect timeout only on the shared client; the total-request
             // timeout is applied per-call (non-streaming) so a long-lived SSE
             // stream is never cut. Use `with_http_client` for finer control.
@@ -152,6 +178,14 @@ impl AnthropicProvider {
     /// Retries on transient failures (429 / 5xx / network errors). `0` disables.
     pub fn with_max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
+        self
+    }
+
+    /// How requests are marked for the prompt cache; on (five minutes) by
+    /// default. Use [`PromptCaching::Off`] for an endpoint that rejects
+    /// `cache_control`.
+    pub fn with_prompt_caching(mut self, caching: PromptCaching) -> Self {
+        self.prompt_caching = caching;
         self
     }
 
@@ -239,7 +273,8 @@ impl AnthropicProvider {
 
     async fn message(&self, request: GenerateRequest) -> AgenkitResult<GenerateResponse> {
         let names = ToolNameMap::from_descriptors(&request.tools);
-        let wire = MessagesRequest::from_agenkit(&request, false, self.default_max_tokens)?;
+        let wire = MessagesRequest::from_agenkit(&request, false, self.default_max_tokens)?
+            .with_cache(self.prompt_caching);
         let response = self
             .send_with_retry(&wire, Some(self.request_timeout))
             .await?;
@@ -259,7 +294,8 @@ impl AnthropicProvider {
         tx: UnboundedSender<AgenkitResult<StreamChunk>>,
     ) -> AgenkitResult<()> {
         let names = ToolNameMap::from_descriptors(&request.tools);
-        let wire = MessagesRequest::from_agenkit(&request, true, self.default_max_tokens)?;
+        let wire = MessagesRequest::from_agenkit(&request, true, self.default_max_tokens)?
+            .with_cache(self.prompt_caching);
         // No total timeout on a stream; retry only the connect/status handshake.
         let response = self.send_with_retry(&wire, None).await?;
 

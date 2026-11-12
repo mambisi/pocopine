@@ -646,6 +646,8 @@ pub fn session_event_from_framework(event: &FrameworkEvent, timestamp_ms: u64) -
         FrameworkEventKind::ToolCompleted => SessionEventKind::ToolCompleted,
         FrameworkEventKind::ToolFailed => SessionEventKind::ToolFailed,
         FrameworkEventKind::ToolBlocked => SessionEventKind::ToolBlocked,
+        FrameworkEventKind::Steered => SessionEventKind::Steered,
+        FrameworkEventKind::Trimmed => SessionEventKind::Trimmed,
         FrameworkEventKind::Compacted => SessionEventKind::Compacted,
         FrameworkEventKind::Stopped { .. } => SessionEventKind::Stopped,
         FrameworkEventKind::Failed => SessionEventKind::Failed,
@@ -670,6 +672,7 @@ pub fn session_event_from_framework(event: &FrameworkEvent, timestamp_ms: u64) -
     session_event.policy = match &event.kind {
         FrameworkEventKind::ToolStarted
         | FrameworkEventKind::ToolCompleted
+        | FrameworkEventKind::Trimmed
         | FrameworkEventKind::Compacted => Some(SessionEventPolicy::SideEffecting),
         FrameworkEventKind::ToolFailed | FrameworkEventKind::Failed => {
             Some(SessionEventPolicy::Failed)

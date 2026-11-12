@@ -7,13 +7,21 @@
 //! messages (there is no `tool` role), and there is **no `response_format`** —
 //! structured output is obtained by forcing a single tool whose `input_schema`
 //! is the desired shape.
+//!
+//! [`MessagesRequest::with_cache`] adds prompt-cache breakpoints (Anthropic
+//! caches by prefix, in the order tools, system, messages): one on the last
+//! tool, one on the system prompt, and one on the last block of a continuing
+//! conversation, so each step of an agent loop reads what the step before it
+//! wrote.
 
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
 use pocopine_agenkit_core::{
     AgenkitResult, Content, ContentPart, Message, ModelRef, Role, ThinkingLevel, ToolCall,
     ToolDescriptor, ToolNameMap, Usage,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+
+use crate::PromptCaching;
 
 /// Name of the synthetic tool used to coax schema-shaped structured output.
 /// Conforms to Anthropic's `^[a-zA-Z0-9_-]{1,64}$` tool-name rule.
@@ -36,8 +44,86 @@ fn model_denies_tools(model: &ModelRef) -> bool {
     pocopine_agenkit::server::catalog::lookup(model).is_some_and(|m| !m.tools)
 }
 
-/// Map a [`ThinkingLevel`] to an Anthropic extended-thinking `budget_tokens`.
-/// `Off` requests no thinking. The minimum Anthropic accepts is 1024.
+/// How a Claude model is asked to reason, read from its id: the catalog says
+/// whether a model reasons, not which request shape it accepts, and the
+/// shapes changed across generations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThinkingStyle {
+    /// `{"type":"enabled","budget_tokens":N}`: Claude 4.5 and earlier.
+    Budget,
+    /// `{"type":"adaptive"}`, depth through `output_config.effort`: Opus and
+    /// Sonnet 4.6 (where budgets are deprecated) and every later model (where
+    /// a budget is refused with a 400).
+    Adaptive {
+        /// The model reasons when the request says nothing, and cannot be
+        /// told not to (the 5 generation, Fable, Mythos). A forced
+        /// `tool_choice` is refused while it reasons.
+        by_default: bool,
+        /// The model returns reasoning text only with `display: "summarized"`
+        /// (Opus 4.7 on); Opus and Sonnet 4.6 return it unasked and predate
+        /// the field.
+        summarize: bool,
+    },
+}
+
+/// The [`ThinkingStyle`] of a Claude model by its id, in any of the forms
+/// providers write it (`claude-opus-4-8`, `claude-3-7-sonnet-20250219`,
+/// `claude-opus-4-5@20251101`, `anthropic.claude-haiku-4-5-v1:0`). `None` for
+/// a model that does not reason, or an id this does not recognise.
+fn thinking_style(model: &ModelRef) -> Option<ThinkingStyle> {
+    let id = model.model();
+    let rest = &id[id.find("claude-")? + "claude-".len()..];
+    let mut family = None;
+    let mut version: Vec<u32> = Vec::new();
+    for token in rest.split(['-', '@', ':', '.']) {
+        match token {
+            "opus" | "sonnet" | "haiku" | "fable" | "mythos" if family.is_none() => {
+                family = Some(token);
+            }
+            // Version parts are short; a date (`20250514`) is not one.
+            t if t.len() <= 2 && version.len() < 2 => {
+                if let Ok(n) = t.parse() {
+                    version.push(n);
+                }
+            }
+            _ => {}
+        }
+    }
+    let at = (
+        version.first().copied().unwrap_or(0),
+        version.get(1).copied().unwrap_or(0),
+    );
+    let adaptive = |by_default, summarize| {
+        Some(ThinkingStyle::Adaptive {
+            by_default,
+            summarize,
+        })
+    };
+    match family? {
+        "fable" | "mythos" => adaptive(true, true),
+        "opus" | "sonnet" | "haiku" if at >= (5, 0) => adaptive(true, true),
+        "opus" | "sonnet" if at >= (4, 7) => adaptive(false, true),
+        "opus" | "sonnet" if at >= (4, 6) => adaptive(false, false),
+        "opus" | "sonnet" if at >= (4, 0) => Some(ThinkingStyle::Budget),
+        "sonnet" if at >= (3, 7) => Some(ThinkingStyle::Budget),
+        "haiku" if at >= (4, 5) => Some(ThinkingStyle::Budget),
+        _ => None,
+    }
+}
+
+/// `output_config.effort` for a [`ThinkingLevel`] on an adaptive model.
+fn reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low"),
+        ThinkingLevel::Medium => Some("medium"),
+        ThinkingLevel::High => Some("high"),
+    }
+}
+
+/// Map a [`ThinkingLevel`] to an Anthropic extended-thinking `budget_tokens`,
+/// also the output room added for an adaptive model's reasoning. `Off`
+/// requests no thinking. The minimum Anthropic accepts is 1024.
 fn reasoning_budget(level: ThinkingLevel) -> Option<u32> {
     match level {
         ThinkingLevel::Off => None,
@@ -60,16 +146,21 @@ pub(crate) struct MessagesRequest {
     /// when the neutral request leaves it unset.
     pub(crate) max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) system: Option<String>,
+    pub(crate) system: Option<SystemPrompt>,
     pub(crate) messages: Vec<WireMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) tools: Vec<WireTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_choice: Option<ToolChoice>,
-    /// Extended-thinking budget (roadmap W4); omitted unless requested for a
-    /// reasoning-capable model.
+    /// The reasoning request (roadmap W4): a budget or adaptive, by the
+    /// model ([`ThinkingStyle`]); omitted unless requested for a model that
+    /// reasons.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) thinking: Option<ThinkingConfig>,
+    /// `{"effort": ..}` with adaptive thinking; omitted otherwise, and when the
+    /// caller's `provider_options` carry their own `output_config`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_config: Option<OutputConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stream: Option<bool>,
     /// Provider-specific extra body fields
@@ -81,12 +172,23 @@ pub(crate) struct MessagesRequest {
     pub(crate) extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Anthropic's extended-thinking request block: `{"type":"enabled","budget_tokens":N}`.
+/// Anthropic's thinking request block: `{"type":"enabled","budget_tokens":N}`
+/// for a [`ThinkingStyle::Budget`] model, `{"type":"adaptive"}` (with
+/// `"display":"summarized"` where the model needs it) otherwise.
 #[derive(Serialize)]
 pub(crate) struct ThinkingConfig {
     #[serde(rename = "type")]
     pub(crate) kind: &'static str,
-    pub(crate) budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) display: Option<&'static str>,
+}
+
+/// `output_config`: how much the model reasons on an adaptive model.
+#[derive(Serialize)]
+pub(crate) struct OutputConfig {
+    pub(crate) effort: &'static str,
 }
 
 impl MessagesRequest {
@@ -124,21 +226,68 @@ impl MessagesRequest {
             .collect();
         let has_user_tools = !tools.is_empty();
 
-        // Extended thinking (W4): only for reasoning-capable models; `Off` and
-        // unknown/non-reasoning models send no `thinking` block.
-        let thinking_budget = model_supports_reasoning(&request.model)
-            .then(|| reasoning_budget(request.thinking))
-            .flatten();
+        // Reasoning (W4), in the shape the model accepts. An id this does not
+        // recognise falls back to the catalog: a reasoning model gets a budget.
+        let style = thinking_style(&request.model)
+            .or_else(|| model_supports_reasoning(&request.model).then_some(ThinkingStyle::Budget));
+        let level = request.thinking;
+        // `(request block, effort, output room added for the reasoning)`.
+        let (thinking, effort, thinking_room) = match style {
+            Some(ThinkingStyle::Budget) => match reasoning_budget(level) {
+                Some(budget) => (
+                    Some(ThinkingConfig {
+                        kind: "enabled",
+                        budget_tokens: Some(budget),
+                        display: None,
+                    }),
+                    None,
+                    budget,
+                ),
+                None => (None, None, 0),
+            },
+            Some(ThinkingStyle::Adaptive {
+                by_default,
+                summarize,
+            }) => match reasoning_budget(level) {
+                Some(room) => (
+                    Some(ThinkingConfig {
+                        kind: "adaptive",
+                        budget_tokens: None,
+                        display: summarize.then_some("summarized"),
+                    }),
+                    reasoning_effort(level),
+                    room,
+                ),
+                // Asked for none, a model that reasons anyway still does, at
+                // its default effort: leave it room so its answer is not cut.
+                None if by_default => (
+                    None,
+                    None,
+                    reasoning_budget(ThinkingLevel::Medium).unwrap_or(0),
+                ),
+                None => (None, None, 0),
+            },
+            None => (None, None, 0),
+        };
+        let reasons = thinking.is_some()
+            || matches!(
+                style,
+                Some(ThinkingStyle::Adaptive {
+                    by_default: true,
+                    ..
+                })
+            );
 
         // Structured output: Anthropic has no `response_format`.
         let mut tool_choice = None;
         if let Some(schema) = &request.json_schema {
             // A forced `tool_choice` is incompatible with extended thinking
-            // (Anthropic rejects forcing a specific tool while thinking is on), so
-            // when thinking is requested fall back to the system-prompt approach
-            // even with no user tools. Likewise for a model the catalog
-            // positively marks toolless — the trick rides tool calling.
-            if !has_user_tools && thinking_budget.is_none() && !model_denies_tools(&request.model) {
+            // (Anthropic rejects forcing a specific tool while the model
+            // reasons), so when it reasons, asked to or by default, fall back
+            // to the system-prompt approach even with no user tools. Likewise
+            // for a model the catalog positively marks toolless — the trick
+            // rides tool calling.
+            if !has_user_tools && !reasons && !model_denies_tools(&request.model) {
                 // With no user tools, force a single tool whose `input_schema` is
                 // the requested shape — the model must "call" it, yielding
                 // schema-constrained JSON.
@@ -146,6 +295,7 @@ impl MessagesRequest {
                     name: STRUCTURED_TOOL_NAME.to_string(),
                     description: "Return the final answer as a structured JSON object.".to_string(),
                     input_schema: normalize_schema(schema),
+                    cache_control: None,
                 });
                 tool_choice = Some(ToolChoice {
                     kind: "tool",
@@ -166,28 +316,138 @@ impl MessagesRequest {
 
         // Anthropic counts thinking + visible output both against `max_tokens`.
         // The caller's `max_tokens` is their OUTPUT budget, so add the thinking
-        // budget ON TOP of it — rather than overriding the caller's explicit cap
+        // room ON TOP of it — rather than overriding the caller's explicit cap
         // (which silently billed far more output than requested).
-        let mut max_tokens = request.max_tokens.unwrap_or(default_max_tokens);
-        let thinking = thinking_budget.map(|budget| {
-            max_tokens = max_tokens.saturating_add(budget);
-            ThinkingConfig {
-                kind: "enabled",
-                budget_tokens: budget,
-            }
-        });
+        let max_tokens = request
+            .max_tokens
+            .unwrap_or(default_max_tokens)
+            .saturating_add(thinking_room);
+        let output_config = effort
+            .filter(|_| !request.provider_options.contains_key("output_config"))
+            .map(|effort| OutputConfig { effort });
 
         Ok(Self {
             model: request.model.model().to_string(),
             max_tokens,
-            system,
+            system: system.map(SystemPrompt::new),
             messages,
             tools,
             tool_choice,
             thinking,
+            output_config,
             stream: stream.then_some(true),
             extra: request.provider_options.clone(),
         })
+    }
+}
+
+impl MessagesRequest {
+    /// Mark the request for Anthropic's prompt cache (at most 3 of the 4
+    /// breakpoints a request may carry):
+    ///
+    /// - the last tool, so the tool definitions are read back even when the
+    ///   system prompt differs;
+    /// - the system prompt, which caches tools and system together;
+    /// - the last block of the conversation, once it has an assistant turn:
+    ///   the next step of a loop, or the next turn of a thread, extends this
+    ///   prefix and reads it. A one-off request (no assistant turn yet) gets no
+    ///   history marker, so it never pays the cache-write premium on a prompt
+    ///   nothing reads again.
+    ///
+    /// A request whose `provider_options` set the top-level `cache_control`
+    /// (Anthropic's automatic caching) gets no history marker: that field
+    /// already places one on the last block.
+    pub(crate) fn with_cache(mut self, caching: PromptCaching) -> Self {
+        let Some(marker) = CacheControl::of(caching) else {
+            return self;
+        };
+        if let Some(tool) = self.tools.last_mut() {
+            tool.cache_control = Some(marker);
+        }
+        if let Some(system) = &mut self.system {
+            system.cache_control = Some(marker);
+        }
+        let continuing = self.messages.iter().any(|m| m.role == "assistant");
+        if continuing && !self.extra.contains_key("cache_control") {
+            mark_last_block(&mut self.messages, marker);
+        }
+        self
+    }
+}
+
+/// Put `marker` on the last block that can carry one. A `thinking` block
+/// cannot, so a trailing one is skipped.
+fn mark_last_block(messages: &mut [WireMessage], marker: CacheControl) {
+    let blocks = messages
+        .iter_mut()
+        .rev()
+        .flat_map(|m| m.content.iter_mut().rev());
+    for block in blocks {
+        if !matches!(block.block, ContentBlock::Thinking { .. }) {
+            block.cache_control = Some(marker);
+            return;
+        }
+    }
+}
+
+/// A prompt-cache breakpoint: `{"type":"ephemeral"}`, with `"ttl":"1h"` for
+/// the one-hour lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct CacheControl {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl: Option<&'static str>,
+}
+
+impl CacheControl {
+    fn of(caching: PromptCaching) -> Option<Self> {
+        let ttl = match caching {
+            PromptCaching::Off => return None,
+            PromptCaching::FiveMinutes => None,
+            PromptCaching::OneHour => Some("1h"),
+        };
+        Some(Self {
+            kind: "ephemeral",
+            ttl,
+        })
+    }
+}
+
+/// The top-level `system` field: a plain string, or one text block when it
+/// carries a cache breakpoint (only blocks can).
+pub(crate) struct SystemPrompt {
+    pub(crate) text: String,
+    cache_control: Option<CacheControl>,
+}
+
+impl SystemPrompt {
+    fn new(text: String) -> Self {
+        Self {
+            text,
+            cache_control: None,
+        }
+    }
+}
+
+impl Serialize for SystemPrompt {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct TextBlock<'a> {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            text: &'a str,
+            cache_control: CacheControl,
+        }
+        match self.cache_control {
+            None => serializer.serialize_str(&self.text),
+            Some(cache_control) => [TextBlock {
+                kind: "text",
+                text: &self.text,
+                cache_control,
+            }]
+            .serialize(serializer),
+        }
     }
 }
 
@@ -216,11 +476,12 @@ fn fold_messages(messages: &[Message], names: &ToolNameMap) -> Vec<WireMessage> 
         if blocks.is_empty() {
             continue;
         }
+        let blocks = blocks.into_iter().map(WireBlock::from);
         match folded.last_mut() {
             Some(last) if last.role == role => last.content.extend(blocks),
             _ => folded.push(WireMessage {
                 role,
-                content: blocks,
+                content: blocks.collect(),
             }),
         }
     }
@@ -334,7 +595,25 @@ fn normalize_schema(schema: &serde_json::Value) -> serde_json::Value {
 #[derive(Serialize)]
 pub(crate) struct WireMessage {
     pub(crate) role: &'static str,
-    pub(crate) content: Vec<ContentBlock>,
+    pub(crate) content: Vec<WireBlock>,
+}
+
+/// A content block as sent, with its cache breakpoint when it has one.
+#[derive(Serialize)]
+pub(crate) struct WireBlock {
+    #[serde(flatten)]
+    pub(crate) block: ContentBlock,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_control: Option<CacheControl>,
+}
+
+impl From<ContentBlock> for WireBlock {
+    fn from(block: ContentBlock) -> Self {
+        Self {
+            block,
+            cache_control: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -386,6 +665,8 @@ pub(crate) struct WireTool {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_control: Option<CacheControl>,
 }
 
 impl WireTool {
@@ -400,6 +681,7 @@ impl WireTool {
             name: names.wire(&descriptor.id),
             description: descriptor.description.clone(),
             input_schema,
+            cache_control: None,
         }
     }
 }
@@ -622,7 +904,10 @@ mod tests {
             ..GenerateRequest::default()
         };
         let wire = MessagesRequest::from_agenkit(&request, false, 4096).unwrap();
-        assert_eq!(wire.system.as_deref(), Some("be brief\nalso be kind"));
+        assert_eq!(
+            wire.system.as_ref().map(|s| s.text.as_str()),
+            Some("be brief\nalso be kind")
+        );
         // The system message is hoisted out, leaving only the user turn.
         let value = to_value(&wire);
         assert_eq!(value["messages"].as_array().unwrap().len(), 1);
@@ -649,8 +934,8 @@ mod tests {
         );
         assert!(
             wire.system
-                .as_deref()
-                .is_some_and(|s| s.contains("JSON Schema")),
+                .as_ref()
+                .is_some_and(|s| s.text.contains("JSON Schema")),
             "schema instruction should ride the system prompt"
         );
     }
@@ -845,6 +1130,307 @@ mod tests {
             mapped.structured_value(),
             Some(&serde_json::json!({"title": "X"}))
         );
+    }
+
+    #[test]
+    fn each_generation_gets_its_thinking_style() {
+        use ThinkingStyle::{Adaptive, Budget};
+        let style = |id: &str| thinking_style(&ModelRef::new(id));
+        let always = Some(Adaptive {
+            by_default: true,
+            summarize: true,
+        });
+        for id in [
+            "anthropic/claude-opus-5",
+            "anthropic/claude-opus-5-5",
+            "anthropic/claude-sonnet-5-5",
+            "anthropic/claude-haiku-5-5",
+            "anthropic/claude-fable-5-2",
+            "anthropic/claude-mythos-preview",
+        ] {
+            assert_eq!(style(id), always, "{id}");
+        }
+        let summarized = Some(Adaptive {
+            by_default: false,
+            summarize: true,
+        });
+        assert_eq!(style("anthropic/claude-opus-4-7-20260416"), summarized);
+        assert_eq!(style("anthropic/claude-opus-4-8"), summarized);
+        let plain = Some(Adaptive {
+            by_default: false,
+            summarize: false,
+        });
+        assert_eq!(style("anthropic/claude-opus-4-6"), plain);
+        assert_eq!(style("anthropic/claude-sonnet-4-6"), plain);
+        for id in [
+            "anthropic/claude-opus-4-5@20251101",
+            "anthropic/claude-sonnet-4-5-20250929",
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-opus-4-20250514",
+            "anthropic/claude-4-sonnet-20250514",
+            "anthropic/claude-3-7-sonnet-20250219",
+            "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        ] {
+            assert_eq!(style(id), Some(Budget), "{id}");
+        }
+        for id in [
+            "anthropic/claude-3-haiku-20240307",
+            "anthropic/claude-3-5-sonnet-20241022",
+            "openai/gpt-4o",
+        ] {
+            assert_eq!(style(id), None, "{id}");
+        }
+    }
+
+    fn thinking_request(model: &str, level: ThinkingLevel) -> GenerateRequest {
+        GenerateRequest {
+            model: ModelRef::new(model),
+            messages: vec![Message::new(Role::User, "think")],
+            thinking: level,
+            ..GenerateRequest::default()
+        }
+    }
+
+    #[test]
+    fn an_adaptive_model_gets_adaptive_thinking_and_an_effort() {
+        let value = to_value(
+            &MessagesRequest::from_agenkit(
+                &thinking_request("anthropic/claude-opus-4-8", ThinkingLevel::High),
+                false,
+                4096,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            value["thinking"],
+            serde_json::json!({"type": "adaptive", "display": "summarized"})
+        );
+        assert_eq!(
+            value["output_config"],
+            serde_json::json!({"effort": "high"})
+        );
+        assert_eq!(value["max_tokens"], 4096 + 16_384);
+
+        // 4.6 predates `display` and summarizes unasked.
+        let value = to_value(
+            &MessagesRequest::from_agenkit(
+                &thinking_request("anthropic/claude-sonnet-4-6", ThinkingLevel::Minimal),
+                false,
+                4096,
+            )
+            .unwrap(),
+        );
+        assert_eq!(value["thinking"], serde_json::json!({"type": "adaptive"}));
+        assert_eq!(value["output_config"]["effort"], "low");
+    }
+
+    #[test]
+    fn a_model_that_always_reasons_gets_room_and_no_forced_tool() {
+        // Off cannot turn its reasoning off: nothing is sent for it, the answer
+        // gets room beside it, and structured output takes the prompt path,
+        // since a forced tool is refused while the model reasons.
+        let mut request = thinking_request("anthropic/claude-opus-5", ThinkingLevel::Off);
+        request.json_schema = Some(serde_json::json!({"type": "object"}));
+        let wire = MessagesRequest::from_agenkit(&request, false, 4096).unwrap();
+        let value = to_value(&wire);
+        assert!(value.get("thinking").is_none());
+        assert!(value.get("output_config").is_none());
+        assert_eq!(value["max_tokens"], 4096 + 8_192);
+        assert!(value.get("tool_choice").is_none());
+        assert!(wire.system.as_ref().unwrap().text.contains("JSON Schema"));
+
+        // A model that reasons only when asked keeps the forced tool.
+        let mut request = thinking_request("anthropic/claude-opus-4-8", ThinkingLevel::Off);
+        request.json_schema = Some(serde_json::json!({"type": "object"}));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
+        assert_eq!(value["tool_choice"]["name"], STRUCTURED_TOOL_NAME);
+        assert_eq!(value["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn a_callers_output_config_is_left_to_them() {
+        let mut request = thinking_request("anthropic/claude-opus-4-8", ThinkingLevel::Medium);
+        request.provider_options.insert(
+            "output_config".to_string(),
+            serde_json::json!({"effort": "xhigh"}),
+        );
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
+        // Only the caller's object reaches the wire, not a second key.
+        let body =
+            serde_json::to_string(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap())
+                .unwrap();
+        assert_eq!(body.matches("\"output_config\"").count(), 1);
+        assert_eq!(value["output_config"]["effort"], "xhigh");
+        assert_eq!(value["thinking"]["type"], "adaptive");
+    }
+
+    /// A conversation in its second step: a prompt, the model's reasoning and
+    /// tool call, and the tool's result.
+    fn second_step() -> GenerateRequest {
+        GenerateRequest {
+            model: models::anthropic::CLAUDE_OPUS_4_8,
+            system: Some("you edit code".to_string()),
+            tools: vec![
+                ToolDescriptor::new("fs.read", "Read a file"),
+                ToolDescriptor::new("fs.write", "Write a file"),
+            ],
+            messages: vec![
+                Message::new(Role::User, "fix the bug"),
+                Message {
+                    role: Role::Assistant,
+                    content: Content::from_parts(vec![ContentPart::thinking(
+                        "look first",
+                        Some("sig".to_string()),
+                    )]),
+                    tool_calls: vec![ToolCall::new(
+                        "toolu_1",
+                        "fs.read",
+                        serde_json::json!({"path": "a.rs"}),
+                    )],
+                    tool_call_id: None,
+                },
+                Message {
+                    role: Role::Tool,
+                    content: Content::text("fn main() {}"),
+                    tool_calls: vec![],
+                    tool_call_id: Some("toolu_1".to_string()),
+                },
+            ],
+            ..GenerateRequest::default()
+        }
+    }
+
+    fn cached(request: &GenerateRequest, caching: PromptCaching) -> serde_json::Value {
+        to_value(
+            &MessagesRequest::from_agenkit(request, false, 4096)
+                .unwrap()
+                .with_cache(caching),
+        )
+    }
+
+    /// Every `cache_control` in a request body, by JSON pointer.
+    fn markers(value: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+        fn walk(v: &serde_json::Value, at: String, out: &mut Vec<(String, serde_json::Value)>) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    for (k, x) in map {
+                        if k == "cache_control" {
+                            out.push((at.clone(), x.clone()));
+                        } else {
+                            walk(x, format!("{at}/{k}"), out);
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for (i, x) in items.iter().enumerate() {
+                        walk(x, format!("{at}/{i}"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(value, String::new(), &mut out);
+        out
+    }
+
+    #[test]
+    fn caching_marks_the_tools_the_system_and_the_conversation() {
+        let value = cached(&second_step(), PromptCaching::FiveMinutes);
+        let ephemeral = serde_json::json!({"type": "ephemeral"});
+        assert_eq!(
+            markers(&value),
+            vec![
+                ("/messages/2/content/0".to_string(), ephemeral.clone()),
+                ("/system/0".to_string(), ephemeral.clone()),
+                ("/tools/1".to_string(), ephemeral),
+            ]
+        );
+        // The system prompt becomes one text block, the only form that can
+        // carry a marker; the marked tool_result keeps its own fields.
+        assert_eq!(value["system"][0]["type"], "text");
+        assert_eq!(value["system"][0]["text"], "you edit code");
+        let result = &value["messages"][2]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "toolu_1");
+    }
+
+    #[test]
+    fn caching_skips_a_trailing_thinking_block() {
+        let mut request = second_step();
+        request.messages.truncate(1);
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: Content::from_parts(vec![
+                ContentPart::text("done"),
+                ContentPart::thinking("checked", Some("sig".to_string())),
+            ]),
+            tool_calls: vec![],
+            tool_call_id: None,
+        });
+        let value = cached(&request, PromptCaching::FiveMinutes);
+        // Thinking replays before text, so the text block is last and marked.
+        let content = value["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "thinking");
+        assert!(content[0].get("cache_control").is_none());
+        assert_eq!(content[1]["cache_control"]["type"], "ephemeral");
+
+        let mut thinking_only = second_step();
+        thinking_only.messages[1].tool_calls.clear();
+        thinking_only.messages.truncate(2);
+        let value = cached(&thinking_only, PromptCaching::FiveMinutes);
+        assert!(
+            value["messages"][1]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        assert_eq!(
+            value["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral",
+            "the marker walks back past the thinking block"
+        );
+    }
+
+    #[test]
+    fn a_one_off_request_marks_no_history() {
+        let mut request = second_step();
+        request.messages.truncate(1);
+        let value = cached(&request, PromptCaching::FiveMinutes);
+        let at: Vec<String> = markers(&value).into_iter().map(|(at, _)| at).collect();
+        assert_eq!(at, ["/system/0", "/tools/1"]);
+    }
+
+    #[test]
+    fn caching_off_leaves_the_request_as_it_was() {
+        let value = cached(&second_step(), PromptCaching::Off);
+        assert!(markers(&value).is_empty());
+        assert_eq!(value["system"], "you edit code");
+    }
+
+    #[test]
+    fn one_hour_caching_sets_the_ttl_on_every_marker() {
+        let value = cached(&second_step(), PromptCaching::OneHour);
+        let found = markers(&value);
+        assert_eq!(found.len(), 3);
+        for (_, marker) in found {
+            assert_eq!(
+                marker,
+                serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_caching_in_provider_options_takes_the_history() {
+        let mut request = second_step();
+        request.provider_options.insert(
+            "cache_control".to_string(),
+            serde_json::json!({"type": "ephemeral"}),
+        );
+        let value = cached(&request, PromptCaching::FiveMinutes);
+        let at: Vec<String> = markers(&value).into_iter().map(|(at, _)| at).collect();
+        // The top-level field is the caller's; the provider adds only system
+        // and tools, so the request stays within four breakpoints.
+        assert_eq!(at, ["", "/system/0", "/tools/1"]);
     }
 
     #[test]

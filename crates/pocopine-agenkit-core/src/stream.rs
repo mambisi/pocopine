@@ -333,6 +333,16 @@ pub enum AgentWireEvent {
         /// Who produced it.
         origin: WireArtifactOrigin,
     },
+    /// Older tool outputs of the turn were trimmed to fit the context window.
+    Trimmed {
+        /// How many tool outputs were trimmed.
+        outputs: u64,
+    },
+    /// A steered message reached the model and is now part of the turn.
+    Steered {
+        /// The message (redacted).
+        text: String,
+    },
     /// The thread was compacted.
     Compacted {
         /// How many messages were folded into the summary.
