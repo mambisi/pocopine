@@ -553,9 +553,10 @@ fn debug_redacts_the_api_key() {
 
 #[tokio::test]
 async fn thinking_request_enables_budget_for_reasoning_model() {
-    // A reasoning-capable model (opus-4-8) with `ThinkingLevel::High` sends an
-    // `enabled` thinking block and bumps `max_tokens` above the budget so the
-    // model still has output room (Anthropic requires max_tokens > budget_tokens).
+    // A model that takes a thinking budget (haiku-4-5) with `ThinkingLevel::High`
+    // sends an `enabled` thinking block and bumps `max_tokens` above the budget
+    // so the model still has output room (Anthropic requires max_tokens >
+    // budget_tokens).
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -573,6 +574,7 @@ async fn thinking_request_enables_budget_for_reasoning_model() {
         .await;
 
     let request = GenerateRequest {
+        model: models::anthropic::CLAUDE_HAIKU_4_5,
         thinking: ThinkingLevel::High,
         ..text_request("think hard")
     };
@@ -586,7 +588,8 @@ async fn thinking_request_enables_budget_for_reasoning_model() {
 #[tokio::test]
 async fn thinking_adds_its_budget_on_top_of_an_explicit_max_tokens() {
     // A caller's explicit `max_tokens` is their OUTPUT budget; thinking is added
-    // on top, not overriding it (review #12): 500 output + 16384 thinking.
+    // on top, not overriding it (review #12): 500 output + 16384 thinking. On
+    // opus-4-8 that is adaptive thinking at high effort, with the same room.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))

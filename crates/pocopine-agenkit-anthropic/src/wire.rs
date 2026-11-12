@@ -44,8 +44,86 @@ fn model_denies_tools(model: &ModelRef) -> bool {
     pocopine_agenkit::server::catalog::lookup(model).is_some_and(|m| !m.tools)
 }
 
-/// Map a [`ThinkingLevel`] to an Anthropic extended-thinking `budget_tokens`.
-/// `Off` requests no thinking. The minimum Anthropic accepts is 1024.
+/// How a Claude model is asked to reason, read from its id: the catalog says
+/// whether a model reasons, not which request shape it accepts, and the
+/// shapes changed across generations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThinkingStyle {
+    /// `{"type":"enabled","budget_tokens":N}`: Claude 4.5 and earlier.
+    Budget,
+    /// `{"type":"adaptive"}`, depth through `output_config.effort`: Opus and
+    /// Sonnet 4.6 (where budgets are deprecated) and every later model (where
+    /// a budget is refused with a 400).
+    Adaptive {
+        /// The model reasons when the request says nothing, and cannot be
+        /// told not to (the 5 generation, Fable, Mythos). A forced
+        /// `tool_choice` is refused while it reasons.
+        by_default: bool,
+        /// The model returns reasoning text only with `display: "summarized"`
+        /// (Opus 4.7 on); Opus and Sonnet 4.6 return it unasked and predate
+        /// the field.
+        summarize: bool,
+    },
+}
+
+/// The [`ThinkingStyle`] of a Claude model by its id, in any of the forms
+/// providers write it (`claude-opus-4-8`, `claude-3-7-sonnet-20250219`,
+/// `claude-opus-4-5@20251101`, `anthropic.claude-haiku-4-5-v1:0`). `None` for
+/// a model that does not reason, or an id this does not recognise.
+fn thinking_style(model: &ModelRef) -> Option<ThinkingStyle> {
+    let id = model.model();
+    let rest = &id[id.find("claude-")? + "claude-".len()..];
+    let mut family = None;
+    let mut version: Vec<u32> = Vec::new();
+    for token in rest.split(['-', '@', ':', '.']) {
+        match token {
+            "opus" | "sonnet" | "haiku" | "fable" | "mythos" if family.is_none() => {
+                family = Some(token);
+            }
+            // Version parts are short; a date (`20250514`) is not one.
+            t if t.len() <= 2 && version.len() < 2 => {
+                if let Ok(n) = t.parse() {
+                    version.push(n);
+                }
+            }
+            _ => {}
+        }
+    }
+    let at = (
+        version.first().copied().unwrap_or(0),
+        version.get(1).copied().unwrap_or(0),
+    );
+    let adaptive = |by_default, summarize| {
+        Some(ThinkingStyle::Adaptive {
+            by_default,
+            summarize,
+        })
+    };
+    match family? {
+        "fable" | "mythos" => adaptive(true, true),
+        "opus" | "sonnet" | "haiku" if at >= (5, 0) => adaptive(true, true),
+        "opus" | "sonnet" if at >= (4, 7) => adaptive(false, true),
+        "opus" | "sonnet" if at >= (4, 6) => adaptive(false, false),
+        "opus" | "sonnet" if at >= (4, 0) => Some(ThinkingStyle::Budget),
+        "sonnet" if at >= (3, 7) => Some(ThinkingStyle::Budget),
+        "haiku" if at >= (4, 5) => Some(ThinkingStyle::Budget),
+        _ => None,
+    }
+}
+
+/// `output_config.effort` for a [`ThinkingLevel`] on an adaptive model.
+fn reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low"),
+        ThinkingLevel::Medium => Some("medium"),
+        ThinkingLevel::High => Some("high"),
+    }
+}
+
+/// Map a [`ThinkingLevel`] to an Anthropic extended-thinking `budget_tokens`,
+/// also the output room added for an adaptive model's reasoning. `Off`
+/// requests no thinking. The minimum Anthropic accepts is 1024.
 fn reasoning_budget(level: ThinkingLevel) -> Option<u32> {
     match level {
         ThinkingLevel::Off => None,
@@ -74,10 +152,15 @@ pub(crate) struct MessagesRequest {
     pub(crate) tools: Vec<WireTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_choice: Option<ToolChoice>,
-    /// Extended-thinking budget (roadmap W4); omitted unless requested for a
-    /// reasoning-capable model.
+    /// The reasoning request (roadmap W4): a budget or adaptive, by the
+    /// model ([`ThinkingStyle`]); omitted unless requested for a model that
+    /// reasons.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) thinking: Option<ThinkingConfig>,
+    /// `{"effort": ..}` with adaptive thinking; omitted otherwise, and when the
+    /// caller's `provider_options` carry their own `output_config`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_config: Option<OutputConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stream: Option<bool>,
     /// Provider-specific extra body fields
@@ -89,12 +172,23 @@ pub(crate) struct MessagesRequest {
     pub(crate) extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Anthropic's extended-thinking request block: `{"type":"enabled","budget_tokens":N}`.
+/// Anthropic's thinking request block: `{"type":"enabled","budget_tokens":N}`
+/// for a [`ThinkingStyle::Budget`] model, `{"type":"adaptive"}` (with
+/// `"display":"summarized"` where the model needs it) otherwise.
 #[derive(Serialize)]
 pub(crate) struct ThinkingConfig {
     #[serde(rename = "type")]
     pub(crate) kind: &'static str,
-    pub(crate) budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) display: Option<&'static str>,
+}
+
+/// `output_config`: how much the model reasons on an adaptive model.
+#[derive(Serialize)]
+pub(crate) struct OutputConfig {
+    pub(crate) effort: &'static str,
 }
 
 impl MessagesRequest {
@@ -132,21 +226,68 @@ impl MessagesRequest {
             .collect();
         let has_user_tools = !tools.is_empty();
 
-        // Extended thinking (W4): only for reasoning-capable models; `Off` and
-        // unknown/non-reasoning models send no `thinking` block.
-        let thinking_budget = model_supports_reasoning(&request.model)
-            .then(|| reasoning_budget(request.thinking))
-            .flatten();
+        // Reasoning (W4), in the shape the model accepts. An id this does not
+        // recognise falls back to the catalog: a reasoning model gets a budget.
+        let style = thinking_style(&request.model)
+            .or_else(|| model_supports_reasoning(&request.model).then_some(ThinkingStyle::Budget));
+        let level = request.thinking;
+        // `(request block, effort, output room added for the reasoning)`.
+        let (thinking, effort, thinking_room) = match style {
+            Some(ThinkingStyle::Budget) => match reasoning_budget(level) {
+                Some(budget) => (
+                    Some(ThinkingConfig {
+                        kind: "enabled",
+                        budget_tokens: Some(budget),
+                        display: None,
+                    }),
+                    None,
+                    budget,
+                ),
+                None => (None, None, 0),
+            },
+            Some(ThinkingStyle::Adaptive {
+                by_default,
+                summarize,
+            }) => match reasoning_budget(level) {
+                Some(room) => (
+                    Some(ThinkingConfig {
+                        kind: "adaptive",
+                        budget_tokens: None,
+                        display: summarize.then_some("summarized"),
+                    }),
+                    reasoning_effort(level),
+                    room,
+                ),
+                // Asked for none, a model that reasons anyway still does, at
+                // its default effort: leave it room so its answer is not cut.
+                None if by_default => (
+                    None,
+                    None,
+                    reasoning_budget(ThinkingLevel::Medium).unwrap_or(0),
+                ),
+                None => (None, None, 0),
+            },
+            None => (None, None, 0),
+        };
+        let reasons = thinking.is_some()
+            || matches!(
+                style,
+                Some(ThinkingStyle::Adaptive {
+                    by_default: true,
+                    ..
+                })
+            );
 
         // Structured output: Anthropic has no `response_format`.
         let mut tool_choice = None;
         if let Some(schema) = &request.json_schema {
             // A forced `tool_choice` is incompatible with extended thinking
-            // (Anthropic rejects forcing a specific tool while thinking is on), so
-            // when thinking is requested fall back to the system-prompt approach
-            // even with no user tools. Likewise for a model the catalog
-            // positively marks toolless — the trick rides tool calling.
-            if !has_user_tools && thinking_budget.is_none() && !model_denies_tools(&request.model) {
+            // (Anthropic rejects forcing a specific tool while the model
+            // reasons), so when it reasons, asked to or by default, fall back
+            // to the system-prompt approach even with no user tools. Likewise
+            // for a model the catalog positively marks toolless — the trick
+            // rides tool calling.
+            if !has_user_tools && !reasons && !model_denies_tools(&request.model) {
                 // With no user tools, force a single tool whose `input_schema` is
                 // the requested shape — the model must "call" it, yielding
                 // schema-constrained JSON.
@@ -175,16 +316,15 @@ impl MessagesRequest {
 
         // Anthropic counts thinking + visible output both against `max_tokens`.
         // The caller's `max_tokens` is their OUTPUT budget, so add the thinking
-        // budget ON TOP of it — rather than overriding the caller's explicit cap
+        // room ON TOP of it — rather than overriding the caller's explicit cap
         // (which silently billed far more output than requested).
-        let mut max_tokens = request.max_tokens.unwrap_or(default_max_tokens);
-        let thinking = thinking_budget.map(|budget| {
-            max_tokens = max_tokens.saturating_add(budget);
-            ThinkingConfig {
-                kind: "enabled",
-                budget_tokens: budget,
-            }
-        });
+        let max_tokens = request
+            .max_tokens
+            .unwrap_or(default_max_tokens)
+            .saturating_add(thinking_room);
+        let output_config = effort
+            .filter(|_| !request.provider_options.contains_key("output_config"))
+            .map(|effort| OutputConfig { effort });
 
         Ok(Self {
             model: request.model.model().to_string(),
@@ -194,6 +334,7 @@ impl MessagesRequest {
             tools,
             tool_choice,
             thinking,
+            output_config,
             stream: stream.then_some(true),
             extra: request.provider_options.clone(),
         })
@@ -989,6 +1130,138 @@ mod tests {
             mapped.structured_value(),
             Some(&serde_json::json!({"title": "X"}))
         );
+    }
+
+    #[test]
+    fn each_generation_gets_its_thinking_style() {
+        use ThinkingStyle::{Adaptive, Budget};
+        let style = |id: &str| thinking_style(&ModelRef::new(id));
+        let always = Some(Adaptive {
+            by_default: true,
+            summarize: true,
+        });
+        for id in [
+            "anthropic/claude-opus-5",
+            "anthropic/claude-opus-5-5",
+            "anthropic/claude-sonnet-5-5",
+            "anthropic/claude-haiku-5-5",
+            "anthropic/claude-fable-5-2",
+            "anthropic/claude-mythos-preview",
+        ] {
+            assert_eq!(style(id), always, "{id}");
+        }
+        let summarized = Some(Adaptive {
+            by_default: false,
+            summarize: true,
+        });
+        assert_eq!(style("anthropic/claude-opus-4-7-20260416"), summarized);
+        assert_eq!(style("anthropic/claude-opus-4-8"), summarized);
+        let plain = Some(Adaptive {
+            by_default: false,
+            summarize: false,
+        });
+        assert_eq!(style("anthropic/claude-opus-4-6"), plain);
+        assert_eq!(style("anthropic/claude-sonnet-4-6"), plain);
+        for id in [
+            "anthropic/claude-opus-4-5@20251101",
+            "anthropic/claude-sonnet-4-5-20250929",
+            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-opus-4-20250514",
+            "anthropic/claude-4-sonnet-20250514",
+            "anthropic/claude-3-7-sonnet-20250219",
+            "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        ] {
+            assert_eq!(style(id), Some(Budget), "{id}");
+        }
+        for id in [
+            "anthropic/claude-3-haiku-20240307",
+            "anthropic/claude-3-5-sonnet-20241022",
+            "openai/gpt-4o",
+        ] {
+            assert_eq!(style(id), None, "{id}");
+        }
+    }
+
+    fn thinking_request(model: &str, level: ThinkingLevel) -> GenerateRequest {
+        GenerateRequest {
+            model: ModelRef::new(model),
+            messages: vec![Message::new(Role::User, "think")],
+            thinking: level,
+            ..GenerateRequest::default()
+        }
+    }
+
+    #[test]
+    fn an_adaptive_model_gets_adaptive_thinking_and_an_effort() {
+        let value = to_value(
+            &MessagesRequest::from_agenkit(
+                &thinking_request("anthropic/claude-opus-4-8", ThinkingLevel::High),
+                false,
+                4096,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            value["thinking"],
+            serde_json::json!({"type": "adaptive", "display": "summarized"})
+        );
+        assert_eq!(
+            value["output_config"],
+            serde_json::json!({"effort": "high"})
+        );
+        assert_eq!(value["max_tokens"], 4096 + 16_384);
+
+        // 4.6 predates `display` and summarizes unasked.
+        let value = to_value(
+            &MessagesRequest::from_agenkit(
+                &thinking_request("anthropic/claude-sonnet-4-6", ThinkingLevel::Minimal),
+                false,
+                4096,
+            )
+            .unwrap(),
+        );
+        assert_eq!(value["thinking"], serde_json::json!({"type": "adaptive"}));
+        assert_eq!(value["output_config"]["effort"], "low");
+    }
+
+    #[test]
+    fn a_model_that_always_reasons_gets_room_and_no_forced_tool() {
+        // Off cannot turn its reasoning off: nothing is sent for it, the answer
+        // gets room beside it, and structured output takes the prompt path,
+        // since a forced tool is refused while the model reasons.
+        let mut request = thinking_request("anthropic/claude-opus-5", ThinkingLevel::Off);
+        request.json_schema = Some(serde_json::json!({"type": "object"}));
+        let wire = MessagesRequest::from_agenkit(&request, false, 4096).unwrap();
+        let value = to_value(&wire);
+        assert!(value.get("thinking").is_none());
+        assert!(value.get("output_config").is_none());
+        assert_eq!(value["max_tokens"], 4096 + 8_192);
+        assert!(value.get("tool_choice").is_none());
+        assert!(wire.system.as_ref().unwrap().text.contains("JSON Schema"));
+
+        // A model that reasons only when asked keeps the forced tool.
+        let mut request = thinking_request("anthropic/claude-opus-4-8", ThinkingLevel::Off);
+        request.json_schema = Some(serde_json::json!({"type": "object"}));
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
+        assert_eq!(value["tool_choice"]["name"], STRUCTURED_TOOL_NAME);
+        assert_eq!(value["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn a_callers_output_config_is_left_to_them() {
+        let mut request = thinking_request("anthropic/claude-opus-4-8", ThinkingLevel::Medium);
+        request.provider_options.insert(
+            "output_config".to_string(),
+            serde_json::json!({"effort": "xhigh"}),
+        );
+        let value = to_value(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap());
+        // Only the caller's object reaches the wire, not a second key.
+        let body =
+            serde_json::to_string(&MessagesRequest::from_agenkit(&request, false, 4096).unwrap())
+                .unwrap();
+        assert_eq!(body.matches("\"output_config\"").count(), 1);
+        assert_eq!(value["output_config"]["effort"], "xhigh");
+        assert_eq!(value["thinking"]["type"], "adaptive");
     }
 
     /// A conversation in its second step: a prompt, the model's reasoning and
