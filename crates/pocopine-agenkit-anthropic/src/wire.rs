@@ -7,13 +7,21 @@
 //! messages (there is no `tool` role), and there is **no `response_format`** —
 //! structured output is obtained by forcing a single tool whose `input_schema`
 //! is the desired shape.
+//!
+//! [`MessagesRequest::with_cache`] adds prompt-cache breakpoints (Anthropic
+//! caches by prefix, in the order tools, system, messages): one on the last
+//! tool, one on the system prompt, and one on the last block of a continuing
+//! conversation, so each step of an agent loop reads what the step before it
+//! wrote.
 
 use pocopine_agenkit::server::{FinishReason, GenerateRequest, GenerateResponse};
 use pocopine_agenkit_core::{
     AgenkitResult, Content, ContentPart, Message, ModelRef, Role, ThinkingLevel, ToolCall,
     ToolDescriptor, ToolNameMap, Usage,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+
+use crate::PromptCaching;
 
 /// Name of the synthetic tool used to coax schema-shaped structured output.
 /// Conforms to Anthropic's `^[a-zA-Z0-9_-]{1,64}$` tool-name rule.
@@ -60,7 +68,7 @@ pub(crate) struct MessagesRequest {
     /// when the neutral request leaves it unset.
     pub(crate) max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) system: Option<String>,
+    pub(crate) system: Option<SystemPrompt>,
     pub(crate) messages: Vec<WireMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) tools: Vec<WireTool>,
@@ -146,6 +154,7 @@ impl MessagesRequest {
                     name: STRUCTURED_TOOL_NAME.to_string(),
                     description: "Return the final answer as a structured JSON object.".to_string(),
                     input_schema: normalize_schema(schema),
+                    cache_control: None,
                 });
                 tool_choice = Some(ToolChoice {
                     kind: "tool",
@@ -180,7 +189,7 @@ impl MessagesRequest {
         Ok(Self {
             model: request.model.model().to_string(),
             max_tokens,
-            system,
+            system: system.map(SystemPrompt::new),
             messages,
             tools,
             tool_choice,
@@ -188,6 +197,116 @@ impl MessagesRequest {
             stream: stream.then_some(true),
             extra: request.provider_options.clone(),
         })
+    }
+}
+
+impl MessagesRequest {
+    /// Mark the request for Anthropic's prompt cache (at most 3 of the 4
+    /// breakpoints a request may carry):
+    ///
+    /// - the last tool, so the tool definitions are read back even when the
+    ///   system prompt differs;
+    /// - the system prompt, which caches tools and system together;
+    /// - the last block of the conversation, once it has an assistant turn:
+    ///   the next step of a loop, or the next turn of a thread, extends this
+    ///   prefix and reads it. A one-off request (no assistant turn yet) gets no
+    ///   history marker, so it never pays the cache-write premium on a prompt
+    ///   nothing reads again.
+    ///
+    /// A request whose `provider_options` set the top-level `cache_control`
+    /// (Anthropic's automatic caching) gets no history marker: that field
+    /// already places one on the last block.
+    pub(crate) fn with_cache(mut self, caching: PromptCaching) -> Self {
+        let Some(marker) = CacheControl::of(caching) else {
+            return self;
+        };
+        if let Some(tool) = self.tools.last_mut() {
+            tool.cache_control = Some(marker);
+        }
+        if let Some(system) = &mut self.system {
+            system.cache_control = Some(marker);
+        }
+        let continuing = self.messages.iter().any(|m| m.role == "assistant");
+        if continuing && !self.extra.contains_key("cache_control") {
+            mark_last_block(&mut self.messages, marker);
+        }
+        self
+    }
+}
+
+/// Put `marker` on the last block that can carry one. A `thinking` block
+/// cannot, so a trailing one is skipped.
+fn mark_last_block(messages: &mut [WireMessage], marker: CacheControl) {
+    let blocks = messages
+        .iter_mut()
+        .rev()
+        .flat_map(|m| m.content.iter_mut().rev());
+    for block in blocks {
+        if !matches!(block.block, ContentBlock::Thinking { .. }) {
+            block.cache_control = Some(marker);
+            return;
+        }
+    }
+}
+
+/// A prompt-cache breakpoint: `{"type":"ephemeral"}`, with `"ttl":"1h"` for
+/// the one-hour lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct CacheControl {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl: Option<&'static str>,
+}
+
+impl CacheControl {
+    fn of(caching: PromptCaching) -> Option<Self> {
+        let ttl = match caching {
+            PromptCaching::Off => return None,
+            PromptCaching::FiveMinutes => None,
+            PromptCaching::OneHour => Some("1h"),
+        };
+        Some(Self {
+            kind: "ephemeral",
+            ttl,
+        })
+    }
+}
+
+/// The top-level `system` field: a plain string, or one text block when it
+/// carries a cache breakpoint (only blocks can).
+pub(crate) struct SystemPrompt {
+    pub(crate) text: String,
+    cache_control: Option<CacheControl>,
+}
+
+impl SystemPrompt {
+    fn new(text: String) -> Self {
+        Self {
+            text,
+            cache_control: None,
+        }
+    }
+}
+
+impl Serialize for SystemPrompt {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct TextBlock<'a> {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            text: &'a str,
+            cache_control: CacheControl,
+        }
+        match self.cache_control {
+            None => serializer.serialize_str(&self.text),
+            Some(cache_control) => [TextBlock {
+                kind: "text",
+                text: &self.text,
+                cache_control,
+            }]
+            .serialize(serializer),
+        }
     }
 }
 
@@ -216,11 +335,12 @@ fn fold_messages(messages: &[Message], names: &ToolNameMap) -> Vec<WireMessage> 
         if blocks.is_empty() {
             continue;
         }
+        let blocks = blocks.into_iter().map(WireBlock::from);
         match folded.last_mut() {
             Some(last) if last.role == role => last.content.extend(blocks),
             _ => folded.push(WireMessage {
                 role,
-                content: blocks,
+                content: blocks.collect(),
             }),
         }
     }
@@ -334,7 +454,25 @@ fn normalize_schema(schema: &serde_json::Value) -> serde_json::Value {
 #[derive(Serialize)]
 pub(crate) struct WireMessage {
     pub(crate) role: &'static str,
-    pub(crate) content: Vec<ContentBlock>,
+    pub(crate) content: Vec<WireBlock>,
+}
+
+/// A content block as sent, with its cache breakpoint when it has one.
+#[derive(Serialize)]
+pub(crate) struct WireBlock {
+    #[serde(flatten)]
+    pub(crate) block: ContentBlock,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_control: Option<CacheControl>,
+}
+
+impl From<ContentBlock> for WireBlock {
+    fn from(block: ContentBlock) -> Self {
+        Self {
+            block,
+            cache_control: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -386,6 +524,8 @@ pub(crate) struct WireTool {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_control: Option<CacheControl>,
 }
 
 impl WireTool {
@@ -400,6 +540,7 @@ impl WireTool {
             name: names.wire(&descriptor.id),
             description: descriptor.description.clone(),
             input_schema,
+            cache_control: None,
         }
     }
 }
@@ -622,7 +763,10 @@ mod tests {
             ..GenerateRequest::default()
         };
         let wire = MessagesRequest::from_agenkit(&request, false, 4096).unwrap();
-        assert_eq!(wire.system.as_deref(), Some("be brief\nalso be kind"));
+        assert_eq!(
+            wire.system.as_ref().map(|s| s.text.as_str()),
+            Some("be brief\nalso be kind")
+        );
         // The system message is hoisted out, leaving only the user turn.
         let value = to_value(&wire);
         assert_eq!(value["messages"].as_array().unwrap().len(), 1);
@@ -649,8 +793,8 @@ mod tests {
         );
         assert!(
             wire.system
-                .as_deref()
-                .is_some_and(|s| s.contains("JSON Schema")),
+                .as_ref()
+                .is_some_and(|s| s.text.contains("JSON Schema")),
             "schema instruction should ride the system prompt"
         );
     }
@@ -845,6 +989,175 @@ mod tests {
             mapped.structured_value(),
             Some(&serde_json::json!({"title": "X"}))
         );
+    }
+
+    /// A conversation in its second step: a prompt, the model's reasoning and
+    /// tool call, and the tool's result.
+    fn second_step() -> GenerateRequest {
+        GenerateRequest {
+            model: models::anthropic::CLAUDE_OPUS_4_8,
+            system: Some("you edit code".to_string()),
+            tools: vec![
+                ToolDescriptor::new("fs.read", "Read a file"),
+                ToolDescriptor::new("fs.write", "Write a file"),
+            ],
+            messages: vec![
+                Message::new(Role::User, "fix the bug"),
+                Message {
+                    role: Role::Assistant,
+                    content: Content::from_parts(vec![ContentPart::thinking(
+                        "look first",
+                        Some("sig".to_string()),
+                    )]),
+                    tool_calls: vec![ToolCall::new(
+                        "toolu_1",
+                        "fs.read",
+                        serde_json::json!({"path": "a.rs"}),
+                    )],
+                    tool_call_id: None,
+                },
+                Message {
+                    role: Role::Tool,
+                    content: Content::text("fn main() {}"),
+                    tool_calls: vec![],
+                    tool_call_id: Some("toolu_1".to_string()),
+                },
+            ],
+            ..GenerateRequest::default()
+        }
+    }
+
+    fn cached(request: &GenerateRequest, caching: PromptCaching) -> serde_json::Value {
+        to_value(
+            &MessagesRequest::from_agenkit(request, false, 4096)
+                .unwrap()
+                .with_cache(caching),
+        )
+    }
+
+    /// Every `cache_control` in a request body, by JSON pointer.
+    fn markers(value: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+        fn walk(v: &serde_json::Value, at: String, out: &mut Vec<(String, serde_json::Value)>) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    for (k, x) in map {
+                        if k == "cache_control" {
+                            out.push((at.clone(), x.clone()));
+                        } else {
+                            walk(x, format!("{at}/{k}"), out);
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for (i, x) in items.iter().enumerate() {
+                        walk(x, format!("{at}/{i}"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(value, String::new(), &mut out);
+        out
+    }
+
+    #[test]
+    fn caching_marks_the_tools_the_system_and_the_conversation() {
+        let value = cached(&second_step(), PromptCaching::FiveMinutes);
+        let ephemeral = serde_json::json!({"type": "ephemeral"});
+        assert_eq!(
+            markers(&value),
+            vec![
+                ("/messages/2/content/0".to_string(), ephemeral.clone()),
+                ("/system/0".to_string(), ephemeral.clone()),
+                ("/tools/1".to_string(), ephemeral),
+            ]
+        );
+        // The system prompt becomes one text block, the only form that can
+        // carry a marker; the marked tool_result keeps its own fields.
+        assert_eq!(value["system"][0]["type"], "text");
+        assert_eq!(value["system"][0]["text"], "you edit code");
+        let result = &value["messages"][2]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "toolu_1");
+    }
+
+    #[test]
+    fn caching_skips_a_trailing_thinking_block() {
+        let mut request = second_step();
+        request.messages.truncate(1);
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: Content::from_parts(vec![
+                ContentPart::text("done"),
+                ContentPart::thinking("checked", Some("sig".to_string())),
+            ]),
+            tool_calls: vec![],
+            tool_call_id: None,
+        });
+        let value = cached(&request, PromptCaching::FiveMinutes);
+        // Thinking replays before text, so the text block is last and marked.
+        let content = value["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "thinking");
+        assert!(content[0].get("cache_control").is_none());
+        assert_eq!(content[1]["cache_control"]["type"], "ephemeral");
+
+        let mut thinking_only = second_step();
+        thinking_only.messages[1].tool_calls.clear();
+        thinking_only.messages.truncate(2);
+        let value = cached(&thinking_only, PromptCaching::FiveMinutes);
+        assert!(
+            value["messages"][1]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        assert_eq!(
+            value["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral",
+            "the marker walks back past the thinking block"
+        );
+    }
+
+    #[test]
+    fn a_one_off_request_marks_no_history() {
+        let mut request = second_step();
+        request.messages.truncate(1);
+        let value = cached(&request, PromptCaching::FiveMinutes);
+        let at: Vec<String> = markers(&value).into_iter().map(|(at, _)| at).collect();
+        assert_eq!(at, ["/system/0", "/tools/1"]);
+    }
+
+    #[test]
+    fn caching_off_leaves_the_request_as_it_was() {
+        let value = cached(&second_step(), PromptCaching::Off);
+        assert!(markers(&value).is_empty());
+        assert_eq!(value["system"], "you edit code");
+    }
+
+    #[test]
+    fn one_hour_caching_sets_the_ttl_on_every_marker() {
+        let value = cached(&second_step(), PromptCaching::OneHour);
+        let found = markers(&value);
+        assert_eq!(found.len(), 3);
+        for (_, marker) in found {
+            assert_eq!(
+                marker,
+                serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_caching_in_provider_options_takes_the_history() {
+        let mut request = second_step();
+        request.provider_options.insert(
+            "cache_control".to_string(),
+            serde_json::json!({"type": "ephemeral"}),
+        );
+        let value = cached(&request, PromptCaching::FiveMinutes);
+        let at: Vec<String> = markers(&value).into_iter().map(|(at, _)| at).collect();
+        // The top-level field is the caller's; the provider adds only system
+        // and tools, so the request stays within four breakpoints.
+        assert_eq!(at, ["", "/system/0", "/tools/1"]);
     }
 
     #[test]
