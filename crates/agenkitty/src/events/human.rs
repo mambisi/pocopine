@@ -32,6 +32,13 @@ pub fn render_human(events: &[FrameworkEvent]) {
                     event.message.as_deref().unwrap_or("")
                 );
             }
+            FrameworkEventKind::Steered => {
+                println!("steered: {}", event.message.as_deref().unwrap_or(""))
+            }
+            FrameworkEventKind::Trimmed => println!(
+                "context trimmed: {}",
+                event.message.as_deref().unwrap_or("older tool outputs")
+            ),
             FrameworkEventKind::Compacted => println!("session compacted"),
             FrameworkEventKind::Stopped { status } => println!("stopped: {status:?}"),
             FrameworkEventKind::Failed => {

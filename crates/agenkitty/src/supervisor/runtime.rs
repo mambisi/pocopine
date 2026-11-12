@@ -746,6 +746,8 @@ fn map_agent_event(event: AgentEvent) -> Option<FrameworkEvent> {
                 .with_payload(serde_json::json!({ "call_id": id }))
                 .with_source_ref(tool_call_ref(&id, &tool))
         }
+        AgentEvent::Steered { text } => FrameworkEvent::steered(redact_text_to_limit(&text, 4096)),
+        AgentEvent::Trimmed { outputs } => FrameworkEvent::trimmed(outputs),
         AgentEvent::Compacted { folded } => FrameworkEvent::compacted(folded),
         AgentEvent::Stopped { reason } => FrameworkEvent::stopped(match reason {
             StopReason::Idle => RunStatus::Idle,
@@ -778,6 +780,22 @@ mod tests {
         .expect("assistant text maps to an event");
 
         assert_eq!(event.message.as_deref(), Some("[redacted]"));
+    }
+
+    #[test]
+    fn steers_and_trims_map_to_their_own_events() {
+        // A steer is the person's text: redacted like assistant text.
+        let event = map_agent_event(AgentEvent::Steered {
+            text: "use api_key=secret".to_string(),
+        })
+        .expect("a steer maps to an event");
+        assert_eq!(event.kind, crate::events::FrameworkEventKind::Steered);
+        assert_eq!(event.message.as_deref(), Some("[redacted]"));
+
+        let event =
+            map_agent_event(AgentEvent::Trimmed { outputs: 3 }).expect("a trim maps to an event");
+        assert_eq!(event.kind, crate::events::FrameworkEventKind::Trimmed);
+        assert_eq!(event.payload, Some(serde_json::json!({ "outputs": 3 })));
     }
 
     #[test]

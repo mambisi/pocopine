@@ -103,6 +103,8 @@ Agenkitty runtime events into stable kinds:
 - `tool_completed`
 - `tool_failed`
 - `tool_blocked`
+- `steered` (a message steered into the running turn reached the model)
+- `trimmed` (older tool outputs of the turn were trimmed to fit the context window)
 - `compacted`
 - `stopped`
 - `failed`
@@ -327,6 +329,8 @@ JSONL record kinds:
 - `AgentEvent::ToolCompleted`
 - `AgentEvent::ToolFailed`
 - `AgentEvent::ToolBlocked`
+- `AgentEvent::Steered`
+- `AgentEvent::Trimmed`
 - `AgentEvent::Compacted`
 - `AgentEvent::Stopped`
 - `AgentEvent::Failed`

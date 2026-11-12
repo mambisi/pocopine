@@ -115,6 +115,11 @@ pub enum SessionEventKind {
     ToolCompleted,
     ToolFailed,
     ToolBlocked,
+    /// A message steered into the running turn reached the model.
+    Steered,
+    /// Older tool outputs of the turn were trimmed to fit the context window
+    /// (the count rides in the payload).
+    Trimmed,
     Compacted,
     Stopped,
     Failed,
@@ -141,6 +146,8 @@ impl SessionEventKind {
             Self::ToolCompleted => "tool_completed",
             Self::ToolFailed => "tool_failed",
             Self::ToolBlocked => "tool_blocked",
+            Self::Steered => "steered",
+            Self::Trimmed => "trimmed",
             Self::Compacted => "compacted",
             Self::Stopped => "stopped",
             Self::Failed => "failed",
@@ -183,6 +190,8 @@ impl<'de> Deserialize<'de> for SessionEventKind {
             "tool_completed" => Self::ToolCompleted,
             "tool_failed" => Self::ToolFailed,
             "tool_blocked" => Self::ToolBlocked,
+            "steered" => Self::Steered,
+            "trimmed" => Self::Trimmed,
             "compacted" => Self::Compacted,
             "stopped" => Self::Stopped,
             "failed" => Self::Failed,
@@ -430,6 +439,8 @@ mod tests {
             SessionEventKind::ToolCompleted,
             SessionEventKind::ToolFailed,
             SessionEventKind::ToolBlocked,
+            SessionEventKind::Steered,
+            SessionEventKind::Trimmed,
             SessionEventKind::Compacted,
             SessionEventKind::Stopped,
             SessionEventKind::Failed,

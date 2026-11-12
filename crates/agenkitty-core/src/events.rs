@@ -122,6 +122,31 @@ impl FrameworkEvent {
         }
     }
 
+    /// A message steered into the running turn reached the model.
+    pub fn steered(text: impl Into<String>) -> Self {
+        Self {
+            kind: FrameworkEventKind::Steered,
+            message: Some(text.into()),
+            tool: None,
+            call_id: None,
+            source_refs: Vec::new(),
+            payload: None,
+        }
+    }
+
+    /// The turn outgrew the model's context window and `outputs` older tool
+    /// outputs were replaced with a placeholder.
+    pub fn trimmed(outputs: u64) -> Self {
+        Self {
+            kind: FrameworkEventKind::Trimmed,
+            message: Some(format!("trimmed {outputs} tool outputs")),
+            tool: None,
+            call_id: None,
+            source_refs: Vec::new(),
+            payload: Some(serde_json::json!({ "outputs": outputs })),
+        }
+    }
+
     pub fn unknown(message: impl Into<String>) -> Self {
         Self {
             kind: FrameworkEventKind::Unknown,
@@ -158,6 +183,8 @@ pub enum FrameworkEventKind {
     ToolCompleted,
     ToolFailed,
     ToolBlocked,
+    Steered,
+    Trimmed,
     Compacted,
     Stopped { status: RunStatus },
     Failed,
