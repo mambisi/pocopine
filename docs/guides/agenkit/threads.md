@@ -94,18 +94,24 @@ summarized rather than retained — so the kept tail can never itself re-overflo
 the window, and an oversized (externalized) turn isn't re-inlined into the
 checkpoint.
 
-Compaction runs between turns. Inside a turn, where a coding agent's tool
-results pile up, the loop **trims** instead: before each model call, if the
-turn's messages would no longer fit, the output of its oldest tool results is
-replaced by a short placeholder (`TRIMMED_TOOL_OUTPUT`), oldest first, until
-they take six tenths of the room again; the results the model has not read yet
-go last. Only the running turn's own messages change, and they are stored as the
-model last saw them, so a resumed thread replays exactly that. Each trim emits
-`AgentEvent::Trimmed { outputs }`.
+Compaction also runs **inside a turn**, as coding harnesses compact a full
+context. Before each model call, once the conversation reaches nine tenths of
+the room the window leaves after the reply, the system prompt and the tools,
+the turn pauses with what it has done stored, the thread compacts, and the turn
+goes on from the summary. When the kept tail ends with tool results or a
+message of the person's, the model answers them; when only the summary is left,
+a short message asks it to continue where it left off. Each compaction emits
+`AgentEvent::Compacted { folded }`. A turn ends with `StopReason::ContextFull`
+only when nothing could be folded, such as a prompt larger than the window.
+Tool results are never edited in place: each tool bounds its own output.
+
+The summary replaces what the kept messages' reasoning blocks were produced
+after, so compaction drops that reasoning: Anthropic's newer models refuse a
+block whose earlier conversation changed.
 
 Both need the model's context window. The generated catalog sizes the models it
 lists; for any other model (a gateway's, a local one) describe it once at
-startup, and compaction, trimming and cost metering use it:
+startup, and compaction and cost metering use it:
 
 ```rust
 use pocopine_agenkit::server::catalog::{self, Model};
@@ -114,7 +120,7 @@ use pocopine_agenkit::server::catalog::{self, Model};
 catalog::register(Model::new("ollama/qwen3-coder", 65_536, 8_192))?;
 ```
 
-A model nobody sized is never compacted or trimmed; a provider that rejects an
+A model nobody sized is never compacted; a provider that rejects an
 over-long request still surfaces it as `AgenkitError::ContextOverflow`.
 
 ## Custom stores

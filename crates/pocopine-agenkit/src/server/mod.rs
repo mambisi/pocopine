@@ -67,10 +67,7 @@ pub use oauth::{
     StoreFuture, begin_authorization, complete_authorization, refresh,
 };
 pub use observe::{emit_trace_event, to_observed_event};
-pub use overflow::{
-    ContextHeadroom, TRIMMED_TOOL_OUTPUT, context_headroom, estimate_input_tokens,
-    is_context_overflow,
-};
+pub use overflow::{ContextHeadroom, context_headroom, estimate_input_tokens, is_context_overflow};
 pub use parallel::ParallelBuilder;
 #[cfg(feature = "server-plugin")]
 pub use plugin::{PrincipalLayer, PrincipalService, agenkit_server_plugin, principal_layer};

@@ -448,7 +448,7 @@ async fn maybe_compact<A: AiAgent>(
         model,
         provider,
         cx,
-        max_output,
+        CompactWhen::Overflowing { max_output },
         &config.compaction_provider_options,
         &observer,
     )
@@ -470,13 +470,6 @@ async fn maybe_compact<A: AiAgent>(
     Ok(())
 }
 
-/// Compact a thread if its active history would overflow the model's window
-/// (consumes the W3 headroom signal → writes a W7 checkpoint). Keeps the recent
-/// tail verbatim (token-bounded) and folds the older prefix into one summary.
-/// Returns `Some((folded, kept))` when it summarized, `None` otherwise.
-///
-/// Shared by the single-shot agent loop ([`maybe_compact`]) and the long-lived
-/// runtime ([`super::runtime`]); the caller emits its own checkpoint event.
 /// What one compaction pass cost and folded away.
 ///
 /// `usage` is the reason this is a struct rather than the old `(folded, kept)`
@@ -492,12 +485,33 @@ pub(crate) struct Compaction {
     pub(crate) usage: Usage,
 }
 
+/// When [`compact_thread`] folds a thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompactWhen {
+    /// Only if its history and a reply of `max_output` would overflow the
+    /// window (between turns).
+    Overflowing {
+        /// The output reserved for the next reply.
+        max_output: u32,
+    },
+    /// Now: a turn stopped because the conversation filled the window.
+    Full,
+}
+
+/// Compact a thread `when` its active history would overflow the model's
+/// window, or now (consumes the W3 headroom signal → writes a W7 checkpoint).
+/// Keeps the recent tail verbatim (token-bounded, its reasoning dropped) and
+/// folds the older prefix into one summary. Returns the [`Compaction`] when it
+/// summarized, `None` otherwise.
+///
+/// Shared by the single-shot agent loop ([`maybe_compact`]) and the long-lived
+/// runtime ([`super::runtime`]); the caller emits its own checkpoint event.
 pub(crate) async fn compact_thread(
     thread: &AgentThreadHandle,
     model: &ModelRef,
     provider: &Arc<dyn Provider>,
     cx: &ProviderContext,
-    max_output: u32,
+    when: CompactWhen,
     provider_options: &serde_json::Map<String, serde_json::Value>,
     observer: &(dyn loop_core::LoopObserver + Sync),
 ) -> AgenkitResult<Option<Compaction>> {
@@ -506,13 +520,21 @@ pub(crate) async fn compact_thread(
         return Ok(None);
     };
     let history = thread.active_history().await?;
-    if history.len() < 4 {
-        return Ok(None); // nothing meaningful to summarize yet
+    // Between turns, a short thread has nothing meaningful to summarize yet;
+    // a turn that filled the window needs room even then.
+    let full = when == CompactWhen::Full;
+    if history.len() < if full { 2 } else { 4 } {
+        return Ok(None);
     }
     // `active_history` is already `Vec<Message>` (full fidelity), so size and
     // split it directly — no lossy reconstruction, and the kept tail retains any
     // tool-call linkage verbatim.
-    if !context_headroom(catalog_model, &history, max_output).over {
+    // A turn that stopped because the conversation filled the window measured
+    // it with its system prompt and tools; between turns, the history alone
+    // decides.
+    if let CompactWhen::Overflowing { max_output } = when
+        && !context_headroom(catalog_model, &history, max_output).over
+    {
         return Ok(None); // still fits — no compaction
     }
 
@@ -540,17 +562,69 @@ pub(crate) async fn compact_thread(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let (summary, usage) =
+    let (mut summary, usage) =
         summarize(transcript, model, provider, cx, provider_options, observer).await?;
+    // The user's own words go on word for word, so the task and every
+    // instruction outlive whatever the summary leaves out.
+    let asked = folded_user_messages(&thread.history().await?, recent);
+    if !asked.is_empty() {
+        summary.push_str("\n\nThe user's messages so far, oldest first, word for word:");
+        for (i, text) in asked.iter().enumerate() {
+            summary.push_str(&format!("\n{}. {text}", i + 1));
+        }
+    }
     let (folded, kept) = (older.len() as u64, recent.len() as u64);
-    thread
-        .checkpoint(Message::system(summary), recent.to_vec())
-        .await?;
+    // The summary replaces what the kept turns' reasoning was produced after,
+    // so a model that binds reasoning to the conversation would refuse those
+    // blocks; to the others they matter little once the turns before them
+    // are a summary.
+    let mut recent = recent.to_vec();
+    super::overflow::drop_reasoning(&mut recent);
+    thread.checkpoint(Message::system(summary), recent).await?;
     Ok(Some(Compaction {
         folded,
         kept,
         usage,
     }))
+}
+
+/// How many characters of the user's own messages a compaction carries word
+/// for word after its summary (about 2,000 tokens), and how much of any one.
+const KEEP_USER_CHARS: usize = 8_000;
+const MAX_USER_CHARS: usize = 2_000;
+
+/// The user's messages a compaction folds away, from the thread's `full` log,
+/// so a summary that drops one does not lose the task: those not among the
+/// `kept` messages, the newest that fit in [`KEEP_USER_CHARS`], oldest first,
+/// each cut at [`MAX_USER_CHARS`]. The full log keeps every message, so the
+/// list spans earlier compactions too; the runtime's nudge to continue is left
+/// out.
+fn folded_user_messages(full: &[Message], kept: &[Message]) -> Vec<String> {
+    let texts: Vec<String> = full
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .map(|m| m.content.as_text())
+        .filter(|t| !t.trim().is_empty() && t != super::runtime::CONTINUE_AFTER_COMPACTION)
+        .collect();
+    // The kept messages are the newest of the log: their user messages are
+    // the last ones in it.
+    let kept_users = kept.iter().filter(|m| m.role == Role::User).count();
+    let folded = &texts[..texts.len().saturating_sub(kept_users)];
+    let mut out = Vec::new();
+    let mut total = 0;
+    for text in folded.iter().rev() {
+        let cut = match text.char_indices().nth(MAX_USER_CHARS) {
+            Some((at, _)) => format!("{}…", &text[..at]),
+            None => text.clone(),
+        };
+        if total + cut.len() > KEEP_USER_CHARS {
+            break;
+        }
+        total += cut.len();
+        out.push(cut);
+    }
+    out.reverse();
+    out
 }
 
 /// The token budget for the recent tail [`maybe_compact`] keeps verbatim. Older
@@ -627,15 +701,21 @@ fn compaction_request(
     GenerateRequest {
         model: model.clone(),
         system: Some(
-            "You are compacting an agent conversation to fit its context window. \
-             Summarize the transcript below concisely, preserving facts, decisions, \
-             tool results, and open tasks. Output only the summary."
+            "You are compacting an agent conversation to fit its context window. The \
+             agent will go on from your summary and its latest messages alone, so \
+             write what it needs to continue the work: the task and every request \
+             or instruction from the user that still applies; decisions made and \
+             facts learned, including what tool results showed that still matters; \
+             what has been done; and what remains, with the next step. Leave out raw \
+             tool output that no longer matters. Output only the summary."
                 .to_string(),
         ),
         messages: vec![Message::user(transcript)],
         tools: Vec::new(),
         json_schema: None,
-        max_tokens: Some(1024),
+        // A near-full context does not summarize into a few paragraphs, and a
+        // summary cut short loses the task.
+        max_tokens: Some(4096),
         thinking: Default::default(),
         // Compaction is a distinct provider effect. It receives only the
         // explicitly selected compaction options, never the ordinary turn's
@@ -651,6 +731,32 @@ mod tests {
 
     fn msg(text: &str) -> Message {
         Message::new(Role::User, text)
+    }
+
+    #[test]
+    fn a_compaction_carries_the_folded_user_messages_word_for_word() {
+        let nudge = super::super::runtime::CONTINUE_AFTER_COMPACTION;
+        let full = vec![
+            msg("fix the build"),
+            Message::assistant("on it"),
+            msg("and end with KITTEN"),
+            Message::tool_result("c1", "out"),
+            msg(nudge),
+            msg("what now?"),
+        ];
+        // The kept tail holds the newest user message; the nudge is not one.
+        let kept = vec![msg("what now?")];
+        assert_eq!(
+            folded_user_messages(&full, &kept),
+            ["fix the build", "and end with KITTEN"]
+        );
+        // A long message is cut, and the newest that fit come first to stay.
+        let long = "x".repeat(MAX_USER_CHARS + 50);
+        let mut many = vec![msg("oldest")];
+        many.extend((0..5).map(|_| msg(&long)));
+        let carried = folded_user_messages(&many, &[]);
+        assert_eq!(carried.len(), KEEP_USER_CHARS / (MAX_USER_CHARS + 3));
+        assert!(carried.iter().all(|t| t.ends_with('…')));
     }
 
     #[test]

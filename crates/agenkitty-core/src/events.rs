@@ -134,19 +134,6 @@ impl FrameworkEvent {
         }
     }
 
-    /// The turn outgrew the model's context window and `outputs` older tool
-    /// outputs were replaced with a placeholder.
-    pub fn trimmed(outputs: u64) -> Self {
-        Self {
-            kind: FrameworkEventKind::Trimmed,
-            message: Some(format!("trimmed {outputs} tool outputs")),
-            tool: None,
-            call_id: None,
-            source_refs: Vec::new(),
-            payload: Some(serde_json::json!({ "outputs": outputs })),
-        }
-    }
-
     pub fn unknown(message: impl Into<String>) -> Self {
         Self {
             kind: FrameworkEventKind::Unknown,
@@ -184,7 +171,6 @@ pub enum FrameworkEventKind {
     ToolFailed,
     ToolBlocked,
     Steered,
-    Trimmed,
     Compacted,
     Stopped { status: RunStatus },
     Failed,
@@ -197,5 +183,8 @@ pub enum RunStatus {
     Idle,
     MaxSteps,
     Aborted,
+    /// The conversation filled the model's context window and compaction
+    /// could not make room.
+    ContextFull,
     Unknown,
 }

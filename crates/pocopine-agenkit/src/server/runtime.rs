@@ -29,9 +29,9 @@ use tracing::Instrument as _;
 use futures::future::BoxFuture;
 use pocopine_agenkit_core::{
     AgenkitError, AgenkitResult, AgentThreadId, AgentWireEvent, ArtifactRef, Content, CostEstimate,
-    MediaGroupRef, Message, ModelRef, Redactor, RunId, StepId, StepKind, StepStatus, ThinkingLevel,
-    ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, WireArtifactOrigin, WireMediaMode,
-    WireStopReason, events,
+    MediaGroupRef, Message, ModelRef, Redactor, Role, RunId, StepId, StepKind, StepStatus,
+    ThinkingLevel, ThreadRetention, ToolCall, ToolDescriptor, TraceId, Usage, WireArtifactOrigin,
+    WireMediaMode, WireStopReason, events,
 };
 use pocopine_auth::Principal;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -44,7 +44,7 @@ pub use super::loop_core::ToolDecision;
 use super::loop_core::{
     LoopObserver, ToolErrorMode, TraceObserver, dispatch_tool_calls, run_model_step_streamed,
 };
-use super::provider::{GenerateRequest, ProviderContext};
+use super::provider::{GenerateRequest, Provider, ProviderContext};
 use super::run::RunState;
 use super::thread::{AgentThreadHandle, ThreadOwner};
 
@@ -59,6 +59,12 @@ pub enum StopReason {
     MaxSteps,
     /// An [`AbortHandle`] cancelled the turn (checked between steps).
     Aborted,
+    /// The conversation filled the model's context window and compaction
+    /// could not make room. A session compacts a full conversation and goes
+    /// on with the turn, so this ends a turn only when nothing could be
+    /// folded away (a single message larger than the window, or a model
+    /// nobody sized for compaction).
+    ContextFull,
 }
 
 /// A host-side firehose event from a running turn. Richer than the redacted
@@ -176,15 +182,9 @@ pub enum AgentEvent {
         /// The message, as queued.
         text: String,
     },
-    /// The turn grew past the model's context window, so the output of its
-    /// oldest tool results was replaced with a placeholder before the next
-    /// model call (compaction runs only between turns). The trimmed results
-    /// are stored trimmed, as the model last saw them.
-    Trimmed {
-        /// How many tool outputs were trimmed this time.
-        outputs: u64,
-    },
     /// The thread was compacted (L2): `folded` older messages → one summary.
+    /// Between turns, or in the middle of one that filled the context window,
+    /// which then goes on from the summary.
     Compacted {
         /// How many messages were folded into the summary.
         folded: u64,
@@ -474,13 +474,13 @@ fn redact_agent_event(event: &AgentEvent, redactor: &Redactor) -> AgentWireEvent
         AgentEvent::Steered { text } => AgentWireEvent::Steered {
             text: redactor.text(text),
         },
-        AgentEvent::Trimmed { outputs } => AgentWireEvent::Trimmed { outputs: *outputs },
         AgentEvent::Compacted { folded } => AgentWireEvent::Compacted { folded: *folded },
         AgentEvent::Stopped { reason } => AgentWireEvent::Stopped {
             reason: match reason {
                 StopReason::Idle => WireStopReason::Idle,
                 StopReason::MaxSteps => WireStopReason::MaxSteps,
                 StopReason::Aborted => WireStopReason::Aborted,
+                StopReason::ContextFull => WireStopReason::ContextFull,
             },
         },
         AgentEvent::Failed { error } => AgentWireEvent::Failed {
@@ -667,10 +667,15 @@ fn deliver_steer(messages: &mut Vec<Message>, events: &UnboundedSender<AgentEven
     let _ = events.send(AgentEvent::Steered { text });
 }
 
-/// The output reserved for each model call when sizing a turn's room in the
-/// context window, if the agent sets no `max_tokens`: the default of the
-/// Anthropic provider, which must send one.
+/// The output reserved for each model call when deciding whether a turn's
+/// conversation is full, if the agent sets no `max_tokens`: the default of
+/// the Anthropic provider, which must send one.
 const DEFAULT_OUTPUT_RESERVE: u32 = 4_096;
+
+/// What a turn that a compaction interrupted is told when nothing but the
+/// summary is left to continue from.
+pub(crate) const CONTINUE_AFTER_COMPACTION: &str = "The conversation so far was compacted into the summary \
+     above. Continue the task from where you left off.";
 
 /// The in-memory conversational loop core (L1). It owns no durable state — it
 /// runs one model↔tool turn over a `messages` transcript, emitting
@@ -716,11 +721,12 @@ impl AgentLoop {
     /// hit. Steered messages are read at step boundaries: all those queued
     /// while a tool batch ran go to the model with that batch's results, and
     /// one queued when the model answers continues the turn. When the
-    /// turn's messages outgrow the model's context window (as the catalog
-    /// or [`catalog::register`](super::catalog::register) sizes it), its
-    /// oldest tool outputs are trimmed before the next call
-    /// ([`AgentEvent::Trimmed`]). Appends every produced message (assistant text, tool-call turns, tool
-    /// results) to `messages`, emits events, and returns the [`StopReason`].
+    /// conversation has filled the model's context window (as the catalog or
+    /// [`catalog::register`](super::catalog::register) sizes it), the turn
+    /// stops before the next call with [`StopReason::ContextFull`], so the
+    /// session can compact and go on. Appends every produced message
+    /// (assistant text, tool-call turns, tool results) to `messages`, emits
+    /// events, and returns the [`StopReason`].
     /// Returns the stop reason, the resolved [`ProviderContext`] it used (so the
     /// caller can reuse the credential for compaction instead of resolving it a
     /// second time), and the turn's aggregate token [`Usage`] (summed across its
@@ -812,16 +818,11 @@ impl AgentLoop {
             append_budget: a.append_budget,
         });
 
-        // The room the turn's messages have in the model's context window, for
-        // trimming; unknown for a model neither the catalog nor the host sized.
-        let turn_start = messages.len();
-        let room = super::catalog::lookup(&model).map(|m| {
-            let fixed =
-                super::overflow::estimate_fixed_tokens(self.config.system.as_deref(), &tools);
-            let reserve = self.config.max_tokens.unwrap_or(DEFAULT_OUTPUT_RESERVE);
-            super::overflow::room_for_messages(m, reserve, fixed)
-        });
-        let keep_last_thinking = self.config.thinking != ThinkingLevel::Off;
+        // The window the conversation must fit, for the full-context check;
+        // unknown for a model neither the catalog nor the host sized.
+        let window = super::catalog::lookup(&model);
+        let fixed = super::overflow::estimate_fixed_tokens(self.config.system.as_deref(), &tools);
+        let reserve = self.config.max_tokens.unwrap_or(DEFAULT_OUTPUT_RESERVE);
 
         // The model↔tool steps, with the agent step closed afterwards so the trace
         // run is balanced on every exit (idle / steered / max-steps / error).
@@ -846,14 +847,12 @@ impl AgentLoop {
                         deliver_steer(messages, events, steer);
                     }
                 }
-                // Within a turn compaction cannot run: when the turn has
-                // outgrown the window, its oldest tool outputs give way.
-                if let Some(room) = room {
-                    let outputs =
-                        super::overflow::trim_turn(messages, turn_start, room, keep_last_thinking);
-                    if outputs > 0 {
-                        let _ = events.send(AgentEvent::Trimmed { outputs });
-                    }
+                // A full conversation stops before the call that would not fit,
+                // with a well-formed transcript, so the session can compact it.
+                if window
+                    .is_some_and(|w| super::overflow::needs_compaction(w, messages, fixed, reserve))
+                {
+                    return Ok(StopReason::ContextFull);
                 }
 
                 let request = GenerateRequest {
@@ -1337,7 +1336,10 @@ impl AgentSession {
     }
 
     /// One prompt's work: load history → persist the prompt → run the turn →
-    /// persist the full turn transcript → compact.
+    /// persist the full turn transcript → compact. A turn that filled the
+    /// context window ([`StopReason::ContextFull`]) is compacted and goes on
+    /// from the summary, as coding harnesses do, until it ends for another
+    /// reason or nothing more can be folded.
     async fn run_one_prompt(
         &self,
         text: String,
@@ -1347,7 +1349,7 @@ impl AgentSession {
         // `Vec<Message>` (full fidelity), so any persisted tool turns replay
         // verbatim — then append the new prompt.
         let mut messages: Vec<Message> = self.thread.active_history().await?;
-        let persist_from = messages.len();
+        let mut persist_from = messages.len();
         messages.push(Message::user(text.clone()));
 
         // Persist the prompt UP FRONT so it survives a mid-turn error (the turn
@@ -1368,30 +1370,80 @@ impl AgentSession {
             self.config.clone(),
         )
         .with_thread(self.thread.id.clone());
-        // Reuse the credential-resolved context the turn already produced for
-        // compaction, so a BYOK store isn't hit a second time per prompt.
-        let (reason, cx, usage) = agent_loop
-            .run_turn(&mut messages, events, &self.controls)
-            .await?;
+        // Model + provider re-resolution for compaction is a cheap registry
+        // lookup (no IO); the credential (the costly part) is reused from the
+        // context the turn resolved.
+        let model = self
+            .config
+            .model
+            .clone()
+            .or_else(|| self.inner.default_model.clone())
+            .ok_or_else(|| AgenkitError::config("agent runtime has no model"))?;
+        // Compactions in a row with no work between them: a second one would
+        // fold the same conversation again, so the turn ends instead.
+        let mut stalls = 0;
+        loop {
+            let (reason, cx, usage) = agent_loop
+                .run_turn(&mut messages, events, &self.controls)
+                .await?;
+            let produced = messages.len() > persist_from + 1;
+            self.persist_turn(&messages[persist_from + 1..]).await?;
+            self.record_usage(UsageSource::Turn, &model, usage).await;
 
-        // Persist the FULL turn transcript — everything the turn produced after
-        // the already-stored prompt: the assistant tool-call turns, the tool
-        // results (with their `tool_call_id` linkage), any steered follow-up
-        // prompts, and the final answer (reasoning + signature intact). So resume
-        // replays the exact `Vec<Message>` the model saw, not a lossy Q&A.
-        //
-        // All-or-nothing per turn: this runs only on `run_turn` success, and
-        // `run_turn` only returns `Ok` with a well-formed transcript (every
-        // assistant tool-call is followed by its results). On a turn error nothing
-        // here runs (the pre-stored prompt still survives), so resume never sees a
-        // half-open tool call. (Per-step streaming durability — surviving a crash
-        // *mid-turn* — would need a transactional batch append; tracked as a
-        // follow-up.)
+            // Compact if the (now longer) history would overflow the window,
+            // and always when the turn stopped because it did.
+            let full = reason == StopReason::ContextFull;
+            let provider = self.inner.providers.resolve(&model)?;
+            let compacted = self.compact(&model, &provider, &cx, full, events).await?;
+            if !full || !compacted {
+                return Ok(reason);
+            }
+            stalls = if produced { 0 } else { stalls + 1 };
+            if stalls > 1 {
+                return Ok(StopReason::ContextFull);
+            }
+            messages = self.thread.active_history().await?;
+            persist_from = messages.len();
+            // The kept messages end with tool results or a message of the
+            // person's, which the model answers; a bare summary needs a nudge.
+            let continued = matches!(
+                messages.last().map(|m| m.role),
+                Some(Role::User | Role::Tool)
+            ) && messages.len() > 1;
+            if continued {
+                // The turn goes on from what is there: nothing new to store,
+                // so the next save starts after it.
+                persist_from = messages.len() - 1;
+            } else {
+                let nudge = Message::user(CONTINUE_AFTER_COMPACTION);
+                self.thread
+                    .store
+                    .append(&self.thread.id, self.thread.owner(), vec![nudge.clone()])
+                    .await?;
+                messages.push(nudge);
+            }
+        }
+    }
+
+    /// Persist what a turn produced after its already-stored first message:
+    /// the assistant tool-call turns, the tool results (with their
+    /// `tool_call_id` linkage), any steered follow-up prompts, and the final
+    /// answer (reasoning + signature intact). So resume replays the exact
+    /// `Vec<Message>` the model saw, not a lossy Q&A.
+    ///
+    /// All-or-nothing per turn: this runs only on `run_turn` success, and
+    /// `run_turn` only returns `Ok` with a well-formed transcript (every
+    /// assistant tool-call is followed by its results). On a turn error nothing
+    /// here runs (the pre-stored prompt still survives), so resume never sees a
+    /// half-open tool call. (Per-step streaming durability — surviving a crash
+    /// *mid-turn* — would need a transactional batch append; tracked as a
+    /// follow-up.)
+    async fn persist_turn(&self, produced: &[Message]) -> AgenkitResult<()> {
         // Drop any truly-empty message (no content parts, no tool calls, no
         // result linkage) — e.g. an empty completion — so resume doesn't replay a
         // contentless turn that some providers reject. A thinking-only or
         // tool-call turn has parts/tool_calls and is kept.
-        let to_persist: Vec<Message> = messages[persist_from + 1..]
+        let to_persist: Vec<Message> = produced
             .iter()
             .filter(|m| {
                 !m.content.is_empty() || !m.tool_calls.is_empty() || m.tool_call_id.is_some()
@@ -1410,50 +1462,56 @@ impl AgentSession {
                 .append(&self.thread.id, self.thread.owner(), to_persist)
                 .await?;
         }
+        Ok(())
+    }
 
-        // Compact if the (now longer) history would overflow the window. Model +
-        // provider re-resolution is a cheap registry lookup (no IO); the credential
-        // (the costly part) is reused from `cx` above.
-        let model = self
-            .config
-            .model
-            .clone()
-            .or_else(|| self.inner.default_model.clone())
-            .ok_or_else(|| AgenkitError::config("agent runtime has no model"))?;
-        let provider = self.inner.providers.resolve(&model)?;
-
-        // Record this turn's usage + catalog cost as a provenance entry (P5) — a
-        // `StateChange` outside the conversation history (it never reaches the
-        // model), so a session's running cost is auditable from its durable log.
-        // Best-effort: a provenance write must not fail the prompt, but a failure
-        // is logged (not silently swallowed) so a divergence is observable.
-        if usage.total() > 0 {
-            let record = UsageRecord {
-                kind: UsageRecord::KIND.to_string(),
-                source: UsageSource::Turn,
-                model: model.as_str().to_string(),
-                usage,
-                cost: super::catalog::lookup(&model).map(|m| m.estimate_cost(&usage)),
-            };
-            match serde_json::to_value(&record) {
-                Ok(data) => {
-                    if let Err(error) = self.thread.append_state_change(data).await {
-                        tracing::warn!(
-                            target: "pocopine.log",
-                            thread_id = self.thread.id().as_str(),
-                            error = %error,
-                            "failed to record turn usage provenance",
-                        );
-                    }
-                }
-                Err(error) => tracing::warn!(
-                    target: "pocopine.log",
-                    error = %error,
-                    "failed to encode turn usage provenance",
-                ),
-            }
+    /// Record a model spend + catalog cost as a provenance entry (P5) — a
+    /// `StateChange` outside the conversation history (it never reaches the
+    /// model), so a session's running cost is auditable from its durable log.
+    /// `source` keeps compaction attributable apart from the turns. Best-effort:
+    /// a provenance write must not fail the prompt, but a failure is logged (not
+    /// silently swallowed) so a divergence is observable.
+    async fn record_usage(&self, source: UsageSource, model: &ModelRef, usage: Usage) {
+        if usage.total() == 0 {
+            return;
         }
+        let record = UsageRecord {
+            kind: UsageRecord::KIND.to_string(),
+            source,
+            model: model.as_str().to_string(),
+            usage,
+            cost: super::catalog::lookup(model).map(|m| m.estimate_cost(&usage)),
+        };
+        match serde_json::to_value(&record) {
+            Ok(data) => {
+                if let Err(error) = self.thread.append_state_change(data).await {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        thread_id = self.thread.id().as_str(),
+                        error = %error,
+                        "failed to record usage provenance",
+                    );
+                }
+            }
+            Err(error) => tracing::warn!(
+                target: "pocopine.log",
+                error = %error,
+                "failed to encode usage provenance",
+            ),
+        }
+    }
 
+    /// Compact the thread when its history would overflow the window, or
+    /// whenever `force` (a turn stopped because it filled it). Returns whether
+    /// it folded anything.
+    async fn compact(
+        &self,
+        model: &ModelRef,
+        provider: &Arc<dyn Provider>,
+        cx: &ProviderContext,
+        force: bool,
+        events: &UnboundedSender<AgentEvent>,
+    ) -> AgenkitResult<bool> {
         let max_output = self.config.max_tokens.unwrap_or(1024);
         // Compaction runs after the turn closed its own trace run, so give it one.
         // Without this its model call is untraced and its tokens unrecorded — the
@@ -1472,53 +1530,33 @@ impl AgentSession {
             run: &compaction_run,
             agent_step: compaction_run.next_step_id(),
         };
-        if let Some(compaction) = super::agent::compact_thread(
+        let Some(compaction) = super::agent::compact_thread(
             &self.thread,
-            &model,
-            &provider,
-            &cx,
-            max_output,
+            model,
+            provider,
+            cx,
+            if force {
+                super::agent::CompactWhen::Full
+            } else {
+                super::agent::CompactWhen::Overflowing { max_output }
+            },
             &self.config.compaction_provider_options,
             &compaction_observer,
         )
         .await?
-        {
-            // Its own provenance entry rather than folding into the turn's: the
-            // totals must include it, but compaction is not work the user asked
-            // for, so `source` keeps it attributable — readable separately if the
-            // spend is ever absorbed rather than charged on.
-            if compaction.usage.total() > 0 {
-                let record = UsageRecord {
-                    kind: UsageRecord::KIND.to_string(),
-                    source: UsageSource::Compaction,
-                    model: model.as_str().to_string(),
-                    usage: compaction.usage,
-                    cost: super::catalog::lookup(&model)
-                        .map(|m| m.estimate_cost(&compaction.usage)),
-                };
-                match serde_json::to_value(&record) {
-                    Ok(data) => {
-                        if let Err(error) = self.thread.append_state_change(data).await {
-                            tracing::warn!(
-                                target: "pocopine.log",
-                                thread_id = self.thread.id().as_str(),
-                                error = %error,
-                                "failed to record compaction usage provenance",
-                            );
-                        }
-                    }
-                    Err(error) => tracing::warn!(
-                        target: "pocopine.log",
-                        error = %error,
-                        "failed to encode compaction usage provenance",
-                    ),
-                }
-            }
-            let _ = events.send(AgentEvent::Compacted {
-                folded: compaction.folded,
-            });
-        }
-        Ok(reason)
+        else {
+            return Ok(false);
+        };
+        // Its own provenance entry rather than folding into the turn's: the
+        // totals must include it, but compaction is not work the user asked
+        // for, so `source` keeps it attributable — readable separately if the
+        // spend is ever absorbed rather than charged on.
+        self.record_usage(UsageSource::Compaction, model, compaction.usage)
+            .await;
+        let _ = events.send(AgentEvent::Compacted {
+            folded: compaction.folded,
+        });
+        Ok(compaction.folded > 0)
     }
 }
 
@@ -2333,12 +2371,6 @@ mod tests {
         assert_eq!(args["api_key"], "[redacted]");
         assert_eq!(args["url"], "https://x.test");
 
-        // Counts cross as they are.
-        assert_eq!(
-            adapter.redact(&AgentEvent::Trimmed { outputs: 3 }),
-            Some(AgentWireEvent::Trimmed { outputs: 3 })
-        );
-
         // A steered message is the person's text, classified like any other.
         assert_eq!(
             adapter.redact(&AgentEvent::Steered {
@@ -2742,84 +2774,261 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_turn_that_outgrows_a_registered_window_trims_and_goes_on() {
-        // A model only the host knows, with a small window.
-        crate::server::catalog::register(crate::server::catalog::Model::new(
-            "local/tiny-window",
-            6_000,
-            1_000,
-        ))
-        .unwrap();
-        struct Big;
-        impl AiTool for Big {
-            const ID: &'static str = "big";
-            type Input = EchoIn;
-            type Output = EchoOut;
-            fn descriptor() -> Td {
-                Td::new("big", "Prints a lot")
-            }
-            fn call(
-                &self,
-                input: EchoIn,
-                _c: AiToolContext,
-            ) -> BoxFuture<'_, AgenkitResult<EchoOut>> {
-                // ~2,000 tokens a call.
-                let echoed = format!("{} {}", input.text, "x".repeat(8_000));
-                Box::pin(async move { Ok(EchoOut { echoed }) })
-            }
+    /// A scripted model that reads `part-1` to `part-<last>` with the `loud`
+    /// tool, one per step and reasoning before each call, then answers
+    /// "done"; it answers "done" to a nudge after a compaction, and "SUMMARY"
+    /// to a compaction request. It records every request.
+    struct Reader {
+        last: usize,
+        requests: Arc<std::sync::Mutex<Vec<crate::server::GenerateRequest>>>,
+    }
+    impl Provider for Reader {
+        fn id(&self) -> &str {
+            "local"
         }
-        let call = |n: u32| serde_json::json!({ "text": format!("part-{n}") });
+        fn generate<'a>(
+            &'a self,
+            request: crate::server::GenerateRequest,
+            _cx: &'a crate::server::ProviderContext,
+        ) -> BoxFuture<'a, AgenkitResult<crate::server::GenerateResponse>> {
+            use crate::server::GenerateResponse;
+            use pocopine_agenkit_core::{Content, ContentPart, ToolCall};
+            let compacting = request
+                .system
+                .as_deref()
+                .is_some_and(|s| s.contains("compacting"));
+            let latest = request.messages.last().cloned();
+            // The part the latest tool result holds.
+            let read = latest
+                .as_ref()
+                .filter(|m| m.role == Role::Tool)
+                .and_then(|m| {
+                    let text = m.content.as_text();
+                    let at = text.find("part-")? + "part-".len();
+                    text[at..]
+                        .chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect::<String>()
+                        .parse::<usize>()
+                        .ok()
+                });
+            let nudged = latest
+                .as_ref()
+                .is_some_and(|m| m.role == Role::User && m.content.as_text() != "go");
+            let last = self.last;
+            self.requests.lock().unwrap().push(request);
+            Box::pin(async move {
+                let next = read.map_or(1, |n| n + 1);
+                Ok(if compacting {
+                    GenerateResponse::text("SUMMARY")
+                } else if nudged || next > last {
+                    GenerateResponse::text("done")
+                } else {
+                    GenerateResponse {
+                        content: Content::from_parts(vec![ContentPart::thinking(
+                            format!("plan {next}"),
+                            Some(format!("sig-{next}")),
+                        )]),
+                        tool_calls: vec![ToolCall::new(
+                            format!("c{next}"),
+                            "loud",
+                            serde_json::json!({ "text": format!("part-{next}") }),
+                        )],
+                        ..GenerateResponse::text("")
+                    }
+                })
+            })
+        }
+    }
+
+    /// Answers with its input and `.0` characters (a quarter as many tokens).
+    struct Loud(usize);
+    impl AiTool for Loud {
+        const ID: &'static str = "loud";
+        type Input = EchoIn;
+        type Output = EchoOut;
+        fn descriptor() -> Td {
+            Td::new("loud", "Prints a lot")
+        }
+        fn call(&self, input: EchoIn, _c: AiToolContext) -> BoxFuture<'_, AgenkitResult<EchoOut>> {
+            let echoed = format!("{} {}", input.text, "x".repeat(self.0));
+            Box::pin(async move { Ok(EchoOut { echoed }) })
+        }
+    }
+
+    fn reasoning_in(request: &crate::server::GenerateRequest) -> Vec<String> {
+        request
+            .messages
+            .iter()
+            .flat_map(|m| m.content.parts.iter())
+            .filter_map(|p| p.as_thinking().map(|(text, _)| text.to_string()))
+            .collect()
+    }
+
+    /// A session on `window` (a registered model of that size) whose model
+    /// reads `parts` parts of `chars` characters each in one turn.
+    async fn reading(
+        window: &str,
+        size: u32,
+        parts: usize,
+        chars: usize,
+    ) -> (
+        AgentSession,
+        Vec<AgentEvent>,
+        Vec<crate::server::GenerateRequest>,
+    ) {
+        crate::server::catalog::register(crate::server::catalog::Model::new(window, size, 1_000))
+            .unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
         let agenkit = Agenkit::builder()
-            .provider(
-                MockProvider::new("local")
-                    .on_prompt_tool("go", "big", call(1))
-                    .on_prompt_tool("part-1", "big", call(2))
-                    .on_prompt_tool("part-2", "big", call(3))
-                    .on_prompt_tool("part-3", "big", call(4))
-                    .default_text("done"),
-            )
-            .default_model(ModelRef::new("local/tiny-window"))
-            .tool(Big)
+            .provider(Reader {
+                last: parts,
+                requests: requests.clone(),
+            })
+            .default_model(ModelRef::new(window))
+            .tool(Loud(chars))
             .build()
             .unwrap();
-        let loop_ = AgentLoop::new(
-            agenkit.inner.clone(),
-            Principal::anonymous(),
-            AgentConfig::new().tools(["big"]).max_tokens(500),
-        );
-        let (tx, mut rx) = unbounded_channel();
-        let mut messages = vec![Message::user("go")];
-        let (stop, _, _) = loop_
-            .run_turn(&mut messages, &tx, &TurnControls::default())
+        let session = AgentSession::builder(&agenkit)
+            .config(
+                AgentConfig::new()
+                    .tools(["loud"])
+                    .max_tokens(500)
+                    .thinking(ThinkingLevel::Low),
+            )
+            .open(None)
             .await
             .unwrap();
-        drop(tx);
-        assert_eq!(stop, StopReason::Idle);
+        let events: Vec<AgentEvent> = session.prompt("go").collect().await;
+        let requests = requests.lock().unwrap().clone();
+        (session, events, requests)
+    }
 
-        // Three results (~6,000 tokens) passed nine tenths of the ~5,200 the
-        // messages have: the two oldest went, once; the rest stayed.
-        let mut trims = Vec::new();
-        while let Ok(event) = rx.try_recv() {
-            if let AgentEvent::Trimmed { outputs } = event {
-                trims.push(outputs);
-            }
-        }
-        assert_eq!(trims, [2]);
-        let results: Vec<String> = messages
+    fn compactions(events: &[AgentEvent]) -> Vec<u64> {
+        events
             .iter()
-            .filter(|m| m.role == Role::Tool)
-            .map(|m| m.content.as_text())
-            .collect();
-        assert_eq!(results.len(), 4);
-        assert_eq!(results[0], crate::server::TRIMMED_TOOL_OUTPUT);
-        assert_eq!(results[1], crate::server::TRIMMED_TOOL_OUTPUT);
-        assert!(results[2].contains("part-3") && results[3].contains("part-4"));
-        assert_eq!(messages.last().unwrap().content.as_text(), "done");
+            .filter_map(|e| match e {
+                AgentEvent::Compacted { folded } => Some(*folded),
+                _ => None,
+            })
+            .collect()
     }
 
     #[tokio::test]
-    async fn a_model_nobody_sized_is_never_trimmed() {
+    async fn a_turn_that_fills_the_window_compacts_and_goes_on() {
+        // Results of ~2,000 tokens in a window of 6,000: the third one fills
+        // nine tenths of the room, so the turn compacts before its fourth call
+        // and goes on from the summary.
+        let (session, events, requests) = reading("local/filling-window", 6_000, 4, 8_000).await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Stopped {
+                    reason: StopReason::Idle
+                })
+            ),
+            "{events:?}"
+        );
+        // The prompt and the first two steps were folded; the latest step was
+        // kept as it was, so no nudge was needed.
+        assert_eq!(compactions(&events), [5]);
+        let after = requests
+            .iter()
+            .position(|r| r.messages.first().map(|m| m.role) == Some(Role::System))
+            .expect("a request after the compaction");
+        let resumed = &requests[after];
+        // The summary, then the prompt it folded, word for word.
+        assert_eq!(
+            resumed.messages[0].content.as_text(),
+            "SUMMARY\n\nThe user's messages so far, oldest first, word for word:\n1. go"
+        );
+        let texts: Vec<String> = resumed
+            .messages
+            .iter()
+            .map(|m| m.content.as_text())
+            .collect();
+        assert!(texts.last().unwrap().contains("part-3"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == CONTINUE_AFTER_COMPACTION));
+        // The kept step's reasoning predates the summary, so it was dropped;
+        // the step after the compaction reasons as before.
+        assert!(reasoning_in(resumed).is_empty());
+        assert_eq!(reasoning_in(requests.last().unwrap()), ["plan 4"]);
+        // The full log has every step once, the answer included.
+        let log = session.history().await.unwrap();
+        assert_eq!(log.iter().filter(|m| m.role == Role::Tool).count(), 4);
+        assert_eq!(log.last().unwrap().content.as_text(), "done");
+    }
+
+    #[tokio::test]
+    async fn a_turn_compacted_to_its_summary_is_nudged_on() {
+        // Results of ~3,000 tokens: larger than the verbatim tail keeps, so
+        // the compaction leaves only the summary and the turn is told to go on.
+        let (session, events, requests) = reading("local/nudging-window", 9_000, 4, 12_000).await;
+        assert_eq!(compactions(&events), [7]);
+        let resumed = requests.last().unwrap();
+        let texts: Vec<String> = resumed
+            .messages
+            .iter()
+            .map(|m| m.content.as_text())
+            .collect();
+        let summary = "SUMMARY\n\nThe user's messages so far, oldest first, word for word:\n1. go";
+        assert_eq!(texts, [summary, CONTINUE_AFTER_COMPACTION]);
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Stopped {
+                    reason: StopReason::Idle
+                })
+            ),
+            "{events:?}"
+        );
+        // The nudge is stored, so a resumed thread replays what the model saw.
+        let active = session.thread.active_history().await.unwrap();
+        let active: Vec<String> = active.iter().map(|m| m.content.as_text()).collect();
+        assert_eq!(active, [summary, CONTINUE_AFTER_COMPACTION, "done"]);
+    }
+
+    #[tokio::test]
+    async fn a_prompt_larger_than_the_window_ends_context_full() {
+        crate::server::catalog::register(crate::server::catalog::Model::new(
+            "local/too-small",
+            1_000,
+            100,
+        ))
+        .unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let agenkit = Agenkit::builder()
+            .provider(Reader {
+                last: 1,
+                requests: requests.clone(),
+            })
+            .default_model(ModelRef::new("local/too-small"))
+            .build()
+            .unwrap();
+        let session = AgentSession::builder(&agenkit).open(None).await.unwrap();
+        let events: Vec<AgentEvent> = session.prompt("y".repeat(8_000)).collect().await;
+        // Nothing to fold, so the turn ends without a model call.
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Stopped {
+                    reason: StopReason::ContextFull
+                })
+            ),
+            "{events:?}"
+        );
+        assert!(requests.lock().unwrap().is_empty());
+        let wire = redact_agent_event(events.last().unwrap(), &Redactor::default());
+        assert_eq!(
+            wire,
+            AgentWireEvent::Stopped {
+                reason: WireStopReason::ContextFull
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_nobody_sized_never_stops_for_context() {
         let agenkit = Agenkit::builder()
             .provider(
                 MockProvider::new("local")
@@ -2839,16 +3048,13 @@ mod tests {
             Principal::anonymous(),
             AgentConfig::new().tools(["echo"]),
         );
-        let (tx, mut rx) = unbounded_channel();
+        let (tx, _rx) = unbounded_channel();
         let mut messages = vec![Message::user("go")];
-        loop_
+        let (stop, _, _) = loop_
             .run_turn(&mut messages, &tx, &TurnControls::default())
             .await
             .unwrap();
-        drop(tx);
-        while let Ok(event) = rx.try_recv() {
-            assert!(!matches!(event, AgentEvent::Trimmed { .. }), "{event:?}");
-        }
+        assert_eq!(stop, StopReason::Idle);
     }
 
     // ── review fixes ─────────────────────────────────────────────────────────
