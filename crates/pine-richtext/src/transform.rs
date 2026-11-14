@@ -101,9 +101,9 @@ impl Step {
             Self::DocAttr(step) => {
                 let mut new_doc = doc.clone();
                 if let Some(value) = step.value.clone() {
-                    new_doc.attrs.insert(step.attr.clone(), value);
+                    std::sync::Arc::make_mut(&mut new_doc.attrs).insert(step.attr.clone(), value);
                 } else {
-                    new_doc.attrs.remove(&step.attr);
+                    std::sync::Arc::make_mut(&mut new_doc.attrs).remove(&step.attr);
                 }
                 schema.check_node(&new_doc)?;
                 Ok(StepResult {
@@ -115,7 +115,13 @@ impl Step {
     }
 
     /// Invert a step relative to the document it was applied to.
-    pub fn invert(&self, old_doc: &Node, schema: &Schema) -> RichTextResult<Step> {
+    ///
+    /// `old_doc` is the document the step was applied to, so it already
+    /// passed the schema when that step was made; inverting reads a slice of
+    /// it and validates nothing. (It used to check the whole of `old_doc`
+    /// again, which made the history plugin's commit of every key cost a
+    /// full deep check of the document.)
+    pub fn invert(&self, old_doc: &Node, _schema: &Schema) -> RichTextResult<Step> {
         match self {
             Self::Replace(step) => {
                 let old_slice = slice_for_replace(old_doc, step.from, step.to)?;
@@ -161,12 +167,6 @@ impl Step {
                 value: old_doc.attrs.get(&step.attr).cloned(),
             })),
         }
-        .and_then(|step| {
-            if matches!(step, Self::Replace(_)) {
-                schema.check_node(old_doc)?;
-            }
-            Ok(step)
-        })
     }
 
     /// Position map for this step without applying it.
@@ -3759,11 +3759,21 @@ fn replace_outer(
 
     if Some(index) == to.index(depth) && depth < from.depth() - slice.open_start {
         let inner = replace_outer(from, to, slice, depth + 1, schema)?;
+        // The content expression and the child marks look only at each
+        // child's type and marks. When the rebuilt child keeps both, the
+        // node's content still matches and nothing here needs checking: the
+        // child itself was checked whole below, the node keeps its attrs.
+        let same_shape = node.child(index).is_some_and(|old| {
+            old.type_name() == inner.type_name() && old.marks() == inner.marks()
+        });
         let new_content = node
             .content()
             .replace_child(index, inner)
             .map_err(|_| replace_error("replace index outside node"))?;
-        close_node(node, new_content, schema)
+        if same_shape {
+            return Ok(node.copy_with_content(new_content));
+        }
+        close_node_around_child(node, new_content, schema)
     } else if slice.content.is_empty() {
         close_node(node, replace_two_way(from, to, depth, schema)?, schema)
     } else if slice.open_start == 0
@@ -3951,6 +3961,23 @@ fn add_range(
     Ok(())
 }
 
+/// [`close_node`] for an ancestor whose content differs from its old content
+/// only in the one child the recursion below rebuilt and already checked
+/// whole: the node's own content expression, marks and attrs are all that
+/// can have gone wrong, so the other children's subtrees are not walked
+/// again. Anything the shallow check refuses goes through [`close_node`].
+fn close_node_around_child(
+    node: &Node,
+    content: Fragment,
+    schema: &Schema,
+) -> RichTextResult<Node> {
+    let closed = node.copy_with_content(content.clone());
+    if schema.check_node_shallow(&closed).is_ok() {
+        return Ok(closed);
+    }
+    close_node(node, content, schema)
+}
+
 fn close_node(node: &Node, content: Fragment, schema: &Schema) -> RichTextResult<Node> {
     let closed = node.copy_with_content(content);
     if schema.check_node(&closed).is_ok() {
@@ -4089,9 +4116,9 @@ fn apply_node_attr(
         size: doc.content_size(),
     })?;
     if let Some(value) = value {
-        node.attrs.insert(attr.to_string(), value);
+        std::sync::Arc::make_mut(&mut node.attrs).insert(attr.to_string(), value);
     } else {
-        node.attrs.remove(attr);
+        std::sync::Arc::make_mut(&mut node.attrs).remove(attr);
     }
     schema.check_node(&new_doc)?;
     Ok(new_doc)
