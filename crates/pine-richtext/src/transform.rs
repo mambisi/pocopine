@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::{Attrs, Fragment, Mark, Node, NodeRange, NodeType, ResolvedPos, Schema, Slice};
+use crate::model::{
+    Attrs, Fragment, Mark, Node, NodeRange, NodeType, ResolvedPos, Schema, Slice, find_diff_end,
+    find_diff_start,
+};
 use crate::{RichTextError, RichTextResult};
 
 /// Result of applying a step.
@@ -1808,10 +1811,53 @@ impl Transform {
         self.replace_whole_doc(new_doc)
     }
 
+    /// Step the document to `new_doc`, which `split`, `split_into`, `join`
+    /// and `lift` build whole.
+    ///
+    /// The step is the smallest replace between the two (their first
+    /// difference to their last, the slice cut from `new_doc`), as
+    /// ProseMirror's split and join are: a step over the whole document made
+    /// Enter in a long document cost the whole document in every consumer of
+    /// the step (history kept its inverse, plugins diffed it, the view
+    /// redrew it). When that step does not give `new_doc` exactly, the whole
+    /// content is replaced, as before.
     fn replace_whole_doc(&mut self, new_doc: Node) -> RichTextResult<&mut Self> {
+        let (a, b) = (self.doc.content(), new_doc.content());
+        if let (Some(start), Some(ends)) = (find_diff_start(a, b, 0), find_diff_end(a, b, 0, 0)) {
+            let (end_a, end_b) = diff_overlap(start, ends, a.size(), b.size());
+            if let Ok(slice) = new_doc.slice(start, end_b) {
+                let step = Step::Replace(ReplaceStep::new(start, end_a, slice));
+                if step
+                    .apply(&self.doc, &self.schema)
+                    .is_ok_and(|result| result.doc == new_doc)
+                {
+                    return self.step(step);
+                }
+            }
+        }
         let size = self.doc.content_size();
         self.replace(0, size, Slice::new(new_doc.content().clone(), 0, 0))
     }
+}
+
+/// Where a diff's two ends fall once they are kept from overlapping its
+/// start, as ProseMirror's view does after `findDiffEnd`: when content is
+/// repeated at the change (typing a letter after the same letter), the end
+/// read from the back can pass the start read from the front.
+fn diff_overlap(
+    start: usize,
+    (mut end_a, mut end_b): (usize, usize),
+    size_a: usize,
+    size_b: usize,
+) -> (usize, usize) {
+    if end_a < start && size_a < size_b {
+        end_b = start + (end_b - end_a);
+        end_a = start;
+    } else if end_b < start {
+        end_a = start + (end_a - end_b);
+        end_b = start;
+    }
+    (end_a, end_b)
 }
 
 /// Check whether a split would be valid.
@@ -3318,7 +3364,7 @@ fn split_doc_at_into(
         .children_mut()
         .splice(grand_index..grand_index + 1, [left, right]);
     grand.content.merge_adjacent_text();
-    schema.check_node(&new_doc)?;
+    // The step that applies it checks it (`replace_whole_doc`).
     Ok(new_doc)
 }
 
@@ -3377,7 +3423,7 @@ fn join_doc_at(doc: &Node, pos: usize, schema: &Schema) -> RichTextResult<Node> 
             .children_mut()
             .splice(index - 1..index + 1, [joined]);
         new_parent.content.merge_adjacent_text();
-        schema.check_node(&new_doc)?;
+        // The step that applies it checks it (`replace_whole_doc`).
         return Ok(new_doc);
     }
 
@@ -3597,7 +3643,7 @@ fn try_lift_to(
     to: &crate::model::ResolvedPos,
     range: &crate::model::NodeRange,
     target_depth: usize,
-    schema: &Schema,
+    _schema: &Schema,
 ) -> RichTextResult<Node> {
     // Build the "before" and "after" wrapper chains by walking from
     // range.depth() down to target_depth+1, re-wrapping siblings outside the
@@ -3672,7 +3718,7 @@ fn try_lift_to(
         .children_mut()
         .splice(target_index..target_end_index, replacement);
     target_node.content.merge_adjacent_text();
-    schema.check_node(&new_doc)?;
+    // The step that applies it checks it (`replace_whole_doc`).
     Ok(new_doc)
 }
 
@@ -3980,7 +4026,7 @@ fn close_node_around_child(
 
 fn close_node(node: &Node, content: Fragment, schema: &Schema) -> RichTextResult<Node> {
     let closed = node.copy_with_content(content);
-    if schema.check_node(&closed).is_ok() {
+    if schema.check_node_against(node, &closed).is_ok() {
         return Ok(closed);
     }
 
@@ -4078,7 +4124,19 @@ fn apply_mark(
     new_doc.content = doc
         .content
         .apply_mark_between(from, to, mark, add, schema)?;
-    schema.check_node(&new_doc)?;
+    // Marks change on inline content only, inside the top-level nodes the
+    // range covers; those are checked whole, the rest kept as they were.
+    let mut offset = 0;
+    for child in new_doc.content.iter() {
+        let end = offset + child.node_size();
+        if end >= from && offset <= to {
+            schema.check_node(child)?;
+        }
+        if offset > to {
+            break;
+        }
+        offset = end;
+    }
     Ok(new_doc)
 }
 
@@ -4120,7 +4178,11 @@ fn apply_node_attr(
     } else {
         std::sync::Arc::make_mut(&mut node.attrs).remove(attr);
     }
-    schema.check_node(&new_doc)?;
+    // Only this node's attrs changed: its parent's content and marks read
+    // child types and marks, not attrs, so the node alone is checked. (The
+    // whole document was, which made each id an editor repairs, or a box it
+    // ticks, cost a pass over every block.)
+    schema.check_node_shallow(node)?;
     Ok(new_doc)
 }
 
