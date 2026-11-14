@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use serde::de::{self, Deserializer};
@@ -310,6 +310,39 @@ impl Schema {
         self.check_node_shallow(node)?;
         for child in node.content.iter() {
             self.check_node(child)?;
+        }
+        Ok(())
+    }
+
+    /// Validate `node`, built from the valid `old` with new content: the
+    /// node itself shallowly, and in full only the children that are not
+    /// one of `old`'s children kept as they were (the same name, attrs,
+    /// marks and content, shared rather than equal). A step that splits,
+    /// joins or inserts a block rebuilds its parent's child list; the other
+    /// children are the old ones and stay valid, so a long document is not
+    /// checked whole for each such step.
+    pub(crate) fn check_node_against(&self, old: &Node, node: &Node) -> RichTextResult<()> {
+        self.check_node_shallow(node)?;
+        let key = |child: &Node| {
+            (
+                Arc::as_ptr(&child.content.children),
+                Arc::as_ptr(&child.attrs),
+            )
+        };
+        let kept: HashMap<(*const Vec<Node>, *const Attrs), &Node> = old
+            .content
+            .iter()
+            .filter(|child| !child.is_text())
+            .map(|child| (key(child), child))
+            .collect();
+        for child in node.content.iter() {
+            let unchanged = !child.is_text()
+                && kept.get(&key(child)).is_some_and(|o| {
+                    o.name == child.name && o.marks == child.marks && o.version == child.version
+                });
+            if !unchanged {
+                self.check_node(child)?;
+            }
         }
         Ok(())
     }
@@ -1431,6 +1464,9 @@ impl ContentExpr {
         content: &Fragment,
         parent: &str,
     ) -> RichTextResult<()> {
+        if self.root.matches_uniform(schema, content.as_slice()) == Some(true) {
+            return Ok(());
+        }
         let matches = self.root.match_at(schema, content.as_slice(), 0);
         if matches.contains(&content.len()) {
             Ok(())
@@ -1776,6 +1812,36 @@ enum ContentNode {
 }
 
 impl ContentNode {
+    /// Whether `children` match a repeat of one name or a choice of names
+    /// (`block+`, `(paragraph | heading)*`), the common shape of a
+    /// container's content: each child one of the names, and as many as
+    /// the repeat allows. `None` for any other shape, which `match_at`
+    /// answers. `match_at` keeps a set of positions per child, which in a
+    /// document of thousands of blocks cost more than the step it checked.
+    fn matches_uniform(&self, schema: &Schema, children: &[Node]) -> Option<bool> {
+        let Self::Repeat { node, min, max } = self else {
+            return None;
+        };
+        let names: Vec<&str> = match &**node {
+            Self::Name(name) => vec![name.as_str()],
+            Self::Choice(choices) => choices
+                .iter()
+                .map(|choice| match choice {
+                    Self::Name(name) => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?,
+            _ => return None,
+        };
+        let fits = |child: &Node| {
+            names
+                .iter()
+                .any(|name| &*child.name == *name || schema.is_group_member(&child.name, name))
+        };
+        let count = children.len();
+        Some(count >= *min && max.is_none_or(|max| count <= max) && children.iter().all(fits))
+    }
+
     fn nullable(&self) -> bool {
         match self {
             Self::Empty => true,
