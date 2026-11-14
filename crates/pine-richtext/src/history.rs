@@ -218,8 +218,8 @@ fn apply_history_value_in_place(
             .last()
             .is_some_and(|event| event.get("composition") == Some(&Value::Bool(true)));
     if continue_composition {
-        append_event_steps(done_arr.last_mut().unwrap(), &event);
-    } else if !(is_typing && try_merge_into_last(done_arr, &event, now_ms)) {
+        append_event_steps(done_arr.last_mut().unwrap(), &event, old_state.schema());
+    } else if !(is_typing && try_merge_into_last(done_arr, &event, now_ms, old_state.schema())) {
         done_arr.push(event);
     }
     // Cap depth. Drop from the front (oldest first) one at a
@@ -254,7 +254,12 @@ fn forward_steps_are_typing(steps: &[Step]) -> bool {
 /// when a merge happened (caller should NOT push as a new
 /// event). Falls back to "not merged" whenever any of the
 /// shape checks fail — never silently drops data.
-fn try_merge_into_last(done: &mut [Value], new_event: &Value, now_ms: u64) -> bool {
+fn try_merge_into_last(
+    done: &mut [Value],
+    new_event: &Value,
+    now_ms: u64,
+    schema: &crate::model::Schema,
+) -> bool {
     if now_ms == 0 {
         return false;
     }
@@ -275,20 +280,42 @@ fn try_merge_into_last(done: &mut [Value], new_event: &Value, now_ms: u64) -> bo
     // Append the new event's inverted steps onto the last
     // event's. Undoing the last event then unwinds the whole
     // merged run in one shot.
-    append_event_steps(last, new_event);
+    append_event_steps(last, new_event, schema);
     if let Some(obj) = last.as_object_mut() {
         obj.insert("ms".to_string(), json!(now_ms));
     }
     true
 }
 
-fn append_event_steps(last: &mut Value, new_event: &Value) {
+/// Add a merged event's inverted steps to the last event's. Undo applies
+/// an event's steps last first, so a new step that continues the one
+/// before it (the next character typed, or deleted, beside the last)
+/// becomes one step with it: the new step then the old, as `Step::merge`
+/// reads them. A run of typing is then one step, not one a key, and the
+/// history stays small: it is copied on each commit (the new state's
+/// plugin value is cloned from the old one's), so a history that grew a
+/// step a key made every key slower than the one before.
+fn append_event_steps(last: &mut Value, new_event: &Value, schema: &crate::model::Schema) {
     if let (Some(last_steps), Some(new_steps)) = (
         last.get_mut("steps").and_then(Value::as_array_mut),
         new_event.get("steps").and_then(Value::as_array),
     ) {
-        for step in new_steps.iter().cloned() {
-            last_steps.push(step);
+        for step in new_steps {
+            let merged = last_steps.last().and_then(|previous| {
+                let previous = Step::from_json(schema, previous.clone()).ok()?;
+                let next = Step::from_json(schema, step.clone()).ok()?;
+                matches!((&next, &previous), (Step::Replace(_), Step::Replace(_)))
+                    .then(|| next.merge(&previous))
+                    .flatten()
+            });
+            match merged {
+                Some(merged) => {
+                    if let Some(slot) = last_steps.last_mut() {
+                        *slot = merged.to_json();
+                    }
+                }
+                None => last_steps.push(step.clone()),
+            }
         }
     }
 }

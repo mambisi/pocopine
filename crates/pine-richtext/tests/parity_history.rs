@@ -183,10 +183,12 @@ fn close_in_time_typing_merges_into_one_undo_step() {
         "three close-in-time inserts merge to one undo step"
     );
 
-    // One undo unwinds the whole burst.
+    // One undo unwinds the whole burst. The burst's steps merged into one,
+    // which deletes the typed text node whole: the paragraph is empty, as
+    // the schema's normal form has it, not left holding an empty text node.
     let tr = undo().apply(&state).expect("undo applies");
     let state = state.apply(tr).unwrap();
-    assert_eq!(state.doc(), &doc(vec![paragraph_text("")]));
+    assert_eq!(state.doc(), &doc(vec![empty_paragraph()]));
     assert_eq!(undo_depth(&state), 0);
     assert_eq!(redo_depth(&state), 1);
 }
@@ -213,10 +215,10 @@ fn typing_separated_by_pause_lands_as_two_undo_steps() {
     assert_eq!(state.doc(), &doc(vec![paragraph_text("ab")]));
     assert_eq!(undo_depth(&state), 1);
 
-    // Second undo unwinds the first burst.
+    // Second undo unwinds the first burst, to an empty paragraph (see above).
     let tr = undo().apply(&state).expect("undo applies");
     let state = state.apply(tr).unwrap();
-    assert_eq!(state.doc(), &doc(vec![paragraph_text("")]));
+    assert_eq!(state.doc(), &doc(vec![empty_paragraph()]));
     assert_eq!(undo_depth(&state), 0);
 }
 
