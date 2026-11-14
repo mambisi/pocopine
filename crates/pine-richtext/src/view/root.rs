@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use web_sys::{CustomEvent, Element, Event, Range};
+use web_sys::{CustomEvent, Element, Event};
 
 use crate::commands::{self, BoxedCommand};
 use crate::history::{self as history};
@@ -331,6 +331,10 @@ pub struct PineRichTextRoot {
     /// canonical live value would see stale data between
     /// replacements.
     pub doc: Value,
+    /// Whether `doc` holds a state: the template's `data-empty` reads this
+    /// rather than `doc`, since a field the template reads is fingerprinted
+    /// before and after every commit, and `doc` holds the whole document.
+    pub has_doc: bool,
     /// Monotonically-increasing commit counter the dispatch path
     /// bumps after every applied transaction. The `root.doc`
     /// watcher used to fire off the (potentially multi-MB) state
@@ -375,6 +379,7 @@ impl PineRichTextRoot {
                 self.doc = seed;
             }
         }
+        self.has_doc = !self.doc.is_null();
     }
 
     fn on_ready(&self, _refs: pocopine::Refs) {
@@ -415,12 +420,30 @@ impl PineRichTextRoot {
         // this is a no-op. The watcher is one-shot: it copies the
         // bound value into `doc` only while `doc` is still null /
         // empty, so subsequent parent re-binds don't clobber edits.
+        //
+        // Once it has seeded `doc`, or finds `doc` already holding a
+        // document, the watch is released: while `initial_doc` is watched
+        // the dirty sweep fingerprints it before and after every commit,
+        // and it holds the whole seed document, so every key in a long
+        // document hashed all of it twice.
         {
             let handle_for_seed = handle.clone();
             let runtime_for_seed = runtime.clone();
             let commit_slot_for_seed = commit_slot.clone();
             let surface_for_seed = surface_el.clone();
-            watch_scope_field_scoped::<Value, _>(scope, "initial_doc", move |seed, _| {
+            let seed_watch: Rc<Cell<Option<pocopine_core::reactive::EffectId>>> =
+                Rc::new(Cell::new(None));
+            let seed_watch_for_cb = seed_watch.clone();
+            let stop_seed_watch = move || {
+                let seed_watch = seed_watch_for_cb.clone();
+                // Released after this run, not from inside it.
+                pocopine_core::tick::next(move || {
+                    if let Some(id) = seed_watch.take() {
+                        pocopine_core::reactive::release(id);
+                    }
+                });
+            };
+            let on_seed = move |seed: &Value, _: Option<&Value>| {
                 if seed.is_null() {
                     return;
                 }
@@ -430,6 +453,7 @@ impl PineRichTextRoot {
                         || root.doc == empty_seed_state_json(&runtime_for_seed).unwrap_or_default()
                 });
                 if !eligible {
+                    stop_seed_watch();
                     return;
                 }
                 let rebuilt = match EditorState::from_json(
@@ -445,8 +469,10 @@ impl PineRichTextRoot {
                 };
                 clear_load_error(&surface_for_seed);
                 let commit_slot_for_seed = commit_slot_for_seed.clone();
+                stop_seed_watch();
                 handle_for_seed.update(move |root: &mut PineRichTextRoot| {
                     root.doc = seed.clone();
+                    root.has_doc = true;
                     // The reactive doc watcher fires on
                     // `doc_generation` now, so the bump must
                     // happen here for the surface to repaint.
@@ -459,6 +485,21 @@ impl PineRichTextRoot {
                     slot.state = Some(rebuilt);
                     slot.generation = slot.generation.wrapping_add(1);
                     root.doc_generation = root.doc_generation.wrapping_add(1);
+                });
+            };
+            // As `watch_scope_field_scoped`, keeping the effect's id so the
+            // watch can end before the component unmounts.
+            let owner = scope;
+            pocopine_core::tick::next(move || {
+                if pocopine_core::Scope::find(owner).is_none() {
+                    return;
+                }
+                let id = pocopine::watch_scope_field_now::<Value, _>(owner, "initial_doc", on_seed);
+                seed_watch.set(Some(id));
+                pocopine_core::events::on_scope_unmount_for(owner, move || {
+                    if let Some(id) = seed_watch.take() {
+                        pocopine_core::reactive::release(id);
+                    }
                 });
             });
         }
@@ -884,6 +925,7 @@ impl PineRichTextRoot {
                     drop(slot);
                     handle_for_replace.update(|root: &mut PineRichTextRoot| {
                         root.doc = doc;
+                        root.has_doc = true;
                         root.doc_generation = root.doc_generation.wrapping_add(1);
                     });
                     pocopine_core::flush_sync();
@@ -1387,39 +1429,46 @@ fn sync_cursor_from_state(surface: &Element, state: &EditorState) {
         }
         crate::state::Selection::All => (0, state.doc().content_size()),
     };
-    let Some(window) = web_sys::window() else {
+    let Some(sel) = web_sys::window().and_then(|window| window.get_selection().ok().flatten())
+    else {
         return;
     };
-    let Some(document) = window.document() else {
+    let Some((anchor_node, anchor_offset)) = model_pos_to_dom(surface, state.doc(), anchor) else {
         return;
     };
-    let Ok(range) = document.create_range() else {
-        return;
-    };
-    apply_position(&range, surface, state.doc(), anchor, true);
-    apply_position(&range, surface, state.doc(), head, false);
-    let Some(sel) = window.get_selection().ok().flatten() else {
-        return;
-    };
-    let _ = sel.remove_all_ranges();
-    let _ = sel.add_range(&range);
-}
-
-fn apply_position(
-    range: &Range,
-    surface: &Element,
-    doc: &crate::model::Node,
-    pos: usize,
-    is_start: bool,
-) {
-    let Some((node, offset)) = model_pos_to_dom(surface, doc, pos) else {
-        return;
-    };
-    if is_start {
-        let _ = range.set_start(&node, offset);
+    let (head_node, head_offset) = if head == anchor {
+        (anchor_node.clone(), anchor_offset)
     } else {
-        let _ = range.set_end(&node, offset);
+        match model_pos_to_dom(surface, state.doc(), head) {
+            Some(found) => found,
+            None => return,
+        }
+    };
+    // Typing usually leaves the browser's selection where the model's is;
+    // setting it again makes the browser lay the page out there and then.
+    let same = |node: Option<web_sys::Node>, offset: u32, want: &web_sys::Node, at: u32| {
+        offset == at && node.is_some_and(|node| node.is_same_node(Some(want)))
+    };
+    if sel.range_count() == 1
+        && same(
+            sel.anchor_node(),
+            sel.anchor_offset(),
+            &anchor_node,
+            anchor_offset,
+        )
+        && same(
+            sel.focus_node(),
+            sel.focus_offset(),
+            &head_node,
+            head_offset,
+        )
+    {
+        return;
     }
+    // One update of the browser's selection, not two (`removeAllRanges`
+    // then `addRange` each update it, and each lays the page out in a long
+    // document), and the selection keeps its direction.
+    let _ = sel.set_base_and_extent(&anchor_node, anchor_offset, &head_node, head_offset);
 }
 
 /// Slim state payload for [`DOC_CHANGED_EVENT`]: `{ doc, selection,

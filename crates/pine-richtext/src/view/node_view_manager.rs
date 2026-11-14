@@ -238,26 +238,35 @@ impl NodeViewManager {
         // marker when that parent is visited again; any still-broken branch
         // below deterministically writes it back during this pass.
         let _ = dom_parent.remove_attribute(SYNC_ERROR_ATTR);
+        // Only a subtree that holds a typed view has anything to mount, sync
+        // or mark (every marker below is written for such a subtree). Skipping
+        // the rest keeps a commit's walk to the views: a runtime with no views,
+        // or a long document of plain blocks, touches no host at all instead
+        // of every block's element on every key.
+        if !model_parent
+            .content()
+            .iter()
+            .any(|child| !child.is_text() && self.subtree_has_view(child))
+        {
+            return;
+        }
+        // Each host's `data-pos` is read once, so finding a child's host is a
+        // lookup rather than a scan of its siblings, which made this walk
+        // quadratic in a container's children.
         let positioned = positioned_children(dom_parent);
         let mut position = content_start;
         for child in model_parent.content().iter() {
-            if child.is_text() {
+            if child.is_text() || !self.subtree_has_view(child) {
                 position = position.saturating_add(child.node_size());
                 continue;
             }
-            let Some(host) = positioned
-                .iter()
-                .find(|element| data_position(element) == Some(position))
-                .cloned()
-            else {
-                if self.subtree_has_view(child) {
-                    report_sync_invariant(
-                        dom_parent,
-                        child.type_name(),
-                        position,
-                        "expected a direct model host with the matching `data-pos`, but none was found",
-                    );
-                }
+            let Some(host) = positioned.get(&position).cloned() else {
+                report_sync_invariant(
+                    dom_parent,
+                    child.type_name(),
+                    position,
+                    "expected a direct model host with the matching `data-pos`, but none was found",
+                );
                 position = position.saturating_add(child.node_size());
                 continue;
             };
@@ -338,6 +347,9 @@ impl NodeViewManager {
     }
 
     fn subtree_has_view(&self, node: &Node) -> bool {
+        if self.runtime.typed_node_view_count() == 0 {
+            return false;
+        }
         self.has_view(node.type_name())
             || node
                 .content()
@@ -680,15 +692,18 @@ fn data_position(host: &Element) -> Option<usize> {
     host.get_attribute("data-pos")?.parse().ok()
 }
 
-fn positioned_children(root: &Element) -> Vec<Element> {
+/// A parent's direct model hosts by their `data-pos`, each attribute read
+/// once. When two hosts claim one position the first in document order
+/// wins, as the scan this replaces found it first.
+fn positioned_children(root: &Element) -> HashMap<usize, Element> {
     let children = root.children();
-    let mut positioned = Vec::new();
+    let mut positioned = HashMap::new();
     for index in 0..children.length() {
         let Some(child) = children.item(index) else {
             continue;
         };
-        if child.has_attribute("data-pos") {
-            positioned.push(child);
+        if let Some(position) = data_position(&child) {
+            positioned.entry(position).or_insert(child);
         }
     }
     positioned

@@ -20,7 +20,8 @@
 //! - `bullet_list` / `ordered_list` → `<ul>` / `<ol>`.
 //! - `list_item` → `<li>`.
 //! - `code_block` → `<pre><code>` (one wrapper carries `data-pos`).
-//! - `horizontal_rule` → `<hr>`, `image` → `<img>`, `hard_break` → `<br>`.
+//! - `horizontal_rule` → `<hr>`, `image` → `<img>`, `hard_break` →
+//!   `<br data-type="hard_break">`.
 //! - `text` → escaped text content, marks wrap outside-in.
 //!
 //! Unknown node types fall back to `<span data-type="{name}">…</span>`
@@ -206,7 +207,14 @@ impl<'a> Renderer<'a> {
                     .into()
             }
             "horizontal_rule" => positioned_element("hr", outer_pos).into(),
-            "hard_break" => positioned_element("br", outer_pos).into(),
+            // `data-type` marks a hard break apart from the structural `<br>`
+            // an empty block keeps, for stylesheets: it never changes, where a
+            // selector on `data-pos` makes the browser recheck styles each
+            // time a change before the break moves its position.
+            "hard_break" => positioned_element("br", outer_pos)
+                .attr("data-type", "hard_break")
+                .expect("hard break type attr is valid")
+                .into(),
             "image" => {
                 let src = node
                     .attrs()
