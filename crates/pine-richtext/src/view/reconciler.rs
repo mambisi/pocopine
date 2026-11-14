@@ -271,16 +271,30 @@ impl<'a> Reconciler<'a> {
             return Ok(());
         }
 
-        let dom_children = direct_model_children(content_root)?;
-        if dom_children.len() != old_parent.child_count() {
-            return Err(());
-        }
-
+        // The children's elements are read by index as they are needed, not
+        // all up front: a long document's surface holds one per block, and
+        // reading every one on every key cost a few DOM calls per block.
+        let dom_children = content_root.children();
         let old_len = old_parent.child_count();
         let new_len = new_parent.child_count();
-        let mut old_positions = child_positions(old_parent, content_start);
-        let mut new_positions = child_positions(new_parent, content_start);
+        if dom_children.length() as usize != old_len {
+            return Err(());
+        }
+        let model_element = |index: usize| -> Result<Element, ()> {
+            let element = dom_children
+                .item(u32::try_from(index).map_err(|_| ())?)
+                .ok_or(())?;
+            if element.has_attribute("data-pos") {
+                Ok(element)
+            } else {
+                Err(())
+            }
+        };
+        let old_positions = child_positions(old_parent, content_start);
+        let new_positions = child_positions(new_parent, content_start);
 
+        // Equal children before the first change sit at equal positions,
+        // so their DOM is already right and is not touched.
         let mut prefix = 0;
         while prefix < old_len && prefix < new_len {
             let old_child = old_parent.child(prefix).ok_or(())?;
@@ -288,14 +302,16 @@ impl<'a> Reconciler<'a> {
             if old_child != new_child {
                 break;
             }
-            self.reconcile_node(
-                &dom_children[prefix],
-                old_child,
-                old_positions[prefix],
-                new_child,
-                new_positions[prefix],
-                stats,
-            )?;
+            if old_positions[prefix] != new_positions[prefix] {
+                self.reconcile_node(
+                    &model_element(prefix)?,
+                    old_child,
+                    old_positions[prefix],
+                    new_child,
+                    new_positions[prefix],
+                    stats,
+                )?;
+            }
             prefix += 1;
         }
 
@@ -315,44 +331,92 @@ impl<'a> Reconciler<'a> {
         let new_mid_end = new_len - suffix;
 
         if old_mid_end - prefix == new_mid_end - prefix {
-            for offset in 0..(old_mid_end - prefix) {
-                let old_index = prefix + offset;
-                let new_index = prefix + offset;
+            for index in prefix..old_mid_end {
                 self.reconcile_node(
-                    &dom_children[old_index],
-                    old_parent.child(old_index).ok_or(())?,
-                    old_positions[old_index],
-                    new_parent.child(new_index).ok_or(())?,
-                    new_positions[new_index],
+                    &model_element(index)?,
+                    old_parent.child(index).ok_or(())?,
+                    old_positions[index],
+                    new_parent.child(index).ok_or(())?,
+                    new_positions[index],
                     stats,
                 )?;
             }
         } else {
+            // The elements the range replaces, and the one after it, taken
+            // before the live collection changes under the replacement.
+            let removed = (prefix..old_mid_end)
+                .map(&model_element)
+                .collect::<Result<Vec<_>, ()>>()?;
+            let reference = if old_mid_end < old_len {
+                Some(model_element(old_mid_end)?)
+            } else {
+                None
+            };
             self.replace_child_range(
                 content_root,
                 new_parent,
-                &dom_children,
+                &removed,
+                reference.as_ref(),
                 &new_positions,
                 prefix,
-                old_mid_end,
                 new_mid_end,
             )?;
             stats.record_structural();
         }
 
-        old_positions = child_positions(old_parent, content_start);
-        new_positions = child_positions(new_parent, content_start);
-        for offset in 0..suffix {
+        // The unchanged children after the change: the live collection now
+        // holds the new children, so each is read at its new index. Those
+        // whose position did not move need nothing. A run of plain ones
+        // (nothing but text inside, no component view) only has its own
+        // markers to move, and goes to the browser in one call; the rest
+        // are walked one by one.
+        let mut offset = 0;
+        while offset < suffix {
+            let old_index = old_len - suffix + offset;
+            let new_index = new_len - suffix + offset;
+            if old_positions[old_index] == new_positions[new_index] {
+                offset += 1;
+                continue;
+            }
+            let mut run = 0;
+            while offset + run < suffix
+                && self.plain_block(new_parent.child(new_index + run).ok_or(())?)
+            {
+                run += 1;
+            }
+            if run > 1 {
+                let old_run: Vec<u32> = old_positions[old_index..old_index + run]
+                    .iter()
+                    .map(|&pos| u32::try_from(pos).map_err(|_| ()))
+                    .collect::<Result<_, ()>>()?;
+                let new_run: Vec<u32> = new_positions[new_index..new_index + run]
+                    .iter()
+                    .map(|&pos| u32::try_from(pos).map_err(|_| ()))
+                    .collect::<Result<_, ()>>()?;
+                let moved = shift_block_positions(
+                    content_root,
+                    u32::try_from(new_index).map_err(|_| ())?,
+                    &old_run,
+                    &new_run,
+                ) as usize;
+                // A block whose marker was not what this pass expected stops
+                // the run; it and those after it take the careful path.
+                offset += moved.min(run);
+                if moved >= run {
+                    continue;
+                }
+            }
             let old_index = old_len - suffix + offset;
             let new_index = new_len - suffix + offset;
             self.reconcile_node(
-                &dom_children[old_index],
+                &model_element(new_index)?,
                 old_parent.child(old_index).ok_or(())?,
                 old_positions[old_index],
                 new_parent.child(new_index).ok_or(())?,
                 new_positions[new_index],
                 stats,
             )?;
+            offset += 1;
         }
 
         Ok(())
@@ -496,8 +560,20 @@ impl<'a> Reconciler<'a> {
         old_pos: usize,
         new_pos: usize,
     ) -> Result<(), ()> {
-        update_data_pos(dom, new_pos)?;
-        if old_pos == new_pos || node.child_count() == 0 || node.type_name() == "code_block" {
+        if old_pos == new_pos {
+            update_data_pos(dom, new_pos)?;
+            return Ok(());
+        }
+        // The position moved, so the marker differs: write it without
+        // reading it first.
+        dom.set_attribute("data-pos", &new_pos.to_string())
+            .map_err(|_| ())?;
+        // Only element children carry markers; a block of plain text has
+        // none below it to shift.
+        if node.child_count() == 0
+            || node.type_name() == "code_block"
+            || node.content().iter().all(RichNode::is_text)
+        {
             return Ok(());
         }
         if self
@@ -653,15 +729,14 @@ impl<'a> Reconciler<'a> {
         &self,
         content_root: &Element,
         new_parent: &RichNode,
-        dom_children: &[Element],
+        removed: &[Element],
+        reference: Option<&Element>,
         new_positions: &[usize],
         start: usize,
-        old_end: usize,
         new_end: usize,
     ) -> Result<(), ()> {
-        let reference = dom_children.get(old_end).map(|el| el.as_ref());
-        for old_index in start..old_end {
-            let child = dom_children.get(old_index).ok_or(())?;
+        let reference = reference.map(|el| el.as_ref());
+        for child in removed {
             let parent = child.parent_node().ok_or(())?;
             self.will_remove_subtree(child);
             parent.remove_child(child.as_ref()).map_err(|_| ())?;
@@ -749,6 +824,16 @@ impl<'a> Reconciler<'a> {
             return Ok(current);
         }
         Ok(dom.clone())
+    }
+
+    /// A block whose only position marker is its own element's: no
+    /// element child of its content carries one, and no component view owns
+    /// it. Moving such a block moves one attribute.
+    fn plain_block(&self, node: &RichNode) -> bool {
+        self.runtime
+            .lookup_typed_node_view(node.type_name())
+            .is_none()
+            && node.content().iter().all(RichNode::is_text)
     }
 
     fn attrs_patchable(&self, node: &RichNode) -> bool {
@@ -981,6 +1066,35 @@ fn update_data_pos(dom: &Element, pos: usize) -> Result<(), ()> {
         return Ok(());
     }
     dom.set_attribute("data-pos", &value).map_err(|_| ())
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export function pine_shift_block_positions(parent, from, oldPositions, newPositions) {
+    const children = parent.children;
+    for (let i = 0; i < newPositions.length; i++) {
+        const element = children[from + i];
+        if (!element || element.getAttribute("data-pos") !== String(oldPositions[i])) {
+            return i;
+        }
+        element.setAttribute("data-pos", String(newPositions[i]));
+    }
+    return newPositions.length;
+}
+"#)]
+extern "C" {
+    /// Move the markers of `parent`'s element children from `from` on, each
+    /// from its old position to its new one, in one call: each crossing
+    /// from wasm costs more than the write it makes, and a key in a long
+    /// document moves every block after it. Stops at the first element
+    /// whose marker is not the old position it should hold, and returns how
+    /// many it moved.
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = pine_shift_block_positions)]
+    fn shift_block_positions(
+        parent: &Element,
+        from: u32,
+        old_positions: &[u32],
+        new_positions: &[u32],
+    ) -> u32;
 }
 
 #[cfg(test)]

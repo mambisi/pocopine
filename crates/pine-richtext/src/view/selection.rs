@@ -274,26 +274,20 @@ fn next_sibling_data_pos(el: &Element) -> Option<usize> {
 
 fn walk_doc(surface: &Element, doc: &Node, target: usize) -> Option<(DomNode, u32)> {
     // The doc itself doesn't have a `data-pos` attribute on any element —
-    // the surface element implicitly represents it. Use `None` to tag
-    // that case so the walker doesn't confuse "this is the doc" with
-    // "the first top-level block at outer position 0".
-    walk_node(surface, doc, None, target)
+    // the surface element implicitly represents it, with its content
+    // starting at 0.
+    walk_node(doc, surface.clone(), 0, target)
 }
 
 fn walk_node(
-    surface: &Element,
     model_node: &Node,
-    base: Option<usize>,
+    dom_el: Element,
+    content_start: usize,
     target: usize,
 ) -> Option<(DomNode, u32)> {
     if model_node.is_text() {
         return None; // Text positions are handled by the parent.
     }
-
-    let (dom_el, content_start) = match base {
-        None => (surface.clone(), 0),
-        Some(n) => (find_element_with_data_pos(surface, n)?, n + 1),
-    };
 
     if target < content_start {
         return None;
@@ -301,6 +295,9 @@ fn walk_node(
 
     let mut pos = content_start;
     let mut child_dom_index = 0u32;
+    // How many element children came before this one: a block container's
+    // children are all elements, so this is the child's element index.
+    let mut element_index = 0u32;
     for child in model_node.content().iter() {
         let child_size = child.node_size();
         let child_end = pos + child_size;
@@ -321,13 +318,18 @@ fn walk_node(
         }
 
         if target < child_end
-            && let Some(found) = walk_node(surface, child, Some(pos), target)
+            && !child.is_text()
+            && let Some(child_el) = child_element(&dom_el, element_index, pos)
+            && let Some(found) = walk_node(child, child_el, pos + 1, target)
         {
             return Some(found);
         }
 
         pos = child_end;
         child_dom_index += 1;
+        if !child.is_text() {
+            element_index += 1;
+        }
     }
 
     if target == pos {
@@ -336,9 +338,23 @@ fn walk_node(
     None
 }
 
-fn find_element_with_data_pos(surface: &Element, pos: usize) -> Option<Element> {
+/// The element of the model child at `pos` under `parent`. It is usually
+/// `parent`'s element child at `element_index`, read and checked in one
+/// step; otherwise (mark wrappers before it, a content hole, component
+/// chrome) it is searched for below `parent` alone. A search from the
+/// surface for every lookup walked the whole document on every key.
+fn child_element(parent: &Element, element_index: u32, pos: usize) -> Option<Element> {
+    if let Some(element) = parent.children().item(element_index)
+        && data_pos_of(&element) == Some(pos)
+    {
+        return Some(element);
+    }
+    find_element_with_data_pos(parent, pos)
+}
+
+fn find_element_with_data_pos(root: &Element, pos: usize) -> Option<Element> {
     let selector = format!("[data-pos=\"{}\"]", pos);
-    surface.query_selector(&selector).ok().flatten()
+    root.query_selector(&selector).ok().flatten()
 }
 
 /// Find the DOM text node at logical text index `i` inside `parent`.
