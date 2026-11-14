@@ -196,9 +196,9 @@ impl Schema {
         }
 
         Ok(Node {
-            name,
+            name: name.into(),
             version,
-            attrs,
+            attrs: Arc::new(attrs),
             marks: Vec::new(),
             content,
             text: None,
@@ -211,9 +211,9 @@ impl Schema {
         self.node_type("text")?;
         let marks = self.normalize_marks(marks)?;
         Ok(Node {
-            name: "text".to_string(),
+            name: Arc::from("text"),
             version: None,
-            attrs: Attrs::new(),
+            attrs: Arc::new(Attrs::new()),
             marks,
             content: Fragment::empty(),
             text: Some(text.into()),
@@ -307,6 +307,22 @@ impl Schema {
 
     /// Validate a node and all descendants against this schema.
     pub fn check_node(&self, node: &Node) -> RichTextResult<()> {
+        self.check_node_shallow(node)?;
+        for child in node.content.iter() {
+            self.check_node(child)?;
+        }
+        Ok(())
+    }
+
+    /// Validate a node itself, its children's types and marks against its
+    /// content expression, but not the children's own subtrees.
+    ///
+    /// A replace rebuilds each ancestor of the change around one new child
+    /// that was already checked whole; every other child is the old,
+    /// already-valid node. Checking each ancestor shallowly keeps a step's
+    /// validation to the path it touched instead of the whole document,
+    /// which made every key in a long document cost a full deep check.
+    pub(crate) fn check_node_shallow(&self, node: &Node) -> RichTextResult<()> {
         let node_type = self.node_type(&node.name)?;
         if let Some(typed) = self.typed_node_spec(&node.name) {
             let version = node.version.unwrap_or(1);
@@ -327,7 +343,7 @@ impl Schema {
                 })?;
         }
         if node.is_text() {
-            if node.name != "text" {
+            if &*node.name != "text" {
                 return Err(RichTextError::InvalidContent(format!(
                     "node {} has text content but is not text",
                     node.name
@@ -349,9 +365,6 @@ impl Schema {
             .content
             .validate(self, &node.content, &node.name)?;
         self.validate_child_marks(node_type, &node.content, &node.name)?;
-        for child in node.content.iter() {
-            self.check_node(child)?;
-        }
         Ok(())
     }
 
@@ -1811,7 +1824,7 @@ impl ContentNode {
         match self {
             Self::Empty => Vec::new(),
             Self::Name(name) => {
-                if child.name == *name || schema.is_group_member(&child.name, name) {
+                if *child.name == **name || schema.is_group_member(&child.name, name) {
                     vec![Self::Empty]
                 } else {
                     Vec::new()
@@ -1909,7 +1922,7 @@ impl ContentNode {
             Self::Empty => vec![index],
             Self::Name(name) => {
                 if children.get(index).is_some_and(|child| {
-                    child.name == *name || schema.is_group_member(&child.name, name)
+                    *child.name == **name || schema.is_group_member(&child.name, name)
                 }) {
                     vec![index + 1]
                 } else {
@@ -2025,9 +2038,9 @@ fn repeat_node(node: ContentNode, min: usize, max: Option<usize>) -> ContentNode
 
 fn synthetic_node_for_type(node_type: &NodeType) -> Node {
     Node {
-        name: node_type.name().to_string(),
+        name: Arc::from(node_type.name()),
         version: None,
-        attrs: Attrs::new(),
+        attrs: Arc::new(Attrs::new()),
         marks: Vec::new(),
         content: Fragment::empty(),
         text: (node_type.name() == "text").then(String::new),
@@ -2315,11 +2328,16 @@ impl<'de> Deserialize<'de> for Mark {
 }
 
 /// A persistent document node.
+///
+/// The name and the attrs are shared behind `Arc`s, like the children, so a
+/// clone is a few reference-count bumps: a step rebuilds each ancestor's
+/// child list around the one child it changed, and the top-level list of a
+/// long document is copied on every key.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
-    pub(crate) name: String,
+    pub(crate) name: Arc<str>,
     pub(crate) version: Option<u32>,
-    pub(crate) attrs: Attrs,
+    pub(crate) attrs: Arc<Attrs>,
     pub(crate) marks: Vec<Mark>,
     pub(crate) content: Fragment,
     pub(crate) text: Option<String>,
@@ -2355,9 +2373,9 @@ impl Node {
         leaf: bool,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             version: None,
-            attrs,
+            attrs: Arc::new(attrs),
             marks,
             content,
             text,
@@ -2796,9 +2814,9 @@ impl Node {
             return false;
         };
         let node = Node {
-            name: type_name.to_string(),
+            name: Arc::from(type_name),
             version: None,
-            attrs: Attrs::new(),
+            attrs: Arc::new(Attrs::new()),
             marks: marks.to_vec(),
             content: Fragment::empty(),
             text: (type_name == "text").then(String::new),
@@ -2911,7 +2929,7 @@ impl Node {
         } else if self.content.size() > 0 {
             format!("{}({})", self.name, self.content.to_inner_string())
         } else {
-            self.name.clone()
+            self.name.to_string()
         };
         wrap_marks_in_debug(&self.marks, inner)
     }
@@ -2956,12 +2974,12 @@ impl Serialize for Node {
         }
 
         let mut state = serializer.serialize_struct("Node", len)?;
-        state.serialize_field("type", &self.name)?;
+        state.serialize_field("type", &*self.name)?;
         if let Some(version) = self.version {
             state.serialize_field("version", &version)?;
         }
         if !self.attrs.is_empty() {
-            state.serialize_field("attrs", &self.attrs)?;
+            state.serialize_field("attrs", &*self.attrs)?;
         }
         if !self.marks.is_empty() {
             state.serialize_field("marks", &self.marks)?;
@@ -3009,9 +3027,9 @@ impl<'de> Deserialize<'de> for Node {
         }
 
         Ok(Self {
-            name: value.name,
+            name: value.name.into(),
             version: value.version,
-            attrs: value.attrs,
+            attrs: Arc::new(value.attrs),
             marks: value.marks,
             content: Fragment::from(value.content),
             text: value.text,
@@ -3024,9 +3042,57 @@ impl<'de> Deserialize<'de> for Node {
 ///
 /// Children are stored behind an `Arc` so clones are refcount bumps rather
 /// than deep tree copies. Mutating methods use `Arc::make_mut` (copy-on-write).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Fragment {
     pub(crate) children: Arc<Vec<Node>>,
+    /// The content size, worked out once and kept until the children change.
+    size: SizeCache,
+}
+
+impl std::fmt::Debug for Fragment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fragment")
+            .field("children", &self.children)
+            .finish()
+    }
+}
+
+/// A fragment's content size, kept so that sizing a node does not walk its
+/// whole subtree: without it every `content_size`, `resolve` and position
+/// check counted every character of the document, several times per key in
+/// a long one. Every path that changes a fragment's children clears it.
+#[derive(Debug)]
+struct SizeCache(std::sync::atomic::AtomicUsize);
+
+impl SizeCache {
+    const UNKNOWN: usize = usize::MAX;
+
+    fn get(&self) -> Option<usize> {
+        let size = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        (size != Self::UNKNOWN).then_some(size)
+    }
+
+    fn set(&self, size: usize) {
+        self.0.store(size, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn clear(&mut self) {
+        *self.0.get_mut() = Self::UNKNOWN;
+    }
+}
+
+impl Default for SizeCache {
+    fn default() -> Self {
+        Self(std::sync::atomic::AtomicUsize::new(Self::UNKNOWN))
+    }
+}
+
+impl Clone for SizeCache {
+    fn clone(&self) -> Self {
+        Self(std::sync::atomic::AtomicUsize::new(
+            self.0.load(std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
 }
 
 impl PartialEq for Fragment {
@@ -3050,6 +3116,7 @@ impl Fragment {
     pub fn empty() -> Self {
         Self {
             children: Arc::new(Vec::new()),
+            size: SizeCache::default(),
         }
     }
 
@@ -3057,9 +3124,17 @@ impl Fragment {
     pub fn new(children: Vec<Node>) -> Self {
         let mut fragment = Self {
             children: Arc::new(children),
+            size: SizeCache::default(),
         };
         fragment.merge_adjacent_text();
         fragment
+    }
+
+    /// Mutable children for this fragment's own methods: copy-on-write, and
+    /// the kept size is cleared, since the caller is about to change them.
+    fn children_mut_cleared(&mut self) -> &mut Vec<Node> {
+        self.size.clear();
+        Arc::make_mut(&mut self.children)
     }
 
     /// Number of children.
@@ -3102,19 +3177,24 @@ impl Fragment {
 
     /// Total content size.
     pub fn size(&self) -> usize {
-        self.children.iter().map(Node::node_size).sum()
+        if let Some(size) = self.size.get() {
+            return size;
+        }
+        let size = self.children.iter().map(Node::node_size).sum();
+        self.size.set(size);
+        size
     }
 
     /// Append a child.
     pub fn push(&mut self, child: Node) {
-        Arc::make_mut(&mut self.children).push(child);
+        self.children_mut_cleared().push(child);
         self.merge_adjacent_text();
     }
 
     /// Get mutable access to the underlying children vec, performing a
     /// copy-on-write of the shared `Arc` if needed.
     pub(crate) fn children_mut(&mut self) -> &mut Vec<Node> {
-        Arc::make_mut(&mut self.children)
+        self.children_mut_cleared()
     }
 
     /// Produce a new fragment with the child at `index` replaced. Cheaper
@@ -3129,14 +3209,14 @@ impl Fragment {
             });
         }
         let mut next = self.clone();
-        Arc::make_mut(&mut next.children)[index] = node;
+        next.children_mut_cleared()[index] = node;
         Ok(next)
     }
 
     /// Append another fragment.
     pub fn append(mut self, other: Fragment) -> Self {
         let other_children = Arc::try_unwrap(other.children).unwrap_or_else(|arc| (*arc).clone());
-        Arc::make_mut(&mut self.children).extend(other_children);
+        self.children_mut_cleared().extend(other_children);
         self.merge_adjacent_text();
         self
     }
@@ -3446,7 +3526,7 @@ impl Fragment {
             return;
         }
 
-        let children = Arc::make_mut(&mut self.children);
+        let children = self.children_mut_cleared();
         let mut merged: Vec<Node> = Vec::with_capacity(children.len());
         for child in children.drain(..) {
             if let Some(last) = merged.last_mut()
@@ -3489,6 +3569,7 @@ impl From<Vec<Node>> for Fragment {
     fn from(value: Vec<Node>) -> Self {
         let mut fragment = Self {
             children: Arc::new(value),
+            size: SizeCache::default(),
         };
         fragment.merge_adjacent_text();
         fragment
@@ -3499,6 +3580,7 @@ impl From<Node> for Fragment {
     fn from(value: Node) -> Self {
         Self {
             children: Arc::new(vec![value]),
+            size: SizeCache::default(),
         }
     }
 }
